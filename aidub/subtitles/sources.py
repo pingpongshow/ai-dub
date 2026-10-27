@@ -94,7 +94,11 @@ def load_cues(c: Candidate) -> None:
     """Fill `c.cues` for a text candidate and confirm its language from the text."""
     c.cues = clean.load(c.path)
     guessed = clean.script_language([q.text for q in c.cues if q.kind == DIALOGUE])
-    if guessed and (not c.language or (guessed != c.language and c.language not in {"yue"})):
+    cjk = {"ja", "zh", "yue", "ko"}
+    # The writing system only tells CJK from Latin-script languages apart, so it
+    # fills in a missing tag or fixes a CJK/Latin mix-up, never e.g. Indonesian -> English.
+    if guessed and (not c.language or ((guessed in cjk) != (c.language in cjk))
+                    or (guessed in cjk and c.language in cjk and guessed != c.language and c.language != "yue")):
         c.language = guessed
 
 

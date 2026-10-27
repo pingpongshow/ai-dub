@@ -104,8 +104,14 @@ def speaker_ops():
             out[spk["speaker"]] = {"gender": "female" if f >= 240 else "male", "age": "adult"}
         return {"speakers": out, "model": "fake"}
 
+    def text_similarity(a):
+        # Ai Dub sends true pairs followed by the same lines paired with speech from
+        # elsewhere; a matching subtitle scores higher on the first half.
+        n = len(a["pairs"]) // 2
+        return {"similarity": [0.8] * n + [0.4] * (len(a["pairs"]) - n)}
+
     return {"info": lambda a: {"embedding_model": "fake-pitch"}, "embed": embed, "embed_files": embed_files,
-            "gender_age": gender_age, "text_similarity": lambda a: {"similarity": [0.9] * len(a["pairs"])}}
+            "gender_age": gender_age, "text_similarity": text_similarity}
 
 
 def asr_ops():

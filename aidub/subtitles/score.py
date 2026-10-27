@@ -110,9 +110,17 @@ def content_source(cues: list[Cue], asr_segments: list[dict]) -> float:
     return float(np.median(vals)) if vals else 0.0
 
 
-def similarity_to_score(cos: float) -> float:
-    """Cross-lingual sentence-embedding cosine -> 0..1 (0.35 or less is unrelated)."""
-    return float(np.clip((cos - 0.35) / (0.80 - 0.35), 0.0, 1.0))
+def discrimination(true_sims: list[float], shifted_sims: list[float]) -> float:
+    """How reliably each subtitle line matches the speech at its own time better
+    than speech from elsewhere (a self-calibrating content score, 0..1).
+
+    A matching subtitle wins nearly every comparison; a wrong episode wins about
+    half by chance, which maps to 0."""
+    if not true_sims or len(true_sims) != len(shifted_sims):
+        return 0.0
+    wins = sum(1.0 if t > f else 0.5 if t == f else 0.0 for t, f in zip(true_sims, shifted_sims))
+    rate = wins / len(true_sims)
+    return float(np.clip((rate - 0.5) / 0.4, 0.0, 1.0))
 
 
 def combine(timing: float, cov: float, content: float, drift_s: float, sharp: float) -> float:

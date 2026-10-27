@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Prebuilt attention kernels, so the first start doesn't compile for minutes.
-set -uo pipefail
+# Prebuilt FlashInfer kernels (cubins + JIT cache). The image has no CUDA
+# compiler, so without them vLLM cannot run attention on the GPU.
+set -euo pipefail
 ENV="$1"
-"$ENV/bin/vllm" download-kernels || echo "kernel download skipped; vLLM will compile on first start"
+PATH="$ENV/bin:$PATH" "$ENV/bin/vllm" download-kernels

@@ -66,6 +66,12 @@ def test_best_offset_finds_shift():
     assert scale == pytest.approx(25 / 23.976, rel=1e-3) and frac > 0.85
 
 
+def test_discrimination():
+    assert score.discrimination([0.6] * 10, [0.3] * 10) == 1.0
+    assert score.discrimination([0.4, 0.3] * 5, [0.3, 0.4] * 5) == 0.0
+    assert score.discrimination([], []) == 0.0
+
+
 def test_cer_and_content():
     assert score.cer("今日はいい天気", "今日はいい天気") == 0
     assert score.cer("今日はいい天気", "明日は雨") > 0.5

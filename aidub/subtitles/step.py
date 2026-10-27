@@ -86,11 +86,13 @@ def _score_english(c: Candidate, asr: dict, speech, dur: float, embed_worker) ->
             if src:
                 pairs.append((q.text, src))
     content = 0.0
-    if pairs and embed_worker is not None:
+    if len(pairs) >= 4 and embed_worker is not None:
         sample = pairs[:: max(1, len(pairs) // 150)]
-        res = embed_worker.call("text_similarity", {"pairs": [list(p) for p in sample]})
-        sims = [score.similarity_to_score(s) for s in res["similarity"]]
-        content = float(sorted(sims)[len(sims) // 2]) if sims else 0.0
+        k = max(1, len(sample) // 2)
+        shifted = [(en, sample[(i + k) % len(sample)][1]) for i, (en, _) in enumerate(sample)]
+        res = embed_worker.call("text_similarity", {"pairs": [list(p) for p in sample + shifted]})
+        sims = res["similarity"]
+        content = score.discrimination(sims[: len(sample)], sims[len(sample):])
     c.cues, c.offset, c.scale = synced, off, scale
     c.score = {"timing": round(frac, 3), "coverage": round(cov, 3), "content": round(content, 3),
                "drift": round(d, 2), "sharpness": round(sharp, 3),
