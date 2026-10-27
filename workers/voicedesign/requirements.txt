@@ -1,4 +1,4 @@
-torch>=2.8
-torchaudio>=2.8
+torch==2.11.0+cu128
+torchaudio==2.11.0+cu128
 qwen-tts==0.1.1
 soundfile
