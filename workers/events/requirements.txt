@@ -1,0 +1,4 @@
+torch>=2.8
+torchaudio>=2.8
+funasr==1.4.16
+soundfile

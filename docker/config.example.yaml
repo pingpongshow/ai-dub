@@ -1,0 +1,21 @@
+# Ai Dub settings. Anything not set here uses the built-in defaults
+# (aidub/default_config.yaml in the source). Keys and tokens do NOT go here:
+# enter them on the Settings page (stored in /config/secrets.yaml).
+
+# Folders the queue's file browser shows (container paths).
+media:
+  - { name: Movies, path: /media/movies }
+  - { name: Shows,  path: /media/shows }
+  - { name: Anime,  path: /media/anime }
+
+subtitles:
+  providers:
+    bazarr:
+      enabled: false
+      url: http://bazarr:6767
+      api_key: "${BAZARR_API_KEY}"
+      # How Bazarr sees the same folders (its own container paths).
+      path_map:
+        - { aidub: /media/movies, bazarr: /movies }
+        - { aidub: /media/shows,  bazarr: /tv }
+        - { aidub: /media/anime,  bazarr: /anime }

@@ -1,0 +1,120 @@
+# Ai Dub defaults. Copy the parts you want to change into /config/config.yaml;
+# values there are merged over these. ${NAME} is replaced from the environment
+# or from /config/secrets.yaml.
+
+paths:
+  appdata: /config          # job database, profiles, logs, settings
+  models: /models           # model weights and the per-worker Python environments
+  work: /work               # per-job working folders (deleted when a job completes)
+
+# Folders the queue's file browser shows. Only these are visible to Ai Dub.
+media:
+  - { name: Movies, path: /media/movies }
+  - { name: Shows,  path: /media/shows }
+  - { name: Anime,  path: /media/anime }
+
+server:
+  host: 0.0.0.0
+  port: 8790
+
+target_language: en
+
+# Which worker runs each stage. A worker that is missing or fails to start is
+# an error for the job; there is no silent switch to another model.
+stages:
+  separate:    { worker: separate, model: vocals_mel_band_roformer.ckpt }
+  diarize:     { worker: diarize, model: nvidia/Nemotron-3-Diarization, window_max_s: 120 }
+  speaker:     { worker: speaker }     # ECAPA voice embeddings, gender/age, LaBSE text similarity
+  recognize:   { worker: asr, model: Qwen/Qwen3-ASR-1.7B, aligner: Qwen/Qwen3-ForcedAligner-0.6B }
+  events:      { worker: events, model: iic/SenseVoiceSmall }
+  ocr:         { worker: ocr }
+  translate:   { worker: llm, model: RedHatAI/Qwen3.8-27B-MXFP4, gpu_memory_utilization: 0.80, max_model_len: 16384 }
+  speak:       { worker: tts-indextts, model: IndexTeam/IndexTTS-2.5 }
+  bwe:         { worker: bwe-flashsr, enabled: true }
+  voicedesign: { worker: voicedesign, model: Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign }
+
+# An OpenAI-compatible endpoint can stand in for the built-in translation
+# worker (for example a local llama.cpp or Ollama server). Local only.
+llm_endpoint:
+  enabled: false
+  url: http://localhost:11434/v1
+  model: qwen3:32b
+  api_key: ""
+
+gpu:
+  wait: true                # wait (and say so) when another process is using the GPU
+  min_free_mb:              # free VRAM needed before a stage starts
+    separate: 6000
+    diarize: 3000
+    speaker: 2000
+    recognize: 8000
+    events: 2000
+    translate: 26000
+    speak: 10000
+    bwe: 4000
+    ocr: 2000
+  poll_seconds: 30
+
+ingest:
+  skip_english_audio: true
+  scene_threshold: 0.35     # ffmpeg scene score for a shot change
+  scene_min_pause_s: 1.5    # a pause in speech this long also splits scenes
+  song_chapters: [opening, op, ending, ed, preview, insert song, song, credits]
+
+subtitles:
+  prefer: [english, source_language, asr]
+  min_score: 0.75
+  providers:
+    embedded:      { enabled: true }
+    sidecar:       { enabled: true }
+    bazarr:        { enabled: false, url: "${BAZARR_URL}", api_key: "${BAZARR_API_KEY}",
+                     search_missing: true, path_map: [] }
+    opensubtitles: { enabled: false, api_key: "${OPENSUBTITLES_API_KEY}",
+                     username: "${OPENSUBTITLES_USER}", password: "${OPENSUBTITLES_PASS}" }
+    subdl:         { enabled: false, api_key: "${SUBDL_API_KEY}" }
+    podnapisi:     { enabled: false }
+    jimaku:        { enabled: false, api_key: "${JIMAKU_API_KEY}" }
+
+translate:
+  style: natural            # natural | close
+  honorifics: keep          # keep | drop (per-show setting overrides)
+  reflect: true             # translate -> reflect -> rewrite
+  syllables_per_second: 4.6 # typical spoken English pace used to size lines
+
+speakers:
+  link_threshold: 0.62      # cosine similarity to treat two clusters as one voice
+  profile_threshold: 0.66   # cosine similarity to match a profile character
+  min_clean_seconds: 4.0    # less clean audio than this makes a "minor speaker"
+  max_refs_per_character: 8
+  ref_min_s: 3.0
+  ref_max_s: 15.0
+
+speak:
+  takes: 2
+  emo_alpha: 0.65
+  min_emotion_ref_s: 1.0
+  max_similarity_drop: 0.25
+
+fit:
+  borrow_ms: 250
+  factor_min: 0.85
+  factor_max: 1.15
+  stretch_max: 1.12
+  stretch_min: 0.92
+  tolerance_ms: 80
+
+mix:
+  sample_rate: 48000
+  eq_match: true
+  eq_max_db: 6.0
+  extra_duck_db: 0.0
+  fade_ms: 12
+
+deliver:
+  audio_bitrate: 192k
+  track_title: "English (AI dub)"
+  add_subtitle_tracks: true
+  owner: { uid: 99, gid: 100 }
+
+cleanup:
+  keep_failed_work: true

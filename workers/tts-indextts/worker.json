@@ -1,0 +1,7 @@
+{
+ "python": "3.11",
+ "title": "Voice-cloned speech",
+ "models": "IndexTTS-2.5",
+ "licence": "bilibili Model Use License (personal use)",
+ "download": "~8 GB"
+}

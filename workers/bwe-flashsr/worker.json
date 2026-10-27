@@ -1,0 +1,7 @@
+{
+ "python": "3.11",
+ "title": "Restoring full sound quality (48 kHz)",
+ "models": "FlashSR",
+ "licence": "no licence declared by its authors (research release)",
+ "download": "~3.3 GB"
+}

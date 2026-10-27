@@ -1,0 +1,11 @@
+{
+ "python": "3.12",
+ "index_urls": [
+  "https://download.pytorch.org/whl/cu128"
+ ],
+ "index_strategy": "unsafe-best-match",
+ "title": "Speech recognition + word timing",
+ "models": "Qwen3-ASR-1.7B + Qwen3-ForcedAligner-0.6B",
+ "licence": "Apache-2.0",
+ "download": "~6.5 GB"
+}

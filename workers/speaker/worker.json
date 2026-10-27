@@ -1,0 +1,11 @@
+{
+ "python": "3.12",
+ "index_urls": [
+  "https://download.pytorch.org/whl/cu128"
+ ],
+ "index_strategy": "unsafe-best-match",
+ "title": "Voice matching, gender/age, text similarity",
+ "models": "SpeechBrain ECAPA, audeering age-gender, LaBSE",
+ "licence": "Apache-2.0; age-gender model is CC-BY-NC-SA-4.0 (non-commercial)",
+ "download": "~3 GB"
+}

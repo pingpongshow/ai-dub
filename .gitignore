@@ -1,0 +1,37 @@
+# Local planning notes and assistant files (never published)
+PLAN.md
+RESEARCH.md
+CLAUDE.md
+CLAUDE.local.md
+.claude/
+.mcp.json
+
+# Media, samples and working data
+samples/
+dev/samples/
+dev/listening/out/
+*.aidub-original
+*.aidub-dubbed
+*.aidub-partial
+work/
+appdata/
+models/
+
+# Secrets
+secrets.yaml
+*.env
+.env*
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/

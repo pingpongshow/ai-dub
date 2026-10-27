@@ -1,0 +1,7 @@
+torch>=2.8
+torchaudio>=2.8
+speechbrain==1.1.2
+transformers>=4.44,<5
+sentence-transformers>=3,<6
+soundfile
+librosa

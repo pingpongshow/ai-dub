@@ -1,0 +1,4 @@
+torch>=2.8
+torchaudio>=2.8
+audio-separator[gpu]==0.47.1
+soundfile

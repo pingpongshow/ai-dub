@@ -1,0 +1,6 @@
+torch>=2.8
+torchaudio>=2.8
+transformers>=5.18.0
+accelerate
+soundfile
+librosa

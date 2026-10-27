@@ -1,0 +1,7 @@
+{
+ "python": "3.12",
+ "title": "Translation",
+ "models": "Qwen3.8-27B (4-bit) on vLLM",
+ "licence": "Apache-2.0",
+ "download": "~20 GB"
+}
