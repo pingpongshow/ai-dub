@@ -160,7 +160,7 @@ def translate_prompt(batch: list[L.Line], prev: list[L.Line], ctx: str, rate: fl
         if ln.english_ref:
             d["subtitle_meaning"] = ln.english_ref
         items.append(d)
-    before = [{"speaker": names.get(l.character, l.character), "text": l.source_text, "english": l.en} for l in prev]
+    before = [{"speaker": names.get(l.character, l.character), "text": l.source_text} for l in prev]
     user = (f"{ctx}\n\nEarlier in the scene:\n{json.dumps(before, ensure_ascii=False)}\n\n"
             "Lines to dub, in order (subtitle_meaning, when present, is a human English subtitle: follow its "
             "meaning and names, but rewrite it as natural speech of the right length):\n"
@@ -247,21 +247,29 @@ def run(job: Job) -> None:
     by_id = {ln.id: ln for ln in lines}
 
     with LLM(job) as llm:
-        # Pass 1 runs batch by batch so each batch sees the previous batch's English.
+        # Pass 1: every scene at once (the engine batches them); each scene sees
+        # the end of the previous scene in the original language as context.
         drafts: dict[int, dict] = {}
-        for bi, batch in enumerate(batches):
-            job.check()
-            prev = batches[bi - 1][-4:] if bi else []
-            for p in prev:
-                p.en = drafts.get(p.id, {}).get("en", "")
-            ctx = _context_block(prof, {l.character for l in batch}, lang)
-            reply = llm.chat_many([translate_prompt(batch, prev, ctx, rate, names)])[0]
-            got = _collect(reply)
-            missing = [l for l in batch if l.id not in got or not got[l.id]["en"]]
-            if missing:  # one retry for lines the model skipped
-                got.update(_collect(llm.chat_many([translate_prompt(missing, prev, ctx, rate, names)])[0]))
+        ctxs = [_context_block(prof, {l.character for l in b}, lang) for b in batches]
+        prevs = [batches[bi - 1][-4:] if bi else [] for bi in range(len(batches))]
+        replies = llm.chat_many([translate_prompt(b, p, c, rate, names) for b, p, c in zip(batches, prevs, ctxs)])
+        retry = []
+        for b, p, c, reply in zip(batches, prevs, ctxs, replies):
+            try:
+                got = _collect(reply)
+            except Exception:
+                got = {}
             drafts.update(got)
-            job.status(f"translated {bi + 1}/{len(batches)} scenes", progress=(bi + 1) / len(batches) * (0.5 if reflect else 1))
+            missing = [l for l in b if l.id not in got or not got[l.id]["en"]]
+            if missing:
+                retry.append(translate_prompt(missing, p, c, rate, names))
+        for reply in llm.chat_many(retry) if retry else []:  # one retry for lines the model skipped
+            try:
+                drafts.update({k: v for k, v in _collect(reply).items() if v["en"]})
+            except Exception:
+                pass
+        job.check()
+        job.status(f"translated {len(batches)} scenes", progress=0.5 if reflect else 1.0)
 
         final = dict(drafts)
         if reflect and batches:
