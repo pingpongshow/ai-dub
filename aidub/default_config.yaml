@@ -80,7 +80,7 @@ translate:
   style: natural            # natural | close
   honorifics: keep          # keep | drop (per-show setting overrides)
   reflect: true             # translate -> reflect -> rewrite
-  syllables_per_second: 4.6 # typical spoken English pace used to size lines
+  syllables_per_second: 4.3 # voice model's measured pace (plus ~0.25 s per line), used to size lines
 
 speakers:
   link_threshold: 0.62      # cosine similarity to treat two clusters as one voice
@@ -94,7 +94,9 @@ speak:
   takes: 2
   emo_alpha: 0.65
   min_emotion_ref_s: 1.0
-  max_similarity_drop: 0.25
+  max_similarity_drop: 0.25 # reject a take this far below the character's median similarity
+  min_similarity: 0.10
+  max_wer: 0.35
 
 fit:
   borrow_ms: 250

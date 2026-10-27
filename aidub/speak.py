@@ -38,11 +38,31 @@ def emo_vector(tag: str, strength: float = 0.7) -> list[float] | None:
     return v
 
 
+CONTRACTIONS = {"it's": "it is", "i'm": "i am", "you're": "you are", "we're": "we are", "they're": "they are",
+                "that's": "that is", "what's": "what is", "there's": "there is", "he's": "he is", "she's": "she is",
+                "don't": "do not", "doesn't": "does not", "didn't": "did not", "can't": "cannot", "won't": "will not",
+                "isn't": "is not", "aren't": "are not", "wasn't": "was not", "i'll": "i will", "you'll": "you will",
+                "we'll": "we will", "i've": "i have", "you've": "you have", "i'd": "i would", "let's": "let us",
+                "gonna": "going to", "wanna": "want to", "gotta": "got to"}
+
+
+def _words(text: str) -> list[str]:
+    out = []
+    for w in re.findall(r"[a-z0-9']+", text.lower().replace("’", "'")):
+        out.extend(CONTRACTIONS.get(w, w).split())
+    return out
+
+
 def wer(ref: str, hyp: str) -> float:
-    a = re.findall(r"[a-z0-9']+", ref.lower())
-    b = re.findall(r"[a-z0-9']+", hyp.lower())
+    """Back-check error rate. Short lines (names, one or two words) are compared
+    letter by letter, so "Kikoru" heard as "Kikaru" is a small error, not 100%."""
+    a, b = _words(ref), _words(hyp)
     if not a:
         return 0.0 if not b else 1.0
+    if len(a) <= 2:
+        ca, cb = "".join(a), "".join(b)
+        sm = difflib.SequenceMatcher(None, ca, cb, autojunk=False)
+        return 1.0 - sum(bl.size for bl in sm.get_matching_blocks()) / max(len(ca), len(cb), 1)
     sm = difflib.SequenceMatcher(None, a, b, autojunk=False)
     matched = sum(bl.size for bl in sm.get_matching_blocks())
     return 1.0 - matched / max(len(a), len(b))
@@ -138,18 +158,36 @@ def score_files(job: Job, items: list[tuple[L.Line, str, str]]) -> dict[str, dic
         for i in range(0, len(paths), 64):
             embs += w.call("embed_files", {"paths": paths[i:i + 64]})["embeddings"]
     from .speakers import cosine
+    by_char: dict[str, list[float]] = {}
     for (ln, _, p), e in zip(items, embs):
         ch = prof.characters.get(prof.voice_source(ln.character), {})
         target = ch.get("embedding")
-        sim = cosine(e, target) if target and e else 0.0
-        out[p]["sim"] = round(sim, 3)
+        if target and e:
+            sim = cosine(e, target)
+            by_char.setdefault(ln.character, []).append(sim)
+            out[p]["sim"] = round(sim, 3)
+        else:
+            out[p]["sim"] = None  # no voiceprint to compare with: not held against the take
+    for (ln, _, p) in items:
+        sims = by_char.get(ln.character)
+        out[p]["sim_median"] = round(float(np.median(sims)), 3) if sims else None
+        sim = out[p]["sim"] if out[p]["sim"] is not None else (out[p]["sim_median"] or 0.0)
         out[p]["score"] = round(0.6 * (1 - out[p]["wer"]) + 0.4 * sim, 4)
     return out
 
 
 def _passes(s: dict, cfg) -> bool:
-    return s.get("wer", 1) <= float(cfg.get("speak.max_wer", 0.35)) and \
-        s.get("sim", 0) >= float(cfg.get("speak.min_similarity", 0.30))
+    """Intelligible, and the voice isn't clearly someone else's. Cross-lingual
+    similarity runs low (about 0.2-0.4), so a take is only rejected when it falls
+    well below that character's own takes or under an absolute floor."""
+    if s.get("wer", 1) > float(cfg.get("speak.max_wer", 0.35)):
+        return False
+    sim, med = s.get("sim"), s.get("sim_median")
+    if sim is None:
+        return True
+    if sim < float(cfg.get("speak.min_similarity", 0.10)):
+        return False
+    return med is None or sim >= med - float(cfg.get("speak.max_similarity_drop", 0.25))
 
 
 def run_check(job: Job) -> None:

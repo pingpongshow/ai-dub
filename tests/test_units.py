@@ -151,3 +151,34 @@ def test_stray_words_join_nearby_line():
     assert align._attach([ln], {"text": "ぞ", "start": 2.2, "end": 2.4}, "ja")
     assert ln.end == 2.4 and ln.source_text == "行くぞ"
     assert not align._attach([ln], {"text": "は", "start": 5.0, "end": 5.2}, "ja")
+
+
+def test_backcheck_wer():
+    from aidub import speak
+    assert speak.wer("It's really starting to hurt now.", "It is really starting to hurt now.") == 0
+    assert speak.wer("Kikoru.", "Kikaru.") < 0.2
+    assert speak.wer("Then I must work harder.", "Then I must work harder") == 0
+    assert speak.wer("Run, everyone!", "Sit down, nobody") > 0.5
+
+
+def test_take_passes_relative_similarity():
+    from aidub import speak
+    cfg = {"speak.max_wer": 0.35, "speak.min_similarity": 0.1, "speak.max_similarity_drop": 0.25}
+    get = type("C", (), {"get": lambda self, k, d=None: cfg.get(k, d)})()
+    assert speak._passes({"wer": 0.0, "sim": 0.22, "sim_median": 0.3}, get)
+    assert not speak._passes({"wer": 0.0, "sim": 0.02, "sim_median": 0.3}, get)
+    assert speak._passes({"wer": 0.1, "sim": None, "sim_median": None}, get)
+    assert not speak._passes({"wer": 0.6, "sim": 0.4, "sim_median": 0.3}, get)
+
+
+def test_trim_cuts_noise_lead_and_long_tail():
+    sr = 22050
+    rng = np.random.default_rng(0)
+    lead = rng.normal(0, 10 ** (-58 / 20), int(0.25 * sr))
+    t = np.arange(int(0.4 * sr)) / sr
+    speech = 0.05 * np.sin(2 * np.pi * 220 * t)
+    tail = 0.012 * np.exp(-np.arange(int(0.5 * sr)) / (0.15 * sr)) * np.sin(2 * np.pi * 220 * np.arange(int(0.5 * sr)) / sr)
+    x = np.concatenate([lead, speech, tail]).astype(np.float32)
+    a, b = fit.speech_bounds(x, sr)
+    assert abs(a / sr - 0.25) < 0.04
+    assert 0.4 < (b - a) / sr < 0.62

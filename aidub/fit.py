@@ -55,28 +55,44 @@ def windows(lines: list[L.Line], cuts: list[float], rules: FitRules, duration: f
     return out
 
 
-def speech_bounds(data: np.ndarray, sr: int, floor_db: float = -42.0) -> tuple[int, int]:
-    x = np.abs(data if data.ndim == 1 else data.mean(axis=1))
-    if x.size == 0:
+def speech_bounds(data: np.ndarray, sr: int, start_db: float = 18.0, end_db: float = 15.0,
+                  decay_db: float = 25.0, max_decay: float = 0.15) -> tuple[int, int]:
+    """Where the speech is, judged against the take's own speech level (the 90th
+    percentile of 20 ms frame loudness): starts where a frame comes within
+    `start_db` of it, ends at the last frame within `end_db`, plus at most
+    `max_decay` seconds of natural decay above `decay_db` below it. Voice models
+    pad takes with low-level noise and long quiet tails; this cuts both."""
+    x = data if data.ndim == 1 else data.mean(axis=1)
+    hop = max(1, int(sr * 0.02))
+    if x.size < hop:
+        return 0, int(x.size)
+    frames = x[: x.size // hop * hop].reshape(-1, hop)
+    db = 20 * np.log10(np.sqrt(np.mean(frames ** 2, axis=1)) + 1e-9)
+    ref = float(np.percentile(db, 90))
+    on = np.nonzero(db > ref - start_db)[0]
+    core = np.nonzero(db > ref - end_db)[0]
+    if on.size == 0 or core.size == 0:
         return 0, 0
-    peak = float(x.max()) or 1.0
-    hop = max(1, int(sr * 0.01))
-    frames = x[: x.size // hop * hop].reshape(-1, hop).max(axis=1) if x.size >= hop else x
-    thr = peak * 10 ** (floor_db / 20)
-    idx = np.nonzero(frames > thr)[0]
-    if idx.size == 0:
-        return 0, 0
-    return int(idx[0] * hop), int(min(x.size, (idx[-1] + 1) * hop))
+    first, last = int(on[0]), int(core[-1])
+    k = last + 1
+    while k < len(db) and (k - last) * 0.02 <= max_decay and db[k] > ref - decay_db:
+        k += 1
+    return first * hop, min(int(x.size), k * hop)
 
 
-def trim(path: Path, out: Path | None = None, pad: float = 0.03) -> float:
+def trim(path: Path, out: Path | None = None, pad: float = 0.02) -> float:
     """Trim leading/trailing silence in place (or to `out`); return the new duration."""
     data, sr = media.read_wav(path)
     a, b = speech_bounds(data, sr)
     if b <= a:
         return 0.0
     p = int(pad * sr)
-    data = data[max(0, a - p): min(len(data), b + p)]
+    data = data[max(0, a - p): min(len(data), b + p)].copy()
+    f = min(int(0.015 * sr), len(data) // 4)
+    if f > 0:
+        ramp = np.linspace(0, 1, f, dtype=np.float32)[:, None] if data.ndim == 2 else np.linspace(0, 1, f, dtype=np.float32)
+        data[:f] *= ramp
+        data[-f:] *= ramp[::-1]
     media.write_wav(out or path, data, sr)
     return len(data) / sr
 

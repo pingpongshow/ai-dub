@@ -43,8 +43,11 @@ def syllables(text: str) -> int:
     return n
 
 
-def target_syllables(seconds: float, rate: float) -> int:
-    return max(1, round(seconds * rate))
+def target_syllables(seconds: float, rate: float, overhead: float = 0.25, borrow: float = 0.25) -> int:
+    """Syllables that fit a line: the voice model speaks at about `rate`
+    syllables a second plus a fixed `overhead` per line, and a line may borrow
+    a little following silence."""
+    return max(1, round((seconds + borrow - overhead) * rate))
 
 
 # LLM backends ---------------------------------------------------------------------------
@@ -237,7 +240,7 @@ def run(job: Job) -> None:
     lines = L.load(job.path("lines.json"))
     windows = job.get("line_windows") or [0] * len(lines)
     lang = job["subtitles"].get("source_language", "")
-    rate = float(job.cfg.get("translate.syllables_per_second", 4.6))
+    rate = float(job.cfg.get("translate.syllables_per_second", 4.3))
     reflect = bool(prof.settings.get("reflect", job.cfg.get("translate.reflect", True)))
     names = {cid: ch["name"] for cid, ch in prof.characters.items()}
     batches = _batches(lines, windows)
