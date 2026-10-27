@@ -12,9 +12,14 @@ state = {}
 def load(args):
     from vllm import LLM
     name = args.get("model") or "RedHatAI/Qwen3.8-27B-MXFP4"
+    # On the RTX 5090 (sm_120) vLLM 0.32's FlashInfer FP4 GEMM and XQA attention
+    # paths aren't usable (unsupported arch / need nvcc), so default to Marlin for
+    # the 4-bit layers and Triton for attention. Both are configurable.
     kw = dict(model=name, gpu_memory_utilization=float(args.get("gpu_memory_utilization", 0.80)),
               max_model_len=int(args.get("max_model_len", 16384)), max_num_seqs=int(args.get("max_num_seqs", 8)),
-              enforce_eager=True, kv_cache_dtype="fp8", trust_remote_code=False)
+              enforce_eager=True, kv_cache_dtype="fp8", trust_remote_code=False,
+              kernel_config={"linear_backend": args.get("linear_backend", "marlin")},
+              attention_config={"backend": args.get("attention_backend", "TRITON_ATTN")})
     try:
         state["llm"] = LLM(language_model_only=True, **kw)
     except TypeError:
