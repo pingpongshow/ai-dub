@@ -105,6 +105,8 @@ fit:
   factor_min: 0.85
   factor_max: 1.15
   stretch_max: 1.12
+  short_factor_min: 0.75    # one- or two-word lines may go this much faster ...
+  short_stretch_max: 1.25   # ... and be time-stretched this much
   stretch_min: 0.92
   tolerance_ms: 80
 

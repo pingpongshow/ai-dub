@@ -80,7 +80,8 @@ def _orig_clip(job: Job, ln: L.Line, dlg: np.ndarray, sr: int) -> Path:
     return p
 
 
-def _requests(job: Job, ln: L.Line, text: str, takes: int, tag: str, dlg, sr, factor: float | None = None) -> list[dict]:
+def _requests(job: Job, ln: L.Line, text: str, takes: int, tag: str, dlg, sr, factor: float | None = None,
+              seed_offset: int = 0) -> list[dict]:
     caps = job.get("tts_caps", {})
     orig = _orig_clip(job, ln, dlg, sr)
     min_emo = float(job.cfg.get("speak.min_emotion_ref_s", 1.0))
@@ -96,7 +97,7 @@ def _requests(job: Job, ln: L.Line, text: str, takes: int, tag: str, dlg, sr, fa
         req_base["duration_factor"] = factor
     out = []
     for t in range(takes):
-        out.append({**req_base, "seed": 1000 + ln.id * 7 + t,
+        out.append({**req_base, "seed": 1000 + ln.id * 7 + t + seed_offset,
                     "out": str(_line_dir(job, ln) / f"{tag}_{t}.wav")})
     return out
 
@@ -149,7 +150,9 @@ def score_files(job: Job, items: list[tuple[L.Line, str, str]]) -> dict[str, dic
             res = w.call("transcribe", {"items": [{"path": p} for _, _, p in part], "language": "en",
                                         "timestamps": False})
             for (ln, text, p), r in zip(part, res["results"]):
-                out[p] = {"wer": round(wer(text, r.get("text", "")), 3), "heard": r.get("text", "")}
+                ws = _words(text)
+                out[p] = {"wer": round(wer(text, r.get("text", "")), 3), "heard": r.get("text", ""),
+                          "interjection": len(ws) == 1 and len(ws[0]) <= 4}
             job.status(f"back-check {min(i + 16, len(items))}/{len(items)}", progress=0.5 * min(1.0, (i + 16) / len(items)))
     with job.worker("speaker") as w:
         w.call("load", {})
@@ -176,11 +179,19 @@ def score_files(job: Job, items: list[tuple[L.Line, str, str]]) -> dict[str, dic
     return out
 
 
+def short_text(text: str) -> bool:
+    return len(_words(text)) <= 2
+
+
 def _passes(s: dict, cfg) -> bool:
     """Intelligible, and the voice isn't clearly someone else's. Cross-lingual
     similarity runs low (about 0.2-0.4), so a take is only rejected when it falls
-    well below that character's own takes or under an absolute floor."""
-    if s.get("wer", 1) > float(cfg.get("speak.max_wer", 0.35)):
+    well below that character's own takes or under an absolute floor. A single
+    interjection ("Huh?", "Hm.") is hard to recognise back, so it gets more slack."""
+    max_wer = float(cfg.get("speak.max_wer", 0.35))
+    if s.get("interjection"):
+        max_wer = max(max_wer, 0.7)
+    if s.get("wer", 1) > max_wer:
         return False
     sim, med = s.get("sim"), s.get("sim_median")
     if sim is None:
@@ -410,33 +421,55 @@ def run_condense(job: Job) -> None:
             items.append({"id": ln.id, "speaker": names.get(ln.character, ln.character), "text": ln.source_text,
                           "subtitle_meaning": ln.english_ref, "current": ln.en, "max_syllables": limit})
         job.status(f"round {rnd + 1}: shortening {len(todo)} lines")
+        by_id = {ln.id: ln for ln in todo}
         with T.LLM(job) as llm:
             convs = []
             for i in range(0, len(items), 30):
                 part = items[i:i + 30]
-                ctx = T._context_block(prof, {next(l for l in todo if l.id == it["id"]).character for it in part}, lang)
+                ctx = T._context_block(prof, {by_id[it["id"]].character for it in part}, lang)
                 convs.append(T.condense_prompt(part, ctx))
             short: dict[int, dict] = {}
             for reply in llm.chat_many(convs, max_tokens=2048):
                 try:
                     for it in T.parse_json(reply).get("lines", []):
-                        short[int(it["id"])] = {"en": str(it.get("en", "")).strip(),
-                                                "shortest": str(it.get("shortest", "")).strip()}
+                        short[int(it["id"])] = {"a": str(it.get("en", "")).strip(),
+                                                "b": str(it.get("shortest", "")).strip()}
                 except Exception as exc:
                     job.log(f"condense reply unusable: {exc}")
+            # Meaning check: a shortened line is used only if it still says the same thing.
+            checks = [{"id": i, "text": by_id[i].source_text,
+                       "meaning": by_id[i].english_ref or by_id[i].fit.get("long_en", by_id[i].en),
+                       "options": {k: v for k, v in opts.items() if v and v != by_id[i].en}}
+                      for i, opts in short.items() if i in by_id]
+            checks = [c for c in checks if c["options"]]
+            ok: dict[int, set] = {}
+            for i in range(0, len(checks), 30):
+                part = checks[i:i + 30]
+                ctx = T._context_block(prof, {by_id[c["id"]].character for c in part}, lang)
+                try:
+                    reply = llm.chat_many([T.meaning_check_prompt(part, ctx)], max_tokens=1024)[0]
+                    for it in T.parse_json(reply).get("lines", []):
+                        ok[int(it["id"])] = {str(x) for x in it.get("ok", [])}
+                except Exception as exc:
+                    job.log(f"meaning check unusable, rejecting those options: {exc}")
+            rejected = sum(len(c["options"]) - len(ok.get(c["id"], set()) & set(c["options"])) for c in checks)
+            if rejected:
+                job.log(f"meaning check rejected {rejected} shortened options")
         texts: dict[str, tuple[L.Line, str]] = {}
         with job.worker("speak") as w:
             caps = _load_tts(job, w)
             reqs = []
             for ln in todo:
-                alt = short.get(ln.id, {})
-                for tag, text in ((f"cond{rnd}a", alt.get("en")), (f"cond{rnd}b", alt.get("shortest"))):
-                    if text and text != ln.en:
-                        for r in _requests(job, ln, text, 1, tag, dlg, sr):
-                            reqs.append(r)
-                            texts[r["out"]] = (ln, text)
+                alts = [(f"cond{rnd}{k}", short.get(ln.id, {}).get(k)) for k in ("a", "b")]
+                alts = [(tag, t) for tag, t in alts if t and t != ln.en and tag[-1] in ok.get(ln.id, set())]
+                # Nothing shorter that keeps the meaning: try the current line again with new seeds.
+                alts.append((f"cond{rnd}r", ln.en))
+                for tag, text in alts:
+                    for r in _requests(job, ln, text, 1, tag, dlg, sr, seed_offset=100 * (rnd + 1)):
+                        reqs.append(r)
+                        texts[r["out"]] = (ln, text)
             _synthesize(job, w, reqs, f"voicing shorter lines (round {rnd + 1})")
-            if caps["duration_control"]:  # a gentle speed factor for near misses
+            if caps["duration_control"]:  # a speed factor for near misses (more for one- or two-word lines)
                 reqs = []
                 for out, (ln, text) in list(texts.items()):
                     p = Path(out)
@@ -444,9 +477,11 @@ def run_condense(job: Job) -> None:
                         continue
                     m = F.trim(p)
                     window = win.get(ln.id, ln.duration + rules.borrow)
-                    f = F.factor_for(m, window - rules.tolerance / 2, rules)
+                    r_ = rules.for_short_text() if short_text(text) else rules
+                    f = F.factor_for(m, window - rules.tolerance / 2, r_)
                     if m > window + rules.tolerance and f is not None:
-                        r = _requests(job, ln, text, 1, p.stem.rsplit("_", 1)[0] + "f", dlg, sr, factor=f)[0]
+                        r = _requests(job, ln, text, 1, p.stem.rsplit("_", 1)[0] + "f", dlg, sr, factor=f,
+                                      seed_offset=100 * (rnd + 1))[0]
                         reqs.append(r)
                         texts[r["out"]] = (ln, text)
                 _synthesize(job, w, reqs, "fitting shorter lines")
@@ -460,9 +495,16 @@ def run_condense(job: Job) -> None:
         for ln in todo:
             d = _line_dir(job, ln)
             window = win.get(ln.id, ln.duration + rules.borrow)
-            opts = [("condensed", d / f"cond{rnd}a_0.wav"), ("condensed", d / f"cond{rnd}af_0.wav"),
-                    ("condensed", d / f"cond{rnd}b_0.wav"), ("condensed", d / f"cond{rnd}bf_0.wav")]
+            opts = []
+            for tag in ("a", "af", "b", "bf", "r", "rf"):
+                p = d / f"cond{rnd}{tag}_0.wav"
+                if str(p) in texts:
+                    opts.append(("condensed" if tag[0] in "ab" else "retried", p))
+            # Shorter wording first; looser fitting only applies to one- or two-word lines.
             chosen = choose(opts, scores, window, rules, job.cfg)
+            if chosen is None:
+                short_opts = [(h, p) for h, p in opts if short_text(texts[str(p)][1])]
+                chosen = choose(short_opts, scores, window, rules.for_short_text(), job.cfg)
             if chosen is None:
                 continue
             how, p, tempo = chosen

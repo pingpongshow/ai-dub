@@ -211,6 +211,18 @@ def condense_prompt(items: list[dict], ctx: str) -> list[dict]:
     return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
 
 
+def meaning_check_prompt(items: list[dict], ctx: str) -> list[dict]:
+    """Ask whether shortened lines still mean what the original says.
+
+    items: {"id", "text" (source), "meaning" (subtitle or full English), "options": {"a": ..., "b": ...}}"""
+    user = (f"{ctx}\n\nFor each line, check every shortened option against the meaning. An option passes only "
+            "if a viewer would understand the same thing: same intent, same key information, nothing cut "
+            "off mid-thought (\"I\" for \"I know\" fails; \"Got it.\" for \"I understand\" passes).\n"
+            f"{json.dumps(items, ensure_ascii=False, indent=0)}\n\n"
+            'Return {"lines": [{"id": <id>, "ok": ["a", "b"]}]} listing only the options that pass.')
+    return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
+
+
 def glossary_prompt(lines: list[L.Line], lang: str, known: list[str]) -> list[dict]:
     pairs = [{"text": l.source_text, "english": l.english_ref or l.en} for l in lines if l.kind == L.SPEECH][:400]
     user = (f"From these {LANG_NAMES.get(lang, lang)} lines and their English, list proper nouns and recurring "

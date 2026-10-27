@@ -190,3 +190,10 @@ def test_short_lines_borrow_more_silence():
     long_ = L.Line(2, 5.0, 7.0, character="c1")
     w = fit.windows([short, long_], cuts=[], rules=rules, duration=20)
     assert w[1] == pytest.approx(1.0) and w[2] == pytest.approx(2.25)
+
+
+def test_short_text_rules_are_looser():
+    rules = fit.FitRules()
+    loose = rules.for_short_text()
+    assert loose.factor_min == 0.75 and loose.stretch_max == 1.25
+    assert fit.factor_for(1.0, 0.8, rules) is None and fit.factor_for(1.0, 0.8, loose) == pytest.approx(0.8)

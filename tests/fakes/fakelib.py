@@ -166,6 +166,10 @@ def llm_ops():
             if '"terms"' in user:
                 outs.append(json.dumps({"terms": [{"source": "東京", "en": "Tokyo", "type": "place"}]}))
                 continue
+            if '"ok": ["a", "b"]' in user:  # meaning check: approve option a only
+                ids = re.findall(r'"id":\s*(\d+)', user)
+                outs.append(json.dumps({"lines": [{"id": int(i), "ok": ["a"]} for i in ids]}))
+                continue
             if '"max_syllables"' in user:
                 items = re.findall(r'"id":\s*(\d+).*?"max_syllables":\s*(\d+)', user, re.S)
                 outs.append(json.dumps({"lines": [{"id": int(i), "en": " ".join(["word"] * int(n)),

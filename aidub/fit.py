@@ -27,6 +27,8 @@ class FitRules:
     stretch_max: float = 1.12      # at most this much faster by time-stretch
     stretch_min: float = 0.92      # never slower than this by time-stretch
     tolerance: float = 0.08
+    short_factor_min: float = 0.75  # one- or two-word lines may be spoken this much faster
+    short_stretch_max: float = 1.25
 
     @classmethod
     def from_config(cls, cfg) -> "FitRules":
@@ -34,7 +36,14 @@ class FitRules:
         return cls(borrow=g("borrow_ms", 250) / 1000, short_borrow=g("short_line_borrow_ms", 500) / 1000,
                    short_line=g("short_line_s", 1.0), factor_min=g("factor_min", 0.85),
                    factor_max=g("factor_max", 1.15), stretch_max=g("stretch_max", 1.12),
-                   stretch_min=g("stretch_min", 0.92), tolerance=g("tolerance_ms", 80) / 1000)
+                   stretch_min=g("stretch_min", 0.92), tolerance=g("tolerance_ms", 80) / 1000,
+                   short_factor_min=g("short_factor_min", 0.75), short_stretch_max=g("short_stretch_max", 1.25))
+
+    def for_short_text(self) -> "FitRules":
+        """Looser limits for one- or two-word lines, where a faster delivery isn't noticeable."""
+        from dataclasses import replace
+        return replace(self, factor_min=min(self.factor_min, self.short_factor_min),
+                       stretch_max=max(self.stretch_max, self.short_stretch_max))
 
 
 def windows(lines: list[L.Line], cuts: list[float], rules: FitRules, duration: float) -> dict[int, float]:
