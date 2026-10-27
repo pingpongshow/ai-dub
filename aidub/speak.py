@@ -288,6 +288,30 @@ def run_fit(job: Job) -> None:
 
 
 # finalize ---------------------------------------------------------------------------------------
+def choose(options: list[tuple[str, Path]], scores: dict, window: float, rules: F.FitRules,
+           cfg) -> tuple[str, Path, float] | None:
+    """First option (in order of quality cost) that passed the back-check and fits
+    its window, else the first that fits with an allowed time-stretch."""
+    usable = [(how, p) for how, p in options
+              if p.exists() and not (str(p) in scores and not _passes(scores[str(p)], cfg))]
+    for how, p in usable:
+        if media.duration(p) <= window + rules.tolerance:
+            return how, p, 1.0
+    for how, p in usable:
+        r = F.stretch_ratio(media.duration(p), window, rules)
+        if r is not None:
+            return "stretched", p, r
+    return None
+
+
+def _qc_fallbacks(job: Job, lines: list[L.Line]) -> None:
+    dubbed = sum(1 for l in lines if l.kind == L.SPEECH)
+    fallback = [l for l in lines if l.kind == L.SPEECH and l.fallback]
+    job.qc.setdefault("fit", {})["fallback"] = len(fallback)
+    job.qc["fallback_rate"] = round(len(fallback) / dubbed, 4) if dubbed else 0.0
+    job.qc["fallback_lines"] = [{"id": l.id, "start": l.start, "reason": l.fallback} for l in fallback][:200]
+
+
 def run_finalize(job: Job) -> None:
     lines = L.load(job.path("lines.json"))
     rules = F.FitRules.from_config(job.cfg)
@@ -317,25 +341,7 @@ def run_finalize(job: Job) -> None:
         # An underrun prefers the slower regenerated take; otherwise the natural take comes first.
         options: list[tuple[str, Path]] = factor + natural if ln.fit.get("state") == "under" else natural + factor
         options += [("shorter", d / "shortfit_0.wav"), ("shorter", d / "short_0.wav")]
-        chosen = None
-        for how, p in options:
-            if not p.exists():
-                continue
-            s = scores.get(str(p))
-            if s is not None and not _passes(s, job.cfg):
-                continue
-            m = media.duration(p)
-            if m <= window + rules.tolerance:
-                chosen = (how, p, 1.0)
-                break
-        if chosen is None:
-            for how, p in options:
-                if not p.exists() or (str(p) in scores and not _passes(scores[str(p)], job.cfg)):
-                    continue
-                r = F.stretch_ratio(media.duration(p), window, rules)
-                if r is not None:
-                    chosen = ("stretched", p, r)
-                    break
+        chosen = choose(options, scores, window, rules, job.cfg)
         if chosen is None:
             ln.fallback = f"too long for its {window:.2f} s window even after fitting"
             ln.take = ""
@@ -356,8 +362,121 @@ def run_finalize(job: Job) -> None:
     L.save(lines, job.path("lines.json"))
     dubbed = sum(1 for l in lines if l.kind == L.SPEECH)
     job.qc["fit"] = counts
-    job.qc["fallback_rate"] = round(counts["fallback"] / dubbed, 4) if dubbed else 0.0
     job.qc["stretched_rate"] = round(counts["stretched"] / dubbed, 4) if dubbed else 0.0
-    job.qc["fallback_lines"] = [{"id": l.id, "start": l.start, "reason": l.fallback} for l in lines
-                                if l.kind == L.SPEECH and l.fallback][:200]
+    _qc_fallbacks(job, lines)
     job.status(", ".join(f"{k} {v}" for k, v in counts.items() if v))
+
+
+# condense ---------------------------------------------------------------------------------------
+def _pace(job: Job, ln: L.Line) -> float:
+    """This voice's speaking pace (syllables a second) from the line's own takes,
+    never faster than the configured pace."""
+    from .translate import syllables
+    rate = float(job.cfg.get("translate.syllables_per_second", 4.3))
+    measured = ln.fit.get("measured")
+    if measured and ln.en:
+        rate = min(rate, syllables(ln.en) / max(0.3, measured - 0.15))
+    return max(2.5, rate)
+
+
+def run_condense(job: Job) -> None:
+    """Lines still in the original language get shorter English that keeps the
+    meaning, sized to the time available from the voice's measured pace, then
+    are voiced, back-checked and fitted again. Up to `condense.rounds` rounds."""
+    from . import translate as T
+    lines = L.load(job.path("lines.json"))
+    rules = F.FitRules.from_config(job.cfg)
+    rounds = int(job.cfg.get("condense.rounds", 2))
+    if not job.cfg.get("condense.enabled", True) or rounds <= 0:
+        return
+    win = F.windows([l for l in lines if l.kind == L.SPEECH], job["scenes"]["cuts"], rules, job["ingest"]["duration"])
+    dlg, sr = media.read_wav(job.path("audio", "dialogue.wav"), mono=True)
+    prof = job.profile
+    names = {cid: ch["name"] for cid, ch in prof.characters.items()}
+    lang = job["subtitles"].get("source_language", "")
+    overhead = float(job.cfg.get("condense.line_overhead_s", 0.25))
+    rescued = 0
+    for rnd in range(rounds):
+        todo = [ln for ln in lines if ln.kind == L.SPEECH and ln.fallback and ln.en]
+        if not todo:
+            break
+        job.check()
+        items = []
+        for ln in todo:
+            window = win.get(ln.id, ln.duration + rules.borrow)
+            pace = _pace(job, ln) * (0.85 if rnd else 1.0)  # aim a little shorter on the second round
+            limit = max(1, int((window * rules.stretch_max - overhead) * pace))
+            ln.fit.setdefault("long_en", ln.en)
+            items.append({"id": ln.id, "speaker": names.get(ln.character, ln.character), "text": ln.source_text,
+                          "subtitle_meaning": ln.english_ref, "current": ln.en, "max_syllables": limit})
+        job.status(f"round {rnd + 1}: shortening {len(todo)} lines")
+        with T.LLM(job) as llm:
+            convs = []
+            for i in range(0, len(items), 30):
+                part = items[i:i + 30]
+                ctx = T._context_block(prof, {next(l for l in todo if l.id == it["id"]).character for it in part}, lang)
+                convs.append(T.condense_prompt(part, ctx))
+            short: dict[int, dict] = {}
+            for reply in llm.chat_many(convs, max_tokens=2048):
+                try:
+                    for it in T.parse_json(reply).get("lines", []):
+                        short[int(it["id"])] = {"en": str(it.get("en", "")).strip(),
+                                                "shortest": str(it.get("shortest", "")).strip()}
+                except Exception as exc:
+                    job.log(f"condense reply unusable: {exc}")
+        texts: dict[str, tuple[L.Line, str]] = {}
+        with job.worker("speak") as w:
+            caps = _load_tts(job, w)
+            reqs = []
+            for ln in todo:
+                alt = short.get(ln.id, {})
+                for tag, text in ((f"cond{rnd}a", alt.get("en")), (f"cond{rnd}b", alt.get("shortest"))):
+                    if text and text != ln.en:
+                        for r in _requests(job, ln, text, 1, tag, dlg, sr):
+                            reqs.append(r)
+                            texts[r["out"]] = (ln, text)
+            _synthesize(job, w, reqs, f"voicing shorter lines (round {rnd + 1})")
+            if caps["duration_control"]:  # a gentle speed factor for near misses
+                reqs = []
+                for out, (ln, text) in list(texts.items()):
+                    p = Path(out)
+                    if not p.exists():
+                        continue
+                    m = F.trim(p)
+                    window = win.get(ln.id, ln.duration + rules.borrow)
+                    f = F.factor_for(m, window - rules.tolerance / 2, rules)
+                    if m > window + rules.tolerance and f is not None:
+                        r = _requests(job, ln, text, 1, p.stem.rsplit("_", 1)[0] + "f", dlg, sr, factor=f)[0]
+                        reqs.append(r)
+                        texts[r["out"]] = (ln, text)
+                _synthesize(job, w, reqs, "fitting shorter lines")
+        items_to_score = []
+        for out, (ln, text) in texts.items():
+            p = Path(out)
+            if p.exists():
+                F.trim(p)
+                items_to_score.append((ln, text, out))
+        scores = score_files(job, items_to_score)
+        for ln in todo:
+            d = _line_dir(job, ln)
+            window = win.get(ln.id, ln.duration + rules.borrow)
+            opts = [("condensed", d / f"cond{rnd}a_0.wav"), ("condensed", d / f"cond{rnd}af_0.wav"),
+                    ("condensed", d / f"cond{rnd}b_0.wav"), ("condensed", d / f"cond{rnd}bf_0.wav")]
+            chosen = choose(opts, scores, window, rules, job.cfg)
+            if chosen is None:
+                continue
+            how, p, tempo = chosen
+            final = d / "final.wav"
+            F.time_stretch(p, final, tempo)
+            ln.en = texts[str(p)][1]
+            ln.take = str(final)
+            ln.fallback = ""
+            ln.fit.update({"window": window, "method": "condensed", "tempo": tempo, "source": p.name,
+                           "final": round(media.duration(final), 3), "round": rnd + 1})
+            rescued += 1
+        L.save(lines, job.path("lines.json"))
+    counts = job.qc.setdefault("fit", {})
+    counts["condensed"] = rescued
+    _qc_fallbacks(job, lines)
+    L.save(lines, job.path("lines.json"))
+    job.status(f"shortened {rescued} lines; {counts['fallback']} still in the original language")

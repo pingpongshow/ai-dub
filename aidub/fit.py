@@ -20,6 +20,8 @@ from . import media
 @dataclass
 class FitRules:
     borrow: float = 0.25
+    short_borrow: float = 0.5      # very short lines may borrow more following silence
+    short_line: float = 1.0        # ... when the original line is shorter than this
     factor_min: float = 0.85
     factor_max: float = 1.15
     stretch_max: float = 1.12      # at most this much faster by time-stretch
@@ -29,19 +31,21 @@ class FitRules:
     @classmethod
     def from_config(cls, cfg) -> "FitRules":
         g = lambda k, d: float(cfg.get(f"fit.{k}", d))
-        return cls(borrow=g("borrow_ms", 250) / 1000, factor_min=g("factor_min", 0.85),
+        return cls(borrow=g("borrow_ms", 250) / 1000, short_borrow=g("short_line_borrow_ms", 500) / 1000,
+                   short_line=g("short_line_s", 1.0), factor_min=g("factor_min", 0.85),
                    factor_max=g("factor_max", 1.15), stretch_max=g("stretch_max", 1.12),
                    stretch_min=g("stretch_min", 0.92), tolerance=g("tolerance_ms", 80) / 1000)
 
 
 def windows(lines: list[L.Line], cuts: list[float], rules: FitRules, duration: float) -> dict[int, float]:
     """Seconds available to each dubbed line: its own span plus up to `borrow` of
-    following silence, never past the same character's next line or a shot change."""
+    following silence (`short_borrow` for very short lines), never past the same
+    character's next line or a shot change."""
     cuts_arr = np.asarray(sorted(cuts)) if cuts else np.asarray([])
     out = {}
     by_time = sorted(lines, key=lambda l: l.start)
     for i, ln in enumerate(by_time):
-        limit = ln.end + rules.borrow
+        limit = ln.end + (rules.short_borrow if ln.duration < rules.short_line else rules.borrow)
         for nxt in by_time[i + 1:]:
             if nxt.start >= limit:
                 break

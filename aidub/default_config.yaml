@@ -100,11 +100,18 @@ speak:
 
 fit:
   borrow_ms: 250
+  short_line_borrow_ms: 500 # lines shorter than short_line_s may borrow more silence
+  short_line_s: 1.0
   factor_min: 0.85
   factor_max: 1.15
   stretch_max: 1.12
   stretch_min: 0.92
   tolerance_ms: 80
+
+condense:                   # lines that still don't fit get shorter English with the same meaning
+  enabled: true
+  rounds: 2
+  line_overhead_s: 0.25
 
 mix:
   sample_rate: 48000

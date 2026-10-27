@@ -194,6 +194,23 @@ def rewrite_prompt(batch: list[L.Line], ctx: str, rate: float, names: dict, draf
     return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
 
 
+def condense_prompt(items: list[dict], ctx: str) -> list[dict]:
+    """Ask for shorter dub lines that keep the meaning.
+
+    items: {"id", "speaker", "text" (source), "subtitle_meaning", "current" (too long),
+            "max_syllables"}."""
+    user = (f"{ctx}\n\nThese dub lines are too long for the time the character speaks. Rewrite each so it "
+            "fits max_syllables when spoken, keeping the meaning and tone. You may drop filler and repeated "
+            "words, use contractions and shorter synonyms, and leave out names or details the scene makes "
+            "obvious. Never change what is being said. When max_syllables is 1 or 2, use the single word or "
+            "short interjection that carries the line's meaning (for example \"What?\", \"No!\", \"Run!\", "
+            "\"Thanks.\").\n"
+            f"{json.dumps(items, ensure_ascii=False, indent=0)}\n\n"
+            'Return {"lines": [{"id": <id>, "en": "<line within max_syllables>", "shortest": "<an even '
+            'shorter version, about two thirds as long, same meaning>"}]}.')
+    return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
+
+
 def glossary_prompt(lines: list[L.Line], lang: str, known: list[str]) -> list[dict]:
     pairs = [{"text": l.source_text, "english": l.english_ref or l.en} for l in lines if l.kind == L.SPEECH][:400]
     user = (f"From these {LANG_NAMES.get(lang, lang)} lines and their English, list proper nouns and recurring "

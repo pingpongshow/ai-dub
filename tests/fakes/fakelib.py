@@ -166,6 +166,12 @@ def llm_ops():
             if '"terms"' in user:
                 outs.append(json.dumps({"terms": [{"source": "東京", "en": "Tokyo", "type": "place"}]}))
                 continue
+            if '"max_syllables"' in user:
+                items = re.findall(r'"id":\s*(\d+).*?"max_syllables":\s*(\d+)', user, re.S)
+                outs.append(json.dumps({"lines": [{"id": int(i), "en": " ".join(["word"] * int(n)),
+                                                   "shortest": " ".join(["word"] * max(1, int(n) * 2 // 3))}
+                                                  for i, n in items]}))
+                continue
             items = re.findall(r'"id":\s*(\d+).*?"target_syllables":\s*(\d+)', user, re.S)
             lines = [{"id": int(i), "en": " ".join(["word"] * int(n)),
                       "short": " ".join(["word"] * max(1, int(int(n) * 0.75)))} for i, n in items]

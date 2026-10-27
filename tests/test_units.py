@@ -182,3 +182,11 @@ def test_trim_cuts_noise_lead_and_long_tail():
     a, b = fit.speech_bounds(x, sr)
     assert abs(a / sr - 0.25) < 0.04
     assert 0.4 < (b - a) / sr < 0.62
+
+
+def test_short_lines_borrow_more_silence():
+    rules = fit.FitRules()
+    short = L.Line(1, 0.0, 0.5, character="c1")
+    long_ = L.Line(2, 5.0, 7.0, character="c1")
+    w = fit.windows([short, long_], cuts=[], rules=rules, duration=20)
+    assert w[1] == pytest.approx(1.0) and w[2] == pytest.approx(2.25)

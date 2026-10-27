@@ -143,3 +143,17 @@ def test_failed_delivery_keeps_original(cfg, media_root, monkeypatch):
     svc.retry(job["id"])
     svc.run_one(svc.store.next_queued())
     assert svc.store.get(job["id"])["status"] == J.DONE
+
+
+def test_overrunning_lines_get_shorter_english(cfg, media_root):
+    """With speed factors and stretching off and a translator that writes too
+    much, lines only fit through the condense step's shorter wording."""
+    cfg.data["translate"]["syllables_per_second"] = 7.0
+    cfg.data["fit"].update({"factor_min": 0.999, "factor_max": 1.001, "stretch_max": 1.0})
+    ep = synth.episode(media_root / "Long Lines.mkv")
+    svc = Service(cfg)
+    job = run_service_job(svc, ep)
+    assert job["status"] == J.DONE, job["message"]
+    qc = job["record"]["qc"]
+    assert qc["fit"]["condensed"] > 0
+    assert qc["fallback_rate"] <= 0.15, qc["fallback_lines"]
