@@ -87,7 +87,9 @@ class Worker:
         if not script.exists():
             raise WorkerError(f"worker '{self.name}' does not exist")
         env = dict(os.environ)
-        common = DEFAULT_WORKERS / "_common"
+        common = workers_root() / "_common"
+        if not common.exists():  # stand-in workers in tests share the real runtime
+            common = DEFAULT_WORKERS / "_common"
         env.update({
             "PYTHONPATH": str(common),
             "PYTHONUNBUFFERED": "1",
