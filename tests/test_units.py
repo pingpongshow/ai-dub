@@ -142,3 +142,12 @@ def test_pgs_reader_handles_empty(tmp_path):
     p = tmp_path / "empty.sup"
     p.write_bytes(b"")
     assert list(pgs.read(p)) == []
+
+
+def test_stray_words_join_nearby_line():
+    from aidub import align
+    ln = L.Line(1, 1.0, 2.0, source_text="行く", text_origin="asr",
+                words=[L.Word("行", 1.0, 1.4), L.Word("く", 1.4, 2.0)])
+    assert align._attach([ln], {"text": "ぞ", "start": 2.2, "end": 2.4}, "ja")
+    assert ln.end == 2.4 and ln.source_text == "行くぞ"
+    assert not align._attach([ln], {"text": "は", "start": 5.0, "end": 5.2}, "ja")

@@ -30,6 +30,7 @@ INTERJECTION_WORDS = {
     "en": {"ah", "oh", "uh", "um", "hmm", "huh", "ha", "eh", "mm", "ugh", "whoa", "wow", "hey"},
 }
 WORDLESS_EVENTS = {"Laughter", "Cry", "Cough", "Sneeze", "Breath", "laughter", "cry", "cough", "sneeze", "breath"}
+MIN_LINE_S = 0.5
 SENTENCE_END = re.compile(r"[。！？!?…]$|[.!?]$")
 
 
@@ -135,6 +136,22 @@ def split_by_speaker(line: L.Line, turns: list[dict], lang: str) -> list[L.Line]
     return out
 
 
+def _attach(lines: list[L.Line], w: dict, lang: str, reach: float = 0.5) -> bool:
+    """Add a recognised word to the line it sits just before or after."""
+    best, gap = None, reach
+    for ln in lines:
+        g = max(ln.start - w["end"], w["start"] - ln.end, 0.0)
+        if g < gap:
+            best, gap = ln, g
+    if best is None:
+        return False
+    best.words = sorted(best.words + [L.Word(**w)], key=lambda x: x.start)
+    best.start, best.end = min(best.start, w["start"]), max(best.end, w["end"])
+    if best.text_origin == "asr":
+        best.source_text = join_words([{"text": x.text} for x in best.words], lang)
+    return True
+
+
 def _in_ranges(a: float, b: float, ranges: list[list[float]]) -> bool:
     return any(min(b, r[1]) - max(a, r[0]) > 0.5 * (b - a) for r in ranges)
 
@@ -173,8 +190,14 @@ def build(job: Job) -> list[L.Line]:
 
     # Recognised speech no subtitle covers (or everything, without subtitles).
     rest = [w for w in words if not any(a - 0.1 <= (w["start"] + w["end"]) / 2 <= b + 0.1 for a, b in covered)]
+    if raw:
+        # Speech just outside a subtitle line's timing belongs to that line.
+        rest = [w for w in rest if not _attach(raw, w, lang)]
     for sent in sentences(rest, turns):
-        raw.append(L.Line(id=0, start=sent[0]["start"], end=sent[-1]["end"], source_text=join_words(sent, lang),
+        text = join_words(sent, lang)
+        dur = sent[-1]["end"] - sent[0]["start"]
+        kind = L.SPEECH if (dur >= MIN_LINE_S and len(text) > 1) else L.WORDLESS  # fragments keep the original
+        raw.append(L.Line(id=0, start=sent[0]["start"], end=sent[-1]["end"], source_text=text, kind=kind,
                           source_lang=lang, text_origin="asr", words=[L.Word(**w) for w in sent]))
 
     # English subtitle as the meaning reference for source-subtitle lines.
