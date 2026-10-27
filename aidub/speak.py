@@ -152,7 +152,8 @@ def score_files(job: Job, items: list[tuple[L.Line, str, str]]) -> dict[str, dic
             for (ln, text, p), r in zip(part, res["results"]):
                 ws = _words(text)
                 out[p] = {"wer": round(wer(text, r.get("text", "")), 3), "heard": r.get("text", ""),
-                          "interjection": len(ws) == 1 and len(ws[0]) <= 4}
+                          "interjection": len(ws) == 1 and len(ws[0]) <= 4,
+                          "seconds": round(media.duration(p), 2)}
             job.status(f"back-check {min(i + 16, len(items))}/{len(items)}", progress=0.5 * min(1.0, (i + 16) / len(items)))
     with job.worker("speaker") as w:
         w.call("load", {})
@@ -186,7 +187,8 @@ def short_text(text: str) -> bool:
 def _passes(s: dict, cfg) -> bool:
     """Intelligible, and the voice isn't clearly someone else's. Cross-lingual
     similarity runs low (about 0.2-0.4), so a take is only rejected when it falls
-    well below that character's own takes or under an absolute floor. A single
+    well below that character's own takes or under an absolute floor; clips under
+    a second are too short to embed reliably, so only the back-check applies. A single
     interjection ("Huh?", "Hm.") is hard to recognise back, so it gets more slack."""
     max_wer = float(cfg.get("speak.max_wer", 0.35))
     if s.get("interjection"):
@@ -194,8 +196,8 @@ def _passes(s: dict, cfg) -> bool:
     if s.get("wer", 1) > max_wer:
         return False
     sim, med = s.get("sim"), s.get("sim_median")
-    if sim is None:
-        return True
+    if sim is None or s.get("seconds", 99) < float(cfg.get("speak.min_similarity_seconds", 1.0)):
+        return True  # no voiceprint, or too short for a reliable voice embedding
     if sim < float(cfg.get("speak.min_similarity", 0.10)):
         return False
     return med is None or sim >= med - float(cfg.get("speak.max_similarity_drop", 0.25))

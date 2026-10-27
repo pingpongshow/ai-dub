@@ -169,6 +169,7 @@ def test_take_passes_relative_similarity():
     assert not speak._passes({"wer": 0.0, "sim": 0.02, "sim_median": 0.3}, get)
     assert speak._passes({"wer": 0.1, "sim": None, "sim_median": None}, get)
     assert not speak._passes({"wer": 0.6, "sim": 0.4, "sim_median": 0.3}, get)
+    assert speak._passes({"wer": 0.0, "sim": 0.01, "sim_median": 0.3, "seconds": 0.6}, get)
 
 
 def test_trim_cuts_noise_lead_and_long_tail():
