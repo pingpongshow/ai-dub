@@ -12,6 +12,7 @@ for d in /config /config/home /models /work; do
   chown "$PUID:$PGID" "$d" 2>/dev/null || true
 done
 if [ "$(id -u)" = "0" ]; then
-  exec gosu "$PUID:$PGID" "$@"
+  # gosu takes HOME from the user database (none for 99), so set it explicitly.
+  exec gosu "$PUID:$PGID" env HOME=/config/home "$@"
 fi
 exec "$@"

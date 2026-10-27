@@ -98,7 +98,11 @@ class Worker:
             "MODELSCOPE_CACHE": str(self.cfg.models / "modelscope"),
             "TORCH_HOME": str(self.cfg.models / "torch"),
             "XDG_CACHE_HOME": str(self.cfg.models / "cache"),
+            "PADDLE_PDX_CACHE_HOME": str(self.cfg.models / "paddlex"),
+            "AUDIO_SEPARATOR_MODEL_DIR": str(self.cfg.models / "audio-separator"),
         })
+        if env.get("HOME", "/") in ("/", ""):
+            env["HOME"] = str(self.cfg.appdata / "home")
         hf_token = self.cfg.secrets.get("HF_TOKEN") or os.environ.get("HF_TOKEN")
         if hf_token:
             env["HF_TOKEN"] = hf_token
