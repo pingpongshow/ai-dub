@@ -8,6 +8,9 @@ mkdir -p /config/home /models /work
 if [ ! -f /config/config.yaml ]; then
   cp /app/docker/config.example.yaml /config/config.yaml 2>/dev/null || true
 fi
+# Some libraries look the running user up by uid; give PUID/PGID names.
+if ! getent group "$PGID" >/dev/null; then echo "aidub:x:$PGID:" >> /etc/group; fi
+if ! getent passwd "$PUID" >/dev/null; then echo "aidub:x:$PUID:$PGID:Ai Dub:/config/home:/bin/bash" >> /etc/passwd; fi
 for d in /config /config/home /models /work; do
   chown "$PUID:$PGID" "$d" 2>/dev/null || true
 done
