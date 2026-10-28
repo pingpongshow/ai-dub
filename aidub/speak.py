@@ -350,11 +350,17 @@ def run_finalize(job: Job) -> None:
         window = ln.fit.get("window", ln.duration + rules.borrow)
         # Candidates in order of quality cost.
         factor = [("speed_factor", d / name) for name in ("fit1_0.wav", "fit0_0.wav")]
-        natural = [("fits", Path(ln.take))]
+        # The best-scoring take first, then any other take that passed the back-check.
+        others = sorted((p for p, sc in ln.take_scores.items() if p != ln.take and _passes(sc, job.cfg)),
+                        key=lambda p: -ln.take_scores[p].get("score", 0))
+        natural = [("fits", Path(ln.take))] + [("fits", Path(p)) for p in others]
         # An underrun prefers the slower regenerated take; otherwise the natural take comes first.
         options: list[tuple[str, Path]] = factor + natural if ln.fit.get("state") == "under" else natural + factor
         options += [("shorter", d / "shortfit_0.wav"), ("shorter", d / "short_0.wav")]
-        chosen = choose(options, scores, window, rules, job.cfg)
+        all_scores = {**ln.take_scores, **scores}
+        chosen = choose(options, all_scores, window, rules, job.cfg)
+        if chosen is None and short_text(ln.en):  # one- or two-word lines may go a little faster
+            chosen = choose(options, all_scores, window, rules.for_short_text(), job.cfg)
         if chosen is None:
             ln.fallback = f"too long for its {window:.2f} s window even after fitting"
             ln.take = ""
@@ -506,7 +512,11 @@ def run_condense(job: Job) -> None:
             chosen = choose(opts, scores, window, rules, job.cfg)
             if chosen is None:
                 short_opts = [(h, p) for h, p in opts if short_text(texts[str(p)][1])]
-                chosen = choose(short_opts, scores, window, rules.for_short_text(), job.cfg)
+                if short_text(ln.en):  # earlier takes of the same short line count too
+                    for p_ in ln.take_scores:
+                        short_opts.append(("retried", Path(p_)))
+                        texts.setdefault(p_, (ln, ln.en))
+                chosen = choose(short_opts, {**ln.take_scores, **scores}, window, rules.for_short_text(), job.cfg)
             if chosen is None:
                 continue
             how, p, tempo = chosen
