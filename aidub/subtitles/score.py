@@ -68,14 +68,24 @@ def apply_sync(cues: list[Cue], offset: float, scale: float) -> list[Cue]:
 
 
 def drift(cues: list[Cue], speech: np.ndarray, duration: float) -> float:
-    """Difference between the best offsets of the first and second half (seconds)."""
+    """How far apart the best offsets of the first and second half are (seconds),
+    counted only when a half really fits better at its own offset than at the
+    whole subtitle's. Songs or long speech-free stretches otherwise fake a drift."""
     dial = [q for q in cues if q.kind == DIALOGUE and q.text]
     if len(dial) < 20:
         return 0.0
     half = len(dial) // 2
-    a = best_offset(dial[:half], speech, duration)[0]
-    b = best_offset(dial[half:], speech, duration)[0]
-    return abs(a - b)
+    gains, offsets = [], []
+    for part in (dial[:half], dial[half:]):
+        off, scale, frac, _ = best_offset(part, speech, duration)
+        here = mask([(q.start, q.end) for q in part], duration)
+        n = min(len(here), len(speech))
+        at_zero = float((here[:n] * speech[:n]).sum() / max(here.sum(), 1e-9))
+        gains.append(frac - at_zero)
+        offsets.append(off)
+    if max(gains) < 0.08:
+        return 0.0
+    return abs(offsets[0] - offsets[1])
 
 
 def coverage(cues: list[Cue], speech: np.ndarray, duration: float) -> float:
@@ -124,9 +134,11 @@ def discrimination(true_sims: list[float], shifted_sims: list[float]) -> float:
 
 
 def combine(timing: float, cov: float, content: float, drift_s: float, sharp: float) -> float:
+    """Weighted total. Agreement with what was said carries the most weight: a
+    subtitle for another episode scores near zero there and can't pass."""
     t = timing * (1.0 if drift_s < 0.5 else max(0.3, 1.0 - drift_s / 4))
-    t *= 0.6 + 0.4 * min(1.0, sharp * 2)
-    total = 0.35 * t + 0.25 * cov + 0.40 * content
+    t *= 0.8 + 0.2 * min(1.0, sharp * 3)
+    total = 0.30 * t + 0.20 * cov + 0.50 * content
     if cov < 0.25:  # signs-only or forced track
         total *= 0.5
     return round(float(total), 4)

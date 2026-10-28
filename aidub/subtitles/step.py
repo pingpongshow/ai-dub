@@ -183,7 +183,7 @@ def run(job: Job) -> None:
             for c in english:
                 _score_english(c, asr, speech, dur, w)
 
-    min_score = float(job.cfg.get("subtitles.min_score", 0.75))
+    min_score = float(job.cfg.get("subtitles.min_score", 0.65))
     pick = lambda cs: max((c for c in cs if c.score.get("total", 0) >= min_score),
                           key=lambda c: (c.score["total"], c.human), default=None)
     best_en, best_src = pick(english), pick(source)

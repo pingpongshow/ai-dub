@@ -208,3 +208,22 @@ def test_split_line_keeps_subtitle_only_as_context():
     parts = align.split_by_speaker(ln, turns, "ja")
     assert len(parts) == 2
     assert all(p.english_ref == "" and p.english_context == "I know. Let's go." for p in parts)
+
+
+def test_wrong_subtitle_cannot_pass():
+    # Perfect timing and coverage but unrelated content stays under the 0.65 threshold.
+    assert score.combine(1.0, 1.0, 0.0, 0.0, 1.0) < 0.65
+    # Good meaning with timing hurt by a song still passes.
+    assert score.combine(0.71, 0.67, 0.89, 0.0, 0.1) >= 0.65
+
+
+def test_no_drift_when_halves_fit_at_zero():
+    rng = np.random.default_rng(1)
+    spans, t = [], 30.0
+    while t < 280:
+        d = float(rng.uniform(1, 3))
+        spans.append((t, t + d))
+        t += d + float(rng.uniform(0.5, 3))
+    speech = score.mask([(0, 25)] + spans, 300)   # a 25 s song at the start counts as "speech"
+    cues = [Cue(a, b, "x") for a, b in spans]
+    assert score.drift(cues, speech, 300) == 0.0

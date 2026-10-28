@@ -64,7 +64,7 @@ ingest:
 
 subtitles:
   prefer: [english, source_language, asr]
-  min_score: 0.75
+  min_score: 0.65          # a subtitle for another episode scores under ~0.5
   providers:
     embedded:      { enabled: true }
     sidecar:       { enabled: true }
