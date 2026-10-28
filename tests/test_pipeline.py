@@ -182,3 +182,16 @@ def test_until_stops_when_step_already_done(cfg, media_root, tmp_path):
     again = Job(cfg, "until", ep, prof, {})
     pipeline.run(again, until="align")
     assert not again.is_done("voicebank") and not originals.aside_name(ep).exists()
+
+
+def test_subtitle_over_no_speech_keeps_original(cfg, media_root):
+    """A subtitle line where nothing is spoken (a sigh, breathing) isn't dubbed."""
+    ep = synth.episode(media_root / "Sigh.mkv")
+    srt = synth.srt(media_root / "Sigh.en.srt", text="Hello there")
+    srt.write_text(srt.read_text(encoding="utf-8") + "\n99\n00:00:17,000 --> 00:00:19,000\nWhat's wrong?\n",
+                   encoding="utf-8")
+    svc = Service(cfg)
+    job = run_service_job(svc, ep)
+    assert job["status"] == J.DONE, job["message"]
+    lines = job["record"]["qc"]["lines"]
+    assert lines.get("wordless", 0) >= 1 and lines.get("speech") == len(synth.LINES)

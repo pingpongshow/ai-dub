@@ -16,6 +16,7 @@ from . import lines as L
 from . import media, scenes
 from .job import Job
 from .subtitles.model import DIALOGUE, SONG
+from .subtitles.clean import norm_chars as clean_norm
 from .subtitles.score import cer
 from .subtitles.step import load_chosen
 
@@ -221,6 +222,8 @@ def build(job: Job) -> list[L.Line]:
         split.extend(split_by_speaker(ln, turns, lang) if ln.words else [ln])
     for ln in split:
         ln.speaker, ln.overlap, _ = main_speaker(turns, ln.start, ln.end)
+        # How much speech recognition actually heard here (a subtitle can sit over a sigh).
+        ln.heard_chars = len(clean_norm(join_words(words_in(words, ln.start, ln.end), lang)))
     return split
 
 
@@ -252,7 +255,10 @@ def classify(job: Job, lines: list[L.Line]) -> None:
             ln.kind = L.SONG
         elif top_lang == "en" and lang != "en" and ln.duration >= 0.8:
             ln.kind = L.ENGLISH
-        elif is_interjection(ln.source_text, lang) or (set(tags) & WORDLESS_EVENTS and len(ln.source_text) <= 3):
+        elif ln.heard_chars == 0 and ln.kind == L.SPEECH:
+            ln.kind = L.WORDLESS   # nothing spoken here (a sigh or breathing under a subtitle): keep the original
+        elif is_interjection(ln.source_text, lang) or (set(tags) & WORDLESS_EVENTS and
+                                                       (len(ln.source_text) <= 3 or 0 <= ln.heard_chars <= 2)):
             ln.kind = L.WORDLESS
 
 

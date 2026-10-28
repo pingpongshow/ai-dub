@@ -36,6 +36,7 @@ class Line:
     english_ref: str = ""             # English subtitle for this line, when it agrees with the speech
     english_context: str = ""         # nearby subtitle text that may not match this line exactly (hint only)
     words: list[Word] = field(default_factory=list)
+    heard_chars: int = -1              # characters speech recognition heard in this span (-1: not measured)
     scene: int = 0
     overlap: bool = False
     emotion: str = ""                 # SenseVoice emotion tag

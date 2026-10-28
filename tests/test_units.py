@@ -236,3 +236,46 @@ def test_high_band_share():
     low = np.sin(2 * np.pi * 300 * t)
     bright = low + 0.5 * np.sin(2 * np.pi * 12000 * t)
     assert bwe.high_band_share(low, sr) < 0.01 < bwe.high_band_share(bright, sr)
+
+
+class _StubJob:
+    def __init__(self, cfg_data, data):
+        self._cfg, self._data = cfg_data, data
+        self.cfg = type("C", (), {"get": lambda s, k, d=None: cfg_data.get(k, d)})()
+
+    def __getitem__(self, k):
+        return self._data[k]
+
+
+def test_named_characters_merged_by_diarization_keep_own_voices(tmp_path):
+    from aidub import voicebank
+    prof = profiles.Profiles(tmp_path).get_or_create("Spy")
+    man, girl = [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]
+    job = _StubJob({}, {"diarization": {"speakers": {"S1": {"embedding": man, "seconds": 30, "gender": "male",
+                                                             "age": "adult"}}}})
+    lines = [L.Line(i, i, i + 1.5, speaker="S1", name_hint=name) for i, name in
+             enumerate(["Loid", "Loid", "Loid", "Anya", "Anya"])]
+    voices = {ln.id: {"emb": man if ln.name_hint == "Loid" else girl,
+                      "gender": "male" if ln.name_hint == "Loid" else "female"} for ln in lines}
+    voicebank.link_characters(job, prof, lines, voices)
+    loid, anya = lines[0].character, lines[3].character
+    assert loid != anya
+    assert prof.characters[anya].get("voice_of") is None      # not sharing Loid's voice
+    assert prof.characters[anya]["gender"] == "female"
+    # Same voice really shared (one actor, two roles) stays shared.
+    prof2 = profiles.Profiles(tmp_path / "b").get_or_create("Two Roles")
+    lines2 = [L.Line(i, i, i + 1.5, speaker="S1", name_hint=n) for i, n in enumerate(["A", "A", "A", "B", "B"])]
+    voices2 = {ln.id: {"emb": man} for ln in lines2}
+    voicebank.link_characters(job, prof2, lines2, voices2)
+    assert prof2.characters[lines2[3].character].get("voice_of") == lines2[0].character
+
+
+def test_two_speaker_subtitles_are_split(tmp_path):
+    p = tmp_path / "two.srt"
+    p.write_text("1\n00:00:01,000 --> 00:00:04,000\n- Let's play dodgeball.\n- Dodgeball?\n\n"
+                 "2\n00:00:05,000 --> 00:00:06,000\n- Run. - Where?\n\n"
+                 "3\n00:00:07,000 --> 00:00:08,000\nA well-known thing - really.\n", encoding="utf-8")
+    cues = clean.load(p)
+    assert [c.text for c in cues] == ["Let's play dodgeball.", "Dodgeball?", "Run.", "Where?",
+                                      "A well-known thing - really."]
+    assert cues[0].end == pytest.approx(cues[1].start) and cues[0].end - cues[0].start > cues[1].end - cues[1].start

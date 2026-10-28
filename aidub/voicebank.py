@@ -26,8 +26,29 @@ def _bleed_db(dlg: np.ndarray, mne: np.ndarray) -> float:
     return 20 * np.log10(m / d)
 
 
-def link_characters(job: Job, prof: Profile, lines: list[L.Line]) -> dict[str, str]:
-    """Map each diarized speaker (S1..) to a profile character id."""
+def line_voices(job: Job, lines: list[L.Line]) -> dict[int, dict]:
+    """A voice embedding and gender/age estimate for each speech line long enough to judge."""
+    todo = [ln for ln in lines if ln.kind == L.SPEECH and ln.duration >= 0.6]
+    if not todo or not job.cfg.get("stages.speaker.worker"):
+        return {}
+    audio = str(job.path("audio", "dialogue16k.wav"))
+    with job.worker("speaker", gpu_stage="speaker") as w:
+        w.call("load", {})
+        embs = w.call("embed", {"input": audio, "segments": [[ln.start, ln.end] for ln in todo]})["embeddings"]
+        ga = w.call("gender_age", {"input": audio, "speakers": [
+            {"speaker": str(ln.id), "segments": [[ln.start, ln.end]]} for ln in todo if ln.duration >= 1.0]})["speakers"]
+    return {ln.id: {"emb": e, **(ga.get(str(ln.id)) or {})} for ln, e in zip(todo, embs) if e}
+
+
+def link_characters(job: Job, prof: Profile, lines: list[L.Line], voices: dict[int, dict] | None = None) -> dict[str, str]:
+    """Map each diarized speaker (S1..) to a profile character id.
+
+    When the subtitles name several characters within one diarized speaker, they
+    share a voice only if their lines really sound alike (one actor, several
+    roles); otherwise diarization merged different people and each named
+    character gets a voice of its own."""
+    voices = voices or {}
+    link_thr = float(job.cfg.get("speakers.link_threshold", 0.62))
     spk = job["diarization"]["speakers"]
     thr = float(job.cfg.get("speakers.profile_threshold", 0.66))
     names: dict[str, Counter] = defaultdict(Counter)
@@ -50,27 +71,41 @@ def link_characters(job: Job, prof: Profile, lines: list[L.Line]) -> dict[str, s
             if info.get(k) and not ch.get(k):
                 ch[k] = info[k]
         mapping[s] = cid
-        # One voice, several named characters: named lines get their own character sharing the voice.
+        main_embs = [voices[ln.id]["emb"] for ln in lines
+                     if ln.speaker == s and ln.name_hint in ("", hint) and ln.id in voices]
+        main_emb = speakers.mean_embedding(main_embs) if main_embs else info.get("embedding", [])
         for other, n in names[s].items():
             if other == hint or n < 2:
                 continue
-            oid = prof.by_name(other) or prof.new_character(other, voice_of=cid, gender=ch.get("gender", ""),
-                                                            age=ch.get("age", ""))
-            for ln in lines:
-                if ln.speaker == s and ln.name_hint == other:
-                    ln.character = oid
+            mine = [ln for ln in lines if ln.speaker == s and ln.name_hint == other]
+            embs = [voices[ln.id]["emb"] for ln in mine if ln.id in voices]
+            emb = speakers.mean_embedding(embs) if embs else []
+            same_voice = bool(emb and main_emb) and speakers.cosine(emb, main_emb) >= link_thr
+            genders = Counter(voices[ln.id].get("gender") for ln in mine if voices.get(ln.id, {}).get("gender"))
+            gender = genders.most_common(1)[0][0] if genders else ""
+            oid = prof.by_name(other)
+            if oid is None:
+                oid = prof.new_character(other, voice_of=cid if same_voice else None,
+                                         gender=ch.get("gender", "") if same_voice else gender,
+                                         age=ch.get("age", "") if same_voice else "")
+            if not same_voice and emb:
+                prof.update_embedding(oid, emb, float(sum(l.duration for l in mine)))
+            for ln in mine:
+                ln.character = oid
     for ln in lines:
         if not ln.character:
             ln.character = mapping.get(ln.speaker, "")
     return mapping
 
 
-def update_refs(job: Job, prof: Profile, mapping: dict[str, str]) -> None:
+def update_refs(job: Job, prof: Profile, mapping: dict[str, str], lines: list[L.Line] | None = None,
+                voices: dict[int, dict] | None = None) -> None:
     """Add this episode's cleanest clips to each character's references."""
     cfg = job.cfg
     lo, hi = float(cfg.get("speakers.ref_min_s", 3.0)), float(cfg.get("speakers.ref_max_s", 15.0))
     cap = int(cfg.get("speakers.max_refs_per_character", 8))
     segs = job["diarization"]["segments"]
+    lines = lines or []
     dlg, sr = media.read_wav(job.path("audio", "dialogue.wav"), mono=True)
     stems = json.loads(job.path("audio", "stems.json").read_text())
     mne = None
@@ -80,23 +115,28 @@ def update_refs(job: Job, prof: Profile, mapping: dict[str, str]) -> None:
         mne = m if mne is None else mne[: len(m)] + m[: len(mne)]
     by_char: dict[str, list[dict]] = defaultdict(list)
     short: dict[str, list[dict]] = defaultdict(list)
-    for s in segs:
-        d = s["end"] - s["start"]
-        if s.get("overlap") or not s.get("emb") or d < 1.0 or d > hi:
-            continue
-        cid = mapping.get(s["speaker"])
-        if not cid:
+    voices = voices or {}
+    # Candidates are each character's own lines (so a merged diarization speaker
+    # can't lend one character's clips to another); diarized turns are the
+    # fallback when line voiceprints aren't available.
+    spans = [(ln.start, ln.end, ln.character, voices[ln.id]["emb"]) for ln in lines
+             if ln.kind == L.SPEECH and not ln.overlap and ln.id in voices and ln.character]
+    if not spans:
+        spans = [(t["start"], t["end"], mapping.get(t["speaker"]), t.get("emb")) for t in segs if not t.get("overlap")]
+    for start, end, cid, emb in spans:
+        d = end - start
+        if not cid or not emb or d < 1.0 or d > hi:
             continue
         cid = prof.voice_source(cid)
         centroid = prof.characters[cid].get("embedding") or []
-        sim = speakers.cosine(s["emb"], centroid) if centroid else 0.5
-        a, b = int(s["start"] * sr), int(s["end"] * sr)
+        sim = speakers.cosine(emb, centroid) if centroid else 0.5
+        a, b = int(start * sr), int(end * sr)
         bleed = _bleed_db(dlg[a:b, 0], mne[a:b, 0]) if mne is not None else -20.0
         # Prefer consistent voice, little music under it, 6-10 s long.
         length_pref = 1.0 - min(1.0, abs(d - 8.0) / 8.0)
         score = 0.6 * sim + 0.3 * float(np.clip((-bleed - 3) / 25, 0, 1)) + 0.1 * length_pref
-        cand = {"clips": [[s["start"], s["end"]]], "duration": d, "score": round(score, 4), "sim": sim,
-                "bleed": round(bleed, 1), "emb": s["emb"]}
+        cand = {"clips": [[start, end]], "duration": d, "score": round(score, 4), "sim": sim,
+                "bleed": round(bleed, 1), "emb": emb}
         (by_char if d >= lo else short)[cid].append(cand)
 
     # Characters who mostly speak in short lines: join several clean short lines
@@ -168,8 +208,10 @@ def generic_voices(job: Job) -> list[dict]:
     return out
 
 
-def assign_voices(job: Job, prof: Profile, lines: list[L.Line]) -> None:
-    """Pick the reference clip for every dubbed line, substituting for minor speakers."""
+def assign_voices(job: Job, prof: Profile, lines: list[L.Line], voices: dict[int, dict] | None = None) -> None:
+    """Pick the reference clip for every dubbed line, substituting for minor speakers.
+    A line whose own audio clearly doesn't match the chosen voice (or gender) is
+    voiced from its own audio instead, so nobody speaks with someone else's voice."""
     min_s = float(job.cfg.get("speakers.min_clean_seconds", 4.0))
     scenes_of: dict[str, set[int]] = defaultdict(set)
     for ln in lines:
@@ -207,29 +249,49 @@ def assign_voices(job: Job, prof: Profile, lines: list[L.Line]) -> None:
             v = fits[int(hashlib.sha1(f"{prof.slug}:{cid}".encode()).hexdigest(), 16) % len(fits)]
             subs[cid] = (v["path"], f"generic voice {v.get('name', '')}".strip())
     used = Counter()
+    voices = voices or {}
+    min_match = float(job.cfg.get("speakers.line_voice_min", 0.35))
+    own = 0
     for ln in lines:
         if ln.kind != L.SPEECH:
             continue
         if ln.character in subs:
             ln.voice, ln.voice_note = subs[ln.character]
             used[ln.voice_note] += 1
-            continue
-        refs = prof.refs(ln.character)
-        if refs:
-            ln.voice = str(prof.root / refs[0]["file"])
         else:
-            # Nothing usable at all: this episode's own audio of the line (last resort).
-            ln.voice = ""
-            ln.voice_note = "own line as reference"
+            refs = prof.refs(ln.character)
+            if refs:
+                ln.voice = str(prof.root / refs[0]["file"])
+            else:
+                # Nothing usable at all: this episode's own audio of the line (last resort).
+                ln.voice, ln.voice_note = "", "own line as reference"
+        # The chosen voice must sound like the person speaking this line.
+        v = voices.get(ln.id)
+        ch = prof.characters.get(prof.voice_source(ln.character), {}) if ln.character else {}
+        if v and ln.voice:
+            ref_emb = ch.get("embedding") if ln.character not in subs else None
+            if ln.character in subs:
+                note = ln.voice_note
+                ref_emb = next((c.get("embedding") for c in prof.characters.values()
+                                if note.endswith(c.get("name", "\0"))), None)
+            wrong_voice = bool(ref_emb) and speakers.cosine(v["emb"], ref_emb) < min_match
+            wrong_gender = bool(v.get("gender") and ch.get("gender") and v["gender"] != ch["gender"])
+            if wrong_voice or wrong_gender:
+                ln.voice = ""  # speak with the line's own audio as the voice reference
+                ln.voice_note = "own line as reference (" + ("gender" if wrong_gender else "voice") + \
+                    " didn't match " + (ch.get("name") or "the character") + ")"
+                own += 1
     job.qc["minor_speaker_substitutions"] = dict(used)
+    job.qc["lines_voiced_from_own_audio"] = own
 
 
 def run(job: Job) -> None:
     prof: Profile = job.profile
     lines = L.load(job.path("lines.json"))
-    mapping = link_characters(job, prof, lines)
-    update_refs(job, prof, mapping)
-    assign_voices(job, prof, lines)
+    voices = line_voices(job, lines)
+    mapping = link_characters(job, prof, lines, voices)
+    update_refs(job, prof, mapping, lines, voices)
+    assign_voices(job, prof, lines, voices)
     if job.src.name not in prof.data.setdefault("episodes", []):
         prof.data["episodes"].append(job.src.name)
     prof.save()

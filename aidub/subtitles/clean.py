@@ -40,14 +40,52 @@ def load(path: str | Path, fmt: str | None = None) -> list[Cue]:
                 kind = SONG
             elif SIGN_STYLES.search(ev.style or "") or (POSITIONED.search(raw) and not (ev.name or "").strip()):
                 kind = SIGN
+        start, end = ev.start / 1000.0, ev.end / 1000.0
+        shown = ASS_TAG.sub("", raw).replace("\\N", "\n").replace("\\n", "\n")
+        parts = speaker_turns(shown) if kind == DIALOGUE else []
+        if len(parts) >= 2:
+            # "- Line one / - Line two": two speakers in one subtitle. Split it, sharing
+            # the time by text length; alignment later snaps each half to the speech.
+            total = sum(len(p) for p in parts)
+            t = start
+            for p in parts:
+                d = (end - start) * len(p) / total
+                text, name, k2 = clean_text(p)
+                out.append(Cue(start=round(t, 3), end=round(t + d, 3), text=text if k2 == DIALOGUE else "",
+                               raw=p, name=name, style=ev.style or "", kind=k2))
+                t += d
+            continue
         text, name, k2 = clean_text(raw)
         if k2 != DIALOGUE and kind == DIALOGUE:
             kind = k2
-        out.append(Cue(start=ev.start / 1000.0, end=ev.end / 1000.0, text=text if kind == DIALOGUE else "",
-                       raw=ASS_TAG.sub("", raw).replace("\\N", "\n").replace("\\n", "\n"),
-                       name=(ev.name or name or "").strip(), style=ev.style or "", kind=kind))
+        out.append(Cue(start=start, end=end, text=text if kind == DIALOGUE else "",
+                       raw=shown, name=(ev.name or name or "").strip(), style=ev.style or "", kind=kind))
     out.sort(key=lambda c: (c.start, c.end))
     return out
+
+
+DASH_TURN = re.compile(r"^\s*[-–—‐]\s*")
+
+
+def speaker_turns(shown: str) -> list[str]:
+    """The parts of a two-speaker subtitle ("- Hi.\\n- Hello."), or [] for one speaker."""
+    rows = [r for r in re.sub(r"<[^>]+>", "", shown).split("\n") if r.strip()]
+    if len(rows) >= 2 and sum(1 for r in rows if DASH_TURN.match(r)) >= 2:
+        parts, cur = [], ""
+        for r in rows:
+            if DASH_TURN.match(r):
+                if cur:
+                    parts.append(cur)
+                cur = DASH_TURN.sub("", r)
+            else:
+                cur = f"{cur} {r.strip()}".strip()
+        if cur:
+            parts.append(cur)
+        return parts
+    one = re.split(r"\s+[-–—]\s+(?=\S)", " ".join(rows))  # "- A. - B." on a single row
+    if len(rows) == 1 and DASH_TURN.match(rows[0]) and len(one) >= 2:
+        return [DASH_TURN.sub("", x) for x in one]
+    return []
 
 
 def clean_text(raw: str) -> tuple[str, str, str]:
