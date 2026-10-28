@@ -10,8 +10,9 @@ reference exists and blind listening pages where only ears can judge.
 
 clips.json: [{"name": "kaiju", "path": "/media/anime/...mkv", "start": 150, "seconds": 180,
               "language": "ja"}, ...]
-Everything is written under $PHASE0_ROOT (default /work/phase0); results/ holds
-the numbers and the listening pages, which are copied off and then deleted.
+Working files go under $PHASE0_ROOT (default /work/phase0). The numbers, the report
+and the listening pages go to $PHASE0_RESULTS (default /work/listen/phase0), which
+the app serves at http://<server>:8790/listen/phase0/; delete it when the review is over.
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ from aidub.translate import syllables, target_syllables
 from aidub.workers import Worker
 
 ROOT = Path(os.environ.get("PHASE0_ROOT", "/work/phase0"))
-RESULTS = ROOT / "results"
+RESULTS = Path(os.environ.get("PHASE0_RESULTS", "/work/listen/phase0"))
 SEPARATORS = ["vocals_mel_band_roformer.ckpt", "bs_roformer_vocals_resurrection_unwa.ckpt",
               "mel_band_roformer_kim_ft2_bleedless_unwa.ckpt", "melband_roformer_big_beta6x.ckpt"]
 LANG_NAME = {"ja": "Japanese", "ko": "Korean", "zh": "Chinese"}
@@ -234,8 +235,8 @@ def cmd_separation() -> None:
             rows[model] = {"seconds": round(took, 1), "ref_cer": ref_cer(refs, chunks, res_d),
                            "en_match": discrimination_score(c, en, chunks, res_d),
                            "leaked_chars_per_speech_min": round(leaked / max(speech_min, 0.1), 1)}
-            excerpt(Path(res["vocals"]), RESULTS / "listen" / "separation" / clip["name"] / f"{model}-dialogue.m4a", 30, 20)
-            excerpt(Path(res["instrumental"]), RESULTS / "listen" / "separation" / clip["name"] / f"{model}-mne.m4a", 30, 20)
+            excerpt(Path(res["vocals"]), RESULTS / "separation" / clip["name"] / f"{model}-dialogue.m4a", 30, 20)
+            excerpt(Path(res["instrumental"]), RESULTS / "separation" / clip["name"] / f"{model}-mne.m4a", 30, 20)
             log(clip["name"], model, rows[model])
         out[clip["name"]] = rows
         save("separation", out)
@@ -522,7 +523,7 @@ def cmd_diarization() -> None:
 # Listening pages and report -------------------------------------------------------------------------
 def write_listening(stage: str, items: list[dict]) -> None:
     """Blind A/B page: each line's versions are shuffled under letters; the key is a separate file."""
-    d = RESULTS / "listen" / stage
+    d = RESULTS / stage
     d.mkdir(parents=True, exist_ok=True)
     key, rows = {}, []
     rng = random.Random(11)
@@ -579,10 +580,10 @@ def cmd_report() -> None:
                         parts.append("<tr>" + "".join(f"<td>{e.get(c, '')}</td>" for c in cols) + "</tr>")
                     parts.append("</table>")
     for stage in ("voice", "bandwidth"):
-        if (RESULTS / "listen" / stage / "index.html").exists():
-            parts.append(f'<p><a href="listen/{stage}/index.html">Listening test: {stage}</a></p>')
-    if (RESULTS / "listen" / "separation").exists():
-        parts.append('<p>Separation excerpts: listen/separation/&lt;clip&gt;/ (dialogue and music &amp; effects stems)</p>')
+        if (RESULTS / stage / "index.html").exists():
+            parts.append(f'<p><a href="{stage}/">Listening test: {stage}</a></p>')
+    if (RESULTS / "separation").exists():
+        parts.append('<p><a href="separation/">Separation excerpts</a> (dialogue and music &amp; effects stems per clip)</p>')
     (RESULTS / "report.html").write_text("".join(parts))
     log("report written", RESULTS / "report.html")
 

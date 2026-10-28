@@ -1,7 +1,8 @@
 """Listening page for a set of preview dubs: every line in time order with the
 original audio, the dub, the character and why a line was kept original.
 
-    python check_page.py /work/check out_dir clip1 clip2 ...   (jobs in /work/check/jobs/job-chk-<clip>)
+    python check_page.py /work/check /work/listen/<name> clip1 clip2 ...   (jobs in /work/check/jobs/job-chk-<clip>)
+The app serves the page at http://<server>:8790/listen/<name>/; delete the folder when the review is over.
 Lines whose English matches one of FLAG (the owner's earlier notes) are highlighted.
 """
 

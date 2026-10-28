@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import collections
+import html
 from contextlib import asynccontextmanager
 import os
 import threading
 from pathlib import Path
 
-from fastapi import Body, FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi import Body, FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__, gpu, originals, workers
@@ -316,6 +317,29 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
             bad(400, "unknown secret")
         cfg.save_secret(name, value)
         return {"ok": True}
+
+    # Listening pages -------------------------------------------------------------------------
+    # Review pages (comparison tests, preview dubs) are written to <work>/listen on the server
+    # and opened from there; they are deleted when the review is over.
+    @app.get("/listen/{rel:path}")
+    def listen(request: Request, rel: str = ""):
+        root = (cfg.work / "listen").resolve()
+        target = (root / rel).resolve()
+        if not target.is_relative_to(root) or not target.exists():
+            bad(404, "not found")
+        if target.is_file():
+            return FileResponse(target)
+        if not request.url.path.endswith("/"):
+            return RedirectResponse(request.url.path + "/")  # relative links need the slash
+        if (target / "index.html").is_file():
+            return FileResponse(target / "index.html")
+        entries = sorted(p for p in target.iterdir() if not p.name.startswith("."))
+        items = "".join(f'<li><a href="{html.escape(p.name)}{"/" if p.is_dir() else ""}">{html.escape(p.name)}</a></li>'
+                        for p in entries)
+        title = html.escape("listen/" + rel)
+        return HTMLResponse(f"<!doctype html><meta charset=utf-8><title>{title}</title>"
+                            f"<style>body{{font:15px system-ui;margin:20px}}</style><h1>{title}</h1>"
+                            f"<ul>{items or '<li>nothing here</li>'}</ul>")
 
     @app.middleware("http")
     async def _no_stale_ui(request, call_next):

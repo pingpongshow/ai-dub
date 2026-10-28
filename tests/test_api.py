@@ -68,3 +68,19 @@ def test_models_listing(client):
     names = {m["name"] for m in models}
     assert {"asr", "llm", "tts-indextts", "separate"} <= names
     assert all("licence" in m and m["installed"] is False for m in models)
+
+
+def test_listening_pages(client, cfg):
+    c, _ = client
+    assert c.get("/listen/").status_code == 404  # nothing to review
+    page = cfg.work / "listen" / "voice"
+    page.mkdir(parents=True)
+    (page / "index.html").write_text("<p>test</p>")
+    (page / "001-A.m4a").write_bytes(b"x" * 10)
+    assert "voice/" in c.get("/listen/").text
+    r = c.get("/listen/voice", follow_redirects=False)
+    assert r.status_code in (307, 302) and r.headers["location"] == "/listen/voice/"
+    assert c.get("/listen/voice/").text == "<p>test</p>"
+    assert c.get("/listen/voice/001-A.m4a").content == b"x" * 10
+    assert c.get("/listen/../config.yaml").status_code == 404
+    assert c.get("/listen/voice/%2e%2e/%2e%2e/secrets.yaml").status_code == 404
