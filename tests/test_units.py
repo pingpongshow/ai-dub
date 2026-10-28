@@ -366,3 +366,16 @@ def test_thin_characters_speak_with_their_own_audio(tmp_path, monkeypatch):
     assert lines[1].voice_note.startswith("generic voice")                           # too short, nothing else
     assert lines[2].voice.endswith("a.flac")                                          # main character: voice bank
     assert lines[3].voice == "" and "age" in lines[3].voice_note                     # a child's line, adult voice
+
+
+def test_words_follow_their_speaker_past_a_tv_cue():
+    from aidub import align
+    turns = [{"start": 0.0, "end": 10.0, "speaker": "S1"}, {"start": 20.0, "end": 24.0, "speaker": "S1"},
+             {"start": 20.0, "end": 21.0, "speaker": "S6"}]
+    words = [{"text": t, "start": a, "end": a + 0.3} for t, a in
+             [("いい", 1.0), ("か", 1.4), ("アニャ", 1.8), ("今日", 2.5), ("から", 3.0),
+              ("まず", 20.1), ("必要な", 20.5), ("もの", 21.5)]]
+    cues = [Cue(0.8, 3.5, "Listen, Anya.", name="Loid"), Cue(20.0, 20.9, "You must be a pro!", name="Bondman"),
+            Cue(20.05, 22.0, "First, I'll have to secure...", name="")]
+    owned = align.assign_words(words, cues, turns=turns)
+    assert [w["text"] for w in owned[2]] == ["まず", "必要な", "もの"] and owned[1] == []

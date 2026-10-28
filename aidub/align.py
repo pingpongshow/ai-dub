@@ -38,9 +38,12 @@ INTERJECTION_WORDS = {
 SINGING_EVENTS = {"Sing", "sing", "Singing", "singing"}  # songs keep the original audio, untranslated
 WORDLESS_EVENTS = {"Laughter", "Cry", "Cough", "Sneeze", "Breath", "laughter", "cry", "cough", "sneeze", "breath"}
 MIN_LINE_S = 0.5
+MIN_SPLIT_S = 0.6
+PHRASE_GAP_S = 0.25   # words closer than this are one phrase when assigning them to subtitle cues
 SONG_MUSIC_DB = -6.0  # music this loud under a voice (relative to it), next to a song, is part of the song
 SONG_REACH_S = 3.0
 BACKGROUND_DB = 6.0  # music & effects this far above the voice: the speech is in the background track
+CROWD_MAX_S = 2.0     # longer lines over other voices (a TV, a crowd) are still one person's line
 CROWD_SHARE = 0.6     # share of a line with overlapping speakers that keeps the original
 LATIN = re.compile(r"[A-Za-z]")
 SUBTITLE_DISAGREES = 0.6   # character error rate between a source subtitle line and what was heard
@@ -98,24 +101,83 @@ def sentences(words: list[dict], turns: list[dict], max_len: float = 8.0, gap: f
     return out
 
 
-def assign_words(words: list[dict], cues: list, slack: float = 0.25) -> list[list[dict]]:
+def assign_words(words: list[dict], cues: list, slack: float = 0.25,
+                 turns: list[dict] | None = None) -> list[list[dict]]:
     """Give each recognised word to exactly one subtitle cue: the one it overlaps
     most (cue times widened by `slack`), ties to the nearer cue centre. Overlapping
     cues (a TV playing under the dialogue, two speakers at once) otherwise claim
-    the same words and the same speech is voiced twice."""
-    out: list[list[dict]] = [[] for _ in cues]
+    the same words and the same speech is voiced twice.
+
+    With diarized `turns` and named cues, a second pass learns which name each
+    voice carries and gives a word to a cue of its own speaker's name when there
+    is one, so a character talking over a TV keeps his sentence whole."""
+    out = _assign(words, cues, slack, {})
+    if not turns or not any(getattr(q, "name", "") for q in cues):
+        return out
+    votes: dict[str, dict[str, int]] = {}
+    for k, ws in enumerate(out):
+        name = getattr(cues[k], "name", "")
+        if not name:
+            continue
+        for w in ws:
+            spk = _speaker_at(turns, (w["start"] + w["end"]) / 2)
+            if spk:
+                votes.setdefault(spk, {}).setdefault(name, 0)
+                votes[spk][name] += 1
+    name_of = {spk: max(v, key=v.get) for spk, v in votes.items() if sum(v.values()) >= 3}
+    prefer = {}
     for w in words:
         mid = (w["start"] + w["end"]) / 2
-        best, key = None, None
+        prefer[id(w)] = {name_of[t["speaker"]] for t in turns if t["start"] <= mid <= t["end"] and t["speaker"] in name_of}
+    return _assign(words, cues, slack, prefer)
+
+
+def _speaker_at(turns: list[dict], t: float) -> str:
+    best, ov = "", 0.0
+    for s in turns:
+        if s["start"] <= t <= s["end"]:
+            o = s["end"] - s["start"]
+            if not best or o < ov:  # the shorter turn is the more specific one
+                best, ov = s["speaker"], o
+    return best
+
+
+def _assign(words: list[dict], cues: list, slack: float, prefer: dict[int, set]) -> list[list[dict]]:
+    """Words go to cues in phrases (no pause inside, and every word of the phrase could
+    belong to the same cue), so a phrase isn't scattered across overlapping cues."""
+    def cands(w) -> dict[int, float]:
+        out = {}
         for k, q in enumerate(cues):
             o = min(w["end"], q.end + slack) - max(w["start"], q.start - slack)
-            if o <= 0 or o < 0.5 * max(0.01, w["end"] - w["start"]):
+            if o > 0 and o >= 0.5 * max(0.01, w["end"] - w["start"]):
+                out[k] = o
+        names = prefer.get(id(w))
+        if names:  # not a cue of a character who isn't talking here, while a fitting one is there
+            mine = {k: o for k, o in out.items() if getattr(cues[k], "name", "") in names | {""}}
+            out = mine or out
+        return out
+
+    phrases: list[tuple[list[dict], set[int]]] = []
+    for w in sorted(words, key=lambda w: w["start"]):
+        c = set(cands(w))
+        if phrases:
+            ws, common = phrases[-1]
+            if w["start"] - ws[-1]["end"] <= PHRASE_GAP_S and (not c or not common or c & common):
+                ws.append(w)
+                phrases[-1] = (ws, (common & c) if (common and c) else (common or c))
                 continue
-            kk = (round(o, 3), -abs(mid - (q.start + q.end) / 2))
-            if key is None or kk > key:
-                best, key = k, kk
-        if best is not None:
-            out[best].append(w)
+        phrases.append(([w], c))
+    out: list[list[dict]] = [[] for _ in cues]
+    for ws, common in phrases:
+        if not common:
+            continue
+        mid = (ws[0]["start"] + ws[-1]["end"]) / 2
+
+        def score(k):
+            q = cues[k]
+            o = sum(max(0.0, min(w["end"], q.end + slack) - max(w["start"], q.start - slack)) for w in ws)
+            return (round(o, 3), -abs(mid - (q.start + q.end) / 2))
+        out[max(common, key=score)].extend(ws)
     return out
 
 
@@ -167,6 +229,8 @@ def split_by_speaker(line: L.Line, turns: list[dict], lang: str) -> list[L.Line]
         return [line]
     k = min(range(1, len(line.words)), key=lambda i: abs(line.words[i].start - change))
     a, b = line.words[:k], line.words[k:]
+    if min(a[-1].end - a[0].start, b[-1].end - b[0].start) < MIN_SPLIT_S:
+        return [line]  # a sliver of another voice (a TV, a reply) doesn't cut a sentence apart
     out = []
     for part in (a, b):
         ws = [{"text": w.text, "start": w.start, "end": w.end} for w in part]
@@ -247,7 +311,7 @@ def build(job: Job) -> list[L.Line]:
     covered: list[tuple[float, float]] = []
     if src_cues:
         all_src = load_chosen(job, "source")
-        owned = assign_words(words, src_cues, slack=0.1)
+        owned = assign_words(words, src_cues, slack=0.1, turns=turns)
         for k, q in enumerate(src_cues):
             i = all_src.index(q) if q in all_src else -1
             heard = owned[k]
@@ -264,7 +328,7 @@ def build(job: Job) -> list[L.Line]:
             raw.append(ln)
             covered.append((q.start, q.end))
     elif en_cues:
-        owned = assign_words(words, en_cues)
+        owned = assign_words(words, en_cues, turns=turns)
         for k, q in enumerate(en_cues):
             ws = owned[k]
             a, b = (ws[0]["start"], ws[-1]["end"]) if ws else (q.start, q.end)
@@ -433,7 +497,8 @@ def classify(job: Job, lines: list[L.Line]) -> None:
             ln.kind = L.ENGLISH
         elif ln.kind == L.SPEECH and ln.music_db >= BACKGROUND_DB:
             ln.kind = L.BACKGROUND  # the voice is in the music & effects track; a dub can't replace it
-        elif ln.kind == L.SPEECH and overlap_share(turns, ln.start, ln.end) >= CROWD_SHARE:
+        elif (ln.kind == L.SPEECH and ln.duration <= CROWD_MAX_S
+              and overlap_share(turns, ln.start, ln.end) >= CROWD_SHARE):
             ln.kind = L.CROWD     # several people at once: one dubbed voice can't stand in for them
         elif ln.heard_chars == 0 and ln.kind == L.SPEECH:
             ln.kind = L.WORDLESS   # nothing spoken here (a sigh or breathing under a subtitle): keep the original
