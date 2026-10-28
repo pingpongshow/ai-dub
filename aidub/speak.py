@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import difflib
 import re
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -79,8 +80,9 @@ def missed_words(text: str, heard: str) -> list[str]:
     """Key words of the line the back-check didn't hear exactly ("shady" heard as
     "shoddy"). Names (capitalised mid-sentence) are left out: recognition spells
     them its own way."""
-    raw = re.findall(r"[A-Za-z0-9'’]+", text)
-    names = {w.lower() for i, w in enumerate(raw) if i and w[0].isupper()}
+    raw = re.findall(r"[A-Za-z0-9'’]+(?:-[A-Za-z0-9'’]+)*", text)
+    # Every part of a hyphenated name ("Ga-yeong", "Ok-hui") is the name.
+    names = {p.lower() for i, w in enumerate(raw) if (i or "-" in w) and w[0].isupper() for p in w.split("-")}
     heard_set = set(_words(heard))
     out = []
     for w in _words(text):
@@ -113,7 +115,7 @@ def _requests(job: Job, ln: L.Line, text: str, takes: int, tag: str, dlg, sr, fa
     req_base = {"text": text, "speaker_ref": ln.voice or str(orig)}
     if caps.get("emotion_ref", True) and ln.duration >= min_emo and not ln.overlap:
         req_base["emotion_ref"] = str(orig)
-        req_base["emo_alpha"] = float(job.cfg.get("speak.emo_alpha", 0.65))
+        req_base["emo_alpha"] = float(job.cfg.get("speak.emo_alpha", 0.35))
     else:
         vec = emo_vector(ln.emotion)
         if vec and caps.get("emotion_vector", True):
@@ -369,6 +371,8 @@ def run_finalize(job: Job) -> None:
                 F.trim(p)
                 new_items.append((ln, text, str(p)))
     scores = score_files(job, new_items)
+    roomy = F.windows([l for l in lines if l.kind == L.SPEECH], job["scenes"]["cuts"],
+                      replace(rules, borrow=rules.short_borrow), job["ingest"]["duration"])
     counts = {"fits": 0, "speed_factor": 0, "shorter": 0, "stretched": 0, "fallback": 0, "padded": 0}
     for ln in lines:
         if not ln.take:
@@ -390,6 +394,11 @@ def run_finalize(job: Job) -> None:
         chosen = choose(options, all_scores, window, rules, job.cfg)
         if chosen is None and short_text(ln.en):  # one- or two-word lines may go a little faster
             chosen = choose(options, all_scores, window, rules.for_short_text(), job.cfg)
+        if chosen is None and roomy.get(ln.id, 0) > window:
+            # Still too long: use the silence after the line, as for a very short line.
+            window = roomy[ln.id]
+            ln.fit["window"] = window
+            chosen = choose(options, all_scores, window, rules, job.cfg)
         if chosen is None:
             ln.fallback = f"too long for its {window:.2f} s window even after fitting"
             ln.take = ""

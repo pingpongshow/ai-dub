@@ -8,6 +8,7 @@ recognition alone. Each line gets exact times, one speaker, a kind
 
 from __future__ import annotations
 
+import difflib
 import json
 import re
 from pathlib import Path
@@ -45,6 +46,11 @@ SONG_REACH_S = 3.0
 BACKGROUND_DB = 6.0  # music & effects this far above the voice: the speech is in the background track
 CROWD_MAX_S = 2.0     # longer lines over other voices (a TV, a crowd) are still one person's line
 CROWD_SHARE = 0.6     # share of a line with overlapping speakers that keeps the original
+SONG_STRETCH_S = 15.0  # song lines this close together: what lies between is the same song
+COVERED_SHARE = 0.5   # a wordless line this much inside others' speech is a piece of their audio
+FRAGMENT_S = 1.2      # a piece of a sentence this short ...
+FRAGMENT_GAP_S = 0.35  # ... this close after the same speaker's unfinished line is part of it
+ABSORB_GAP_S = 0.4
 LATIN = re.compile(r"[A-Za-z]")
 NON_LATIN = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]")  # kana, CJK, Hangul: not English
 SUBTITLE_DISAGREES = 0.6   # character error rate between a source subtitle line and what was heard
@@ -378,15 +384,16 @@ def build(job: Job) -> list[L.Line]:
     return split
 
 
-def relisten(job: Job, lines: list[L.Line], lang: str) -> None:
+def relisten(job: Job, lines: list[L.Line], lang: str) -> dict[int, L.Line]:
     """Listen again, one line at a time, wherever a line looks wordless: no text, or
     nothing heard under its subtitle. Chunked recognition can miss a quiet or
     child's voice under music, or a turn diarization didn't mark; a line counts as
-    wordless only if this focused pass hears nothing (or only an interjection)."""
+    wordless only if this focused pass hears nothing (or only an interjection).
+    Returns, for lines whose re-heard words were a neighbour's, that neighbour."""
     todo = [ln for ln in lines if ln.kind in (L.SPEECH, L.WORDLESS) and ln.duration >= 0.3
             and (len(clean_norm(ln.source_text)) <= 1 or ln.heard_chars <= 0)]
     if not todo or not job.cfg.get("stages.recognize.worker"):
-        return
+        return {}
     data, sr = media.read_wav(job.path("audio", "dialogue16k.wav"), mono=True)
     pad = 0.15
     items = []
@@ -403,29 +410,142 @@ def relisten(job: Job, lines: list[L.Line], lang: str) -> None:
                                            "timestamps": False})["results"]
     for it in items:
         Path(it["path"]).unlink(missing_ok=True)
-    found = 0
+    # First every re-heard text, so a line can be compared with neighbours re-heard too.
+    first = {ln.id: (ln.source_text, ln.text_origin) for ln in todo}
+    texts = {}
     for ln, r in zip(todo, heard):
-        text = (r.get("text") or "").strip()
+        texts[ln.id] = (r.get("text") or "").strip()
+        if len(clean_norm(ln.source_text)) <= 1 and clean_norm(texts[ln.id]):
+            ln.source_text, ln.text_origin = texts[ln.id], "asr"
+    found, shared = 0, {}
+    for ln in todo:
+        text = texts[ln.id]
         t = clean_norm(text)
-        # Speech that belongs to a neighbouring line isn't this line's (unless it is this line's text).
-        own = clean_norm(ln.source_text)
+        # Speech that belongs to neighbouring lines isn't this line's (unless it is this line's text).
+        own = clean_norm(first[ln.id][0])
         mine = bool(own) and (t in own or own in t or cer(own, t) <= 0.5)
-        near = [o for o in lines if o is not ln and o.end > ln.start - 0.5 and o.start < ln.end + 0.5]
-        if t and not mine and any(t in clean_norm(o.source_text) for o in near
-                                  if len(clean_norm(o.source_text)) >= len(t)):
+        near = [o for o in lines if o is not ln and o.end > ln.start - 0.5 and o.start < ln.end + 0.5
+                and not (o.id in first and len(clean_norm(first[o.id][0])) <= 1 and len(own) <= 1)]
+        # Theirs where they speak over most of this line, or their own text was re-heard too;
+        # otherwise only their words recognised inside this line's window count. A re-heard
+        # line between two others may just be what recognition missed there.
+        rest, owner = strip_neighbours(t, near)
+        if owner is not None and owner.words and _covered(ln, [o for o in near if o.words]) < COVERED_SHARE:
+            rest, owner = strip_neighbours(t, near, (ln.start - pad, ln.end + pad))
+        if t and not mine and owner is not None and (len(rest) <= 1 or is_interjection(rest, lang)):
+            if owner is not None:
+                shared[ln.id] = owner
             t, text = "", ""
         ln.relisten = text
         if not t or is_interjection(text, lang):
+            ln.source_text, ln.text_origin = first[ln.id]
             ln.heard_chars = 0 if ln.heard_chars <= 0 else ln.heard_chars
             continue
         ln.heard_chars = max(ln.heard_chars, len(t))
-        if len(clean_norm(ln.source_text)) <= 1:
-            ln.source_text, ln.text_origin = text, "asr"
         if ln.kind == L.WORDLESS:
             ln.kind = L.SPEECH
         found += 1
     job.qc["relistened"] = {"lines": len(todo), "speech_found": found}
     job.log(f"re-listened to {len(todo)} lines that looked wordless; speech in {found}")
+    return shared
+
+
+def strip_neighbours(t: str, near: list[L.Line], span: tuple[float, float] | None = None) -> tuple[str, L.Line | None]:
+    """What is left of re-heard text `t` once the parts that are neighbouring lines'
+    words are taken out, and the neighbour that gave the most of it. With `span`,
+    only their words recognised within it (all of a neighbour's text if it has no
+    word times)."""
+    rest, owner, most = t, None, 0
+    for o in near:
+        other = clean_norm(o.source_text)
+        if span and o.words:
+            other = clean_norm("".join(w.text for w in o.words if span[0] <= w.start <= span[1]))
+        if not other:
+            continue
+        taken = 0
+        while True:
+            m = difflib.SequenceMatcher(None, rest, other, autojunk=False).find_longest_match(0, len(rest), 0, len(other))
+            if m.size < 2:
+                break
+            rest, taken = rest[:m.a] + rest[m.a + m.size:], taken + m.size
+        if taken > most:
+            owner, most = o, taken
+    return rest, owner
+
+
+def _covered(ln: L.Line, others: list[L.Line]) -> float:
+    """Share of a line's time that other lines speak in."""
+    pts = sorted({ln.start, ln.end, *(o.start for o in others if ln.start < o.start < ln.end),
+                  *(o.end for o in others if ln.start < o.end < ln.end)})
+    hit = sum(y - x for x, y in zip(pts, pts[1:]) if any(o.start <= (x + y) / 2 <= o.end for o in others))
+    return hit / max(0.01, ln.duration)
+
+
+def _no_words(ln: L.Line, lang: str) -> bool:
+    return ln.heard_chars <= 0 or len(clean_norm(ln.source_text)) <= 1 or is_interjection(ln.source_text, lang)
+
+
+def drop_pieces(lines: list[L.Line], shared: dict[int, L.Line], lang: str) -> list[L.Line]:
+    """Lines that are only a piece of a neighbour's audio go: a wordless line mostly
+    inside other people's speech (the tail of a sentence the diarizer gave another
+    turn), a short line whose words all sit inside a longer line (the same audio
+    cut twice), and a wordless line whose re-listen heard the next line's words
+    becomes the start of that line."""
+    talk = [o for o in lines if o.kind != L.SONG and not _no_words(o, lang)]
+    drop = {id(ln) for ln in lines if ln.kind != L.SONG and _no_words(ln, lang)
+            and _covered(ln, [o for o in talk if o is not ln]) >= COVERED_SHARE}
+    keep = [ln for ln in lines if id(ln) not in drop]
+    for ln in keep:
+        if ln.kind == L.SONG or ln.duration > MIN_LINE_S * 2:
+            continue
+        # A short line inside a longer one: someone's words, or the same wordless audio twice.
+        hosts = [o for o in keep if o is not ln and id(o) not in drop and o.kind != L.SONG and o.duration > ln.duration
+                 and (_no_words(ln, lang) or not _no_words(o, lang))]
+        if ln.words:
+            inside = any(all(o.start <= w.start < o.end - 0.05 for w in ln.words) for o in hosts)
+        else:
+            inside = any(_covered(ln, [o]) >= 0.8 for o in hosts)
+        if inside:
+            drop.add(id(ln))
+    for ln in keep:
+        o = shared.get(ln.id)
+        if id(ln) in drop or o is None or id(o) in drop or not _no_words(ln, lang):
+            continue
+        if max(o.start - ln.end, ln.start - o.end) <= ABSORB_GAP_S:
+            # From the first sound recognition placed in the wordless line.
+            a = max(ln.start, ln.words[0].start - 0.1) if ln.words else ln.start
+            o.start, o.end = round(min(o.start, a), 3), max(o.end, ln.end)
+            drop.add(id(ln))
+    return [ln for ln in lines if id(ln) not in drop]
+
+
+def merge_fragments(lines: list[L.Line], lang: str) -> list[L.Line]:
+    """A recognised sentence the speaker turns or English cues cut in two ("それとこいつ"
+    | "の身分証の偽造") is one line: same speaker, the first part unfinished, the
+    second starting right after, one of them short."""
+    out: list[L.Line] = []
+    sep = "" if lang in CJK and lang != "ko" else " "
+    for ln in sorted(lines, key=lambda l: l.start):
+        prev = out[-1] if out else None
+        if (prev is not None and prev.speaker and prev.speaker == ln.speaker
+                and prev.text_origin == ln.text_origin == "asr"  # a subtitle's own cues are its sentences
+                and L.SONG not in (prev.kind, ln.kind)
+                and -0.1 <= ln.start - prev.end <= FRAGMENT_GAP_S
+                and min(prev.duration, ln.duration) <= FRAGMENT_S and ln.end - prev.start <= 8.0
+                and clean_norm(prev.source_text) and clean_norm(ln.source_text)
+                and not SENTENCE_END.search(prev.source_text.strip())):
+            prev.end = max(prev.end, ln.end)
+            prev.words = prev.words + ln.words
+            prev.source_text = (prev.source_text.strip() + sep + ln.source_text.strip()).strip()
+            prev.english_ref = " ".join(r for r in (prev.english_ref, ln.english_ref) if r)
+            prev.heard_chars = max(prev.heard_chars, 0) + max(ln.heard_chars, 0)
+            prev.name_hint = prev.name_hint or ln.name_hint
+            prev.overlap = prev.overlap or ln.overlap
+            if ln.kind == L.SPEECH:
+                prev.kind = L.SPEECH
+            continue
+        out.append(ln)
+    return out
 
 
 def measure_music(job: Job, lines: list[L.Line]) -> None:
@@ -452,19 +572,31 @@ def extend_songs(lines: list[L.Line], lang: str) -> int:
     """Song lines the subtitles didn't mark: a voice over music as loud as itself, with
     music tagged, right next to a song line (the edges of an opening, a line of the
     chorus between marked ones), or English words in a non-English show over such
-    music (lyrics). Spreads until nothing changes."""
-    changed, total = True, 0
-    while changed:
-        changed = False
-        songs = [ln for ln in lines if ln.kind == L.SONG]
-        for ln in lines:
-            if ln.kind == L.SONG or ln.music_db < SONG_MUSIC_DB or "BGM" not in ln.events:
-                continue
-            near = any(max(o.start - ln.end, ln.start - o.end) <= SONG_REACH_S for o in songs)
-            lyrics = lang != "en" and bool(LATIN.search(ln.source_text)) and not re.search(r"[^\x00-\x7f]", ln.source_text)
-            if near or lyrics:
-                ln.kind = L.SONG
-                changed, total = True, total + 1
+    music (lyrics). Within a song (song lines close on both sides), a line the
+    diarizer heard no one talking in is sung too. Spreads until nothing changes."""
+    total = 0
+    # Voices over music first; the unvoiced lines after, so they don't carry the song on to speech.
+    for unvoiced in (False, True):
+        changed = True
+        while changed:
+            changed = False
+            songs = [ln for ln in lines if ln.kind == L.SONG]
+            for ln in lines:
+                if ln.kind == L.SONG:
+                    continue
+                near = any(max(o.start - ln.end, ln.start - o.end) <= SONG_REACH_S for o in songs)
+                if unvoiced:
+                    before = [o.end for o in songs if o.end <= ln.start + 0.1]
+                    after = [o.start for o in songs if o.start >= ln.end - 0.1]
+                    inside = bool(before and after) and min(after) - max(before) <= SONG_STRETCH_S
+                    hit = not ln.speaker and (inside or near)
+                else:
+                    lyrics = (lang != "en" and bool(LATIN.search(ln.source_text))
+                              and not re.search(r"[^\x00-\x7f]", ln.source_text))
+                    hit = ln.music_db >= SONG_MUSIC_DB and "BGM" in ln.events and (near or lyrics)
+                if hit:
+                    ln.kind = L.SONG
+                    changed, total = True, total + 1
     return total
 
 
@@ -560,7 +692,14 @@ def run(job: Job) -> None:
         ln.id = i + 1
         ln.scene = scenes.scene_of(ln.start, cuts)
         ln.start, ln.end = round(ln.start, 3), round(max(ln.end, ln.start + 0.2), 3)
-    relisten(job, lines, job["subtitles"].get("source_language") or job["asr"].get("language", ""))
+    lang = job["subtitles"].get("source_language") or job["asr"].get("language", "")
+    shared = relisten(job, lines, lang)
+    n = len(lines)
+    lines = merge_fragments(drop_pieces(lines, shared, lang), lang)
+    if len(lines) != n:
+        job.log(f"{n - len(lines)} lines were pieces of a neighbouring line")
+    for i, ln in enumerate(lines):
+        ln.id = i + 1
     measure_music(job, lines)
     classify(job, lines)
     extend_songs(lines, job["subtitles"].get("source_language", ""))

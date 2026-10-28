@@ -92,7 +92,7 @@ speakers:
 
 speak:
   takes: 2
-  emo_alpha: 0.65
+  emo_alpha: 0.35            # how much of the original line's emotion the dub takes (0.35 judged most natural)
   min_emotion_ref_s: 1.0
   max_similarity_drop: 0.25 # reject a take this far below the character's median similarity
   min_similarity: 0.10

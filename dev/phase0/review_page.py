@@ -9,9 +9,11 @@ the fixes are made and the clips re-dubbed. This page shows, per clip:
 A line marked Acceptable that is still dubbed keeps exactly what was approved:
 its English and its dub audio are put back into the job (--pin), so the owner is
 never asked about it again; accepted kept-original lines stay kept. Optional
-voice-setting variants (variants.json from variants.py) are extra rows to compare.
+voice-setting variants (variants.json from variants.py) are extra rows to compare;
+the version accepted there is what the line keeps.
 
-    python review_page.py [--pin] /work/check /work/listen/recheck-flagged /work/listen/<new-name> clip1 clip2 ...
+    python review_page.py [--pin] /work/check /work/listen/page1,/work/listen/page2 /work/listen/<new-name> clip1 clip2 ...
+Earlier pages are given oldest first; a line's answer on the latest page it was on counts.
 The app serves the page at http://<server>:8790/listen/<new-name>/.
 """
 
@@ -44,20 +46,49 @@ def norm(t: str) -> str:
     return re.sub(r"[\W_]+", "", t or "").lower()
 
 
-def old_rows(page_dir: Path) -> dict[str, dict]:
+ROW = re.compile(r'<td>([\d.]+)s<br><span class=m>(.*?)</span></td><td>(.*?)<br><b>(.*?)</b><br><span class=m>(.*?)</span>')
+PREFER = ["low-emo", "current", "tag-emo", "own-voice"]  # the default voice setting first
+
+
+def old_rows(page_dir: Path, rnd: int = 0) -> dict[str, dict]:
+    """The rows of an earlier review page with the owner's answers; a line voiced
+    several ways (voice-setting versions) is one row holding the version chosen."""
     page = (page_dir / "index.html").read_text(encoding="utf-8")
     fb = json.loads((page_dir / "feedback.json").read_text()) if (page_dir / "feedback.json").exists() else {}
+    keys: dict[str, str] = {}
+    for k in page_dir.glob("*-variants-key.json"):
+        keys.update(json.loads(k.read_text()))
     rows = {}
-    pat = (r'<tr(?: class="flag")?><td>([\d.]+)s<br><span class=m>(.*?)</span></td><td>(.*?)<br><b>(.*?)</b>'
-           r'<br><span class=m>(.*?)</span></td><td>original<br><audio[^>]*src="([^"]+)-orig\.m4a"')
-    for m in re.finditer(pat, page):
-        t, who, src, en, status, item = m.groups()
-        clip = item.rsplit("-", 1)[0]
-        rows[item] = {"clip": clip, "start": float(t), "who": html.unescape(who), "src": html.unescape(src),
-                      "en": html.unescape(en), "status": html.unescape(status), "verdict": fb.get(item, {}).get("verdict", ""),
-                      "comment": fb.get(item, {}).get("comment", ""), "dub": page_dir / f"{item}-dub.m4a"}
-        # The original clip ran from the line's start to 0.2 s past its end.
-        rows[item]["end"] = float(t) + max(0.1, seconds(page_dir / f"{item}-orig.m4a") - 0.2)
+    for chunk in page.split("<tr")[1:]:
+        a = re.search(r'src="([^"]+)-orig\.m4a"', chunk)
+        m = ROW.search(chunk)
+        if not a or not m or a.group(1) in keys:
+            continue
+        item = a.group(1)
+        t, who, src, en, status = m.groups()
+        rows[item] = {"clip": item.rsplit("-", 1)[0], "start": float(t), "who": html.unescape(who),
+                      "src": html.unescape(src), "en": html.unescape(en), "status": html.unescape(status),
+                      "verdict": fb.get(item, {}).get("verdict", ""), "comment": fb.get(item, {}).get("comment", ""),
+                      "dub": page_dir / f"{item}-dub.m4a", "round": rnd}
+        # The original clip runs from just before the line's start to just past its end.
+        rows[item]["end"] = float(t) + max(0.1, seconds(page_dir / f"{item}-orig.m4a") - 0.25)
+    # Voice-setting versions: the accepted one (the default setting if several were), else
+    # the one the owner commented on as the best there was.
+    variants = json.loads((page_dir / "variants.json").read_text()) if (page_dir / "variants.json").exists() else {}
+    for clip, vs in variants.items():
+        for v in vs:
+            base = f"{clip}-{v['id']:03d}"
+            versions = sorted(((item, label, fb.get(item, {})) for item, label in keys.items()
+                               if item[:-1] == base), key=lambda x: PREFER.index(x[1]) if x[1] in PREFER else 9)
+            ok = [x for x in versions if x[2].get("verdict") == "acceptable"]
+            picked = ok or [x for x in versions if x[2].get("verdict") == "poor" and x[2].get("comment")]
+            pick = picked[0] if picked else None
+            rows[base + "v"] = {"clip": clip, "start": v["start"], "end": v["end"], "who": v.get("who", ""), "src": "",
+                                "en": v["en"], "status": f"voice version {pick[1] if pick else 'none'} chosen",
+                                "verdict": "acceptable" if pick else ("poor" if any(x[2].get("verdict") for x in versions) else ""),
+                                "comment": "" if ok else "; ".join(x[2]["comment"] for x in versions if x[2].get("comment"))
+                                or "no version sounded right",
+                                "dub": page_dir / f"{pick[0]}-dub.m4a" if pick else page_dir / "-", "round": rnd}
     return rows
 
 
@@ -129,10 +160,15 @@ def main():
     args = sys.argv[1:]
     if args and args[0] == "--pin":
         PIN, args = True, args[1:]
-    root, old_dir, out = Path(args[0]), Path(args[1]), Path(args[2])
+    root, out = Path(args[0]), Path(args[2])
+    old_dirs = [Path(d) for d in args[1].split(",")]  # every earlier page, oldest first
     out.mkdir(parents=True, exist_ok=True)
-    olds = old_rows(old_dir)
+    olds = {}
+    for rnd, d in enumerate(old_dirs):
+        olds.update({f"{rnd}:{k}": v for k, v in old_rows(d, rnd).items()})
+    last = len(old_dirs) - 1
     variants = json.loads((root / "variants.json").read_text()) if (root / "variants.json").exists() else {}
+    (out / "variants.json").write_text(json.dumps(variants, ensure_ascii=False, indent=1))  # this page's versions
     parts = ["<!doctype html><meta charset=utf-8><title>Re-dub review</title><style>body{font:14px system-ui;"
              "margin:16px;background:#14171c;color:#e6e9ef}td{padding:6px;border-bottom:1px solid #2d333d;vertical-align:top}"
              "audio{height:28px;width:170px}.m{color:#9aa3b2;font-size:12px}.was{color:#e3a33b;font-size:12px}"
@@ -159,10 +195,12 @@ def main():
             if ln["kind"] not in ("speech", "wordless", "song", "english", "crowd", "background"):
                 continue
             st = status_of(ln)
-            found = matches(ln, [x for x in mine if x["item"] not in used])
-            o, extra = (found[0], found[1:]) if found else (None, [])
-            for x in found:
+            every = matches(ln, [x for x in mine if x["item"] not in used])
+            for x in every:
                 used.add(x["item"])
+            # The latest page this line was on holds the owner's latest word on it.
+            found = [x for x in every if x["round"] == max(y["round"] for y in every)]
+            o, extra = (found[0], found[1:]) if found else (None, [])
             if ln["kind"] == "song" and not any(x["verdict"] in ("poor", "") for x in found):
                 continue  # a kept song you didn't flag needs no judging
             if ln["id"] in var_ids:  # judged in the voice-settings section below
@@ -203,7 +241,7 @@ def main():
                         f"<br><span class=m>{html.escape(st)}</span><br><span class=m>why shown: {html.escape('; '.join(reasons))}</span>{note}</td>"
                         f'<td>original<br><audio controls preload="none" src="{orig}"></audio></td><td>{dub}</td></tr>')
         # Old Poor lines that no longer exist as a line of their own.
-        gone = [x for x in mine if x["item"] not in used and x["verdict"] == "poor"]
+        gone = [x for x in mine if x["item"] not in used and x["verdict"] == "poor" and x["round"] == last]
         for x in gone:
             rows.append(f"<tr><td>{x['start']:.1f}s</td><td>{html.escape(x['src'])}<br><span class=m>this line is gone "
                         f"(merged or removed)</span><br><span class=was>before: \"{html.escape(x['comment'])}\"</span></td>"

@@ -319,6 +319,71 @@ def test_song_spreads_to_neighbouring_lines_over_music():
     assert [x.kind for x in lines] == [L.SONG, L.SONG, L.SPEECH, L.SONG, L.SPEECH]
 
 
+def test_unvoiced_lines_inside_a_song_are_sung():
+    from aidub import align
+
+    def mk(a, b, kind, spk, db=-10):
+        return L.Line(id=0, start=a, end=b, kind=kind, speaker=spk, source_text="이번에", music_db=db, events=["BGM"])
+    lines = [mk(25.7, 29.7, L.SONG, "S1"), mk(33.5, 34.9, L.SPEECH, "S1", -3), mk(35.8, 37.7, L.SPEECH, ""),
+             mk(38.7, 39.8, L.SPEECH, ""), mk(41.7, 43.0, L.SONG, "S1"), mk(71.1, 72.0, L.SPEECH, "")]
+    align.extend_songs(lines, "ko")
+    assert [x.kind for x in lines] == [L.SONG, L.SPEECH, L.SONG, L.SONG, L.SONG, L.SPEECH]
+
+
+def _ln(a, b, text, spk="S1", kind=L.SPEECH, words=(), heard=None, i=0):
+    ws = [L.Word(start=t, end=t + 0.15, text=w) for w, t in words]
+    return L.Line(id=i, start=a, end=b, kind=kind, speaker=spk, source_text=text, words=ws, text_origin="asr",
+                  heard_chars=len(text) if heard is None else heard)
+
+
+def test_relistened_words_of_neighbours_are_not_this_lines():
+    from aidub import align
+    before = _ln(172.7, 174.6, "まずは必要なものを揃えないとな")
+    after = _ln(175.3, 175.9, "それとこいつ")
+    rest, owner = align.strip_neighbours("必要なものを揃えないとなそれと", [before, after])
+    assert rest == "" and owner is before
+    rest, _ = align.strip_neighbours("わくわく", [before, after])
+    assert rest == "わくわく"
+    # Only the neighbours' words heard inside this line's window: "무슨" ends the line before, out of reach.
+    prev = _ln(103.57, 107.49, "그래 봤자 무슨", words=[("그래", 103.57), ("무슨", 107.41)])
+    nxt = _ln(109.01, 111.73, "소리 야 어 요즘", words=[("소리", 109.01), ("야", 109.17), ("요즘", 109.17)])
+    rest, owner = align.strip_neighbours("무슨소리야", [prev, nxt], (107.56, 109.11))
+    assert rest == "무슨야" and owner is nxt
+
+
+def test_pieces_of_neighbouring_lines_go():
+    from aidub import align
+    cool = _ln(171.07, 172.06, "わくわく。", "S3", i=73)
+    between = _ln(171.39, 173.03, "", "S6", L.WORDLESS, heard=0, i=74)          # end of one, start of the next
+    supplies = _ln(172.71, 174.55, "まずは必要なものを揃えないとな", i=75, words=[("まず", 172.71)])
+    girls = _ln(33.47, 34.88, "여자들 하지 마.", heard=6, i=12)
+    run = _ln(34.66, 35.22, "뛰지 마", "S2", words=[("뛰지", 34.66), ("마", 34.74)], i=13)  # same audio, cut twice
+    hm = _ln(57.1, 58.28, "うん", kind=L.WORDLESS, words=[("うん", 58.04)], i=23)
+    six = _ln(58.59, 59.5, "六つ。", "", i=24)                                   # re-listen heard 六つ in both
+    out = align.drop_pieces([cool, between, supplies, girls, run, hm, six], {23: six}, "ja")
+    assert out == [cool, supplies, girls, six]
+    assert six.start == pytest.approx(57.94) and six.end == 59.5
+
+
+def test_cut_sentence_is_one_line():
+    from aidub import align
+    a = _ln(175.27, 175.91, "それとこいつ", words=[("それと", 175.27)])
+    b = _ln(175.91, 177.03, "の身分証の偽造", words=[("の", 175.91)])
+    c = _ln(177.75, 178.79, "ちょっと出かけてくる", words=[("ちょっと", 177.75)])
+    d = _ln(179.27, 179.91, "おとなしく", "S2")
+    title = _ln(163.0, 164.2, "冒険アニメスパイ", "S2")
+    wars = _ln(164.52, 164.72, "ウォーズ", "S2")
+    done = _ln(160.0, 160.5, "よし。", "S2")
+    nxt = _ln(160.6, 161.0, "行こう", "S2")
+    sub1, sub2 = _ln(55.0, 56.6, "너 작년 생일 생각해 봐"), _ln(56.9, 58.1, "올해도 금방 생일 됐지?")
+    sub1.text_origin = sub2.text_origin = "subtitle:embedded:5"
+    assert len(align.merge_fragments([sub1, sub2], "ko")) == 2
+    out = align.merge_fragments([done, nxt, title, wars, a, b, c, d], "ja")
+    assert [x.source_text for x in out] == ["よし。", "行こう", "冒険アニメスパイウォーズ", "それとこいつの身分証の偽造",
+                                            "ちょっと出かけてくる", "おとなしく"]
+    assert out[3].end == 177.03 and len(out[3].words) == 2
+
+
 def test_overlap_share():
     from aidub import align
     turns = [{"start": 0.0, "end": 2.0}, {"start": 1.0, "end": 3.0}]
@@ -331,6 +396,8 @@ def test_backcheck_misheard_key_word_fails():
     assert speak.missed_words("But shady places often have incomplete records.",
                               "But shabby places often have incomplete records.") == ["shady"]
     assert speak.missed_words("I'll take her, Anya.", "I will take her Ania") == []
+    assert speak.missed_words("Hey, Ga-yeong, get down.", "Hey, Ga Young, get down!") == []
+    assert speak.missed_words("Look at Ok-hui.", "Look at old Kwee.") == []
     s = {"wer": 0.14, "missed": ["shady"], "words": 7, "sim": None}
     assert not speak._passes(s, _Cfg())
     assert speak._passes({**s, "missed": []}, _Cfg())

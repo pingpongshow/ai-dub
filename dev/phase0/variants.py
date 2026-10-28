@@ -1,11 +1,11 @@
 """Voice-setting variants for lines that sounded robotic or accented, to compare by ear.
 
 For each chosen line of a finished check job, the same English line is voiced with:
-  current   - the pipeline's chosen take (as dubbed)
-  low-emo   - the original line as emotion reference, at a lighter strength
+  current   - the pipeline's chosen take (as dubbed; emotion strength 0.35 since round 2)
+  more-emo  - the original line as emotion reference at the old strength (0.65)
   tag-emo   - no audio emotion reference; the detected emotion as a vector
   own-voice - the line's own audio as the voice reference
-Writes /work/check/variants.json for review_page.py.
+Writes /work/check/variants.json for review_page.py (which keeps a copy with the page).
 
     python variants.py /work/check/config.yaml clip:line_id[,line_id...] ...
 """
@@ -20,7 +20,7 @@ from aidub import speak as S
 from aidub.job import Job
 from aidub.profiles import Profiles
 
-SETTINGS = {"low-emo": {"emo_alpha": 0.35}, "tag-emo": {"emotion": "vector"}, "own-voice": {"voice": "own"}}
+SETTINGS = {"more-emo": {"emo_alpha": 0.65}, "tag-emo": {"emotion": "vector"}, "own-voice": {"voice": "own"}}
 
 
 def main():
