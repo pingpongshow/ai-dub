@@ -169,3 +169,16 @@ def test_songs_are_not_translated(cfg, media_root):
     job = run_service_job(svc, ep)
     assert job["status"] == J.DONE, job["message"]
     assert job["record"]["qc"]["lines"].get("song", 0) >= 2
+
+
+def test_until_stops_when_step_already_done(cfg, media_root, tmp_path):
+    from aidub import pipeline
+    from aidub.job import Job
+    from aidub.profiles import Profiles
+    ep = synth.episode(media_root / "Until.mkv")
+    prof = Profiles(cfg.appdata).get_or_create("Until")
+    job = Job(cfg, "until", ep, prof, {})
+    pipeline.run(job, until="align")
+    again = Job(cfg, "until", ep, prof, {})
+    pipeline.run(again, until="align")
+    assert not again.is_done("voicebank") and not originals.aside_name(ep).exists()

@@ -38,6 +38,8 @@ def run(job: Job, *, until: str | None = None) -> dict:
     """Run the remaining steps. Returns the job record. Raises Skipped/Cancelled/other errors."""
     for i, (name, title, fn) in enumerate(STEPS):
         if job.is_done(name):
+            if until and name == until:
+                break  # already done up to the requested step
             continue
         job.check()
         job.step = name

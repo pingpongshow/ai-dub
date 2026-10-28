@@ -202,7 +202,9 @@ def verify(src: Path, out: Path, dropped: set[int], added_audio: int, added_subs
         if not match:
             problems.append(f"stream {s.index} ({s.type} {s.codec} {s.language}) missing")
             continue
-        if s.duration and not any(abs(t.duration - s.duration) < 1.0 or not t.duration for t in match):
+        # Subtitle durations come from tags that are often stale; audio and video must match.
+        if s.type != "subtitle" and s.duration and not any(abs(t.duration - s.duration) < 1.0 or not t.duration
+                                                          for t in match):
             problems.append(f"stream {s.index} duration changed")
     if len(a.attachments) != len(b.attachments) and a.container == b.container:
         problems.append(f"attachments {len(a.attachments)} -> {len(b.attachments)}")

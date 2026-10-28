@@ -4,3 +4,6 @@ FastAudioSR @ git+https://github.com/ysharma3501/FlashSR.git
 librosa
 soundfile
 huggingface_hub
+einops
+timm
+soxr
