@@ -279,3 +279,9 @@ def test_two_speaker_subtitles_are_split(tmp_path):
     assert [c.text for c in cues] == ["Let's play dodgeball.", "Dodgeball?", "Run.", "Where?",
                                       "A well-known thing - really."]
     assert cues[0].end == pytest.approx(cues[1].start) and cues[0].end - cues[0].start > cues[1].end - cues[1].start
+
+
+def test_invisible_marks_are_ignored():
+    assert clean.clean_text("\u200e(sighs)")[2] != "dialogue"
+    assert clean.speaker_turns("\u200e- 아이…\n\u200e- 잠 깨, 가자") == []  # raw marks: callers strip first
+    assert clean.speaker_turns(clean.INVISIBLE.sub("", "\u200e- 아이…\n\u200e- 잠 깨, 가자")) == ["아이…", "잠 깨, 가자"]

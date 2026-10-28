@@ -41,7 +41,7 @@ def load(path: str | Path, fmt: str | None = None) -> list[Cue]:
             elif SIGN_STYLES.search(ev.style or "") or (POSITIONED.search(raw) and not (ev.name or "").strip()):
                 kind = SIGN
         start, end = ev.start / 1000.0, ev.end / 1000.0
-        shown = ASS_TAG.sub("", raw).replace("\\N", "\n").replace("\\n", "\n")
+        shown = INVISIBLE.sub("", ASS_TAG.sub("", raw)).replace("\\N", "\n").replace("\\n", "\n")
         parts = speaker_turns(shown) if kind == DIALOGUE else []
         if len(parts) >= 2:
             # "- Line one / - Line two": two speakers in one subtitle. Split it, sharing
@@ -88,9 +88,12 @@ def speaker_turns(shown: str) -> list[str]:
     return []
 
 
+INVISIBLE = re.compile("[\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]")
+
+
 def clean_text(raw: str) -> tuple[str, str, str]:
     """Return (spoken text, speaker name if labelled, kind)."""
-    t = ASS_TAG.sub("", raw).replace("\\N", " ").replace("\\n", " ").replace("\\h", " ")
+    t = ASS_TAG.sub("", INVISIBLE.sub("", raw)).replace("\\N", " ").replace("\\n", " ").replace("\\h", " ")
     t = re.sub(r"<[^>]+>", "", t)  # srt/vtt markup
     if MUSIC.search(t):
         return "", "", SONG

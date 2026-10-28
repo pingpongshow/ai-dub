@@ -222,8 +222,10 @@ def build(job: Job) -> list[L.Line]:
         split.extend(split_by_speaker(ln, turns, lang) if ln.words else [ln])
     for ln in split:
         ln.speaker, ln.overlap, _ = main_speaker(turns, ln.start, ln.end)
-        # How much speech recognition actually heard here (a subtitle can sit over a sigh).
-        ln.heard_chars = len(clean_norm(join_words(words_in(words, ln.start, ln.end), lang)))
+        # How much speech recognition heard here (a subtitle can sit over a sigh). Only
+        # measured where recognition ran; elsewhere it's unknown, not silence.
+        listened = any(min(c["end"], ln.end) - max(c["start"], ln.start) > 0.5 * ln.duration for c in asr["segments"])
+        ln.heard_chars = len(clean_norm(join_words(words_in(words, ln.start, ln.end), lang))) if listened else -1
     return split
 
 
