@@ -72,8 +72,8 @@ def seconds(path: Path) -> float:
 
 def status_of(ln: dict) -> str:
     if ln["kind"] == "wordless":
-        if ln.get("relisten"):
-            return "kept original (only a sound: " + ln["relisten"][:20] + ")"
+        if ln.get("source_text"):
+            return "kept original (a sound or interjection)"
         return "kept original (no words spoken here)" if ln.get("heard_chars") == 0 else "kept original (sound, not words)"
     if ln["kind"] == "song":
         return "kept original (song)"

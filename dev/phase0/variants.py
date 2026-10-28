@@ -26,7 +26,7 @@ SETTINGS = {"low-emo": {"emo_alpha": 0.35}, "tag-emo": {"emotion": "vector"}, "o
 def main():
     cfg = config.load(sys.argv[1])
     root = Path(cfg.data["paths"]["work"]).parent
-    root_json = Path(cfg.data["paths"]["work"]).parent / "variants.json"
+    root_json = root / "variants.json"
     out = json.loads(root_json.read_text()) if root_json.exists() else {}  # other clips' variants stay
     for arg in sys.argv[2:]:
         clip, ids = arg.split(":")
