@@ -9,13 +9,35 @@ from aidub_worker import log, serve
 state = {}
 
 
+def _utilization(wanted: float, reserve_gib: float = 1.5) -> float:
+    """vLLM refuses to start when the share of the card it asks for isn't free, and
+    other programs on a shared server may hold a few GB. Ask for what is free (less a
+    margin: the engine's own CUDA context takes about 1 GiB of what NVML shows free)
+    when that is under `wanted`: the weights fit, only the context cache shrinks.
+    Read through NVML so this process doesn't take GPU memory of its own."""
+    try:
+        import pynvml
+        pynvml.nvmlInit()
+        mem = pynvml.nvmlDeviceGetMemoryInfo(pynvml.nvmlDeviceGetHandleByIndex(0))
+        pynvml.nvmlShutdown()
+    except Exception as exc:  # no NVML: keep the configured share
+        log(f"GPU memory not readable ({exc}); asking for {wanted:.2f}")
+        return wanted
+    fits = (mem.free - reserve_gib * 2 ** 30) / mem.total
+    if fits < wanted:
+        log(f"other programs hold {(mem.total - mem.free) / 2 ** 30:.1f} GiB of the GPU; "
+            f"using {fits:.2f} of it instead of {wanted:.2f}")
+        return round(fits, 3)
+    return wanted
+
+
 def load(args):
     from vllm import LLM
     name = args.get("model") or "RedHatAI/Qwen3.8-27B-MXFP4"
     # On the RTX 5090 (sm_120) vLLM 0.32's FlashInfer FP4 GEMM and XQA attention
     # paths aren't usable (unsupported arch / need nvcc), so default to Marlin for
     # the 4-bit layers and Triton for attention. Both are configurable.
-    kw = dict(model=name, gpu_memory_utilization=float(args.get("gpu_memory_utilization", 0.80)),
+    kw = dict(model=name, gpu_memory_utilization=_utilization(float(args.get("gpu_memory_utilization", 0.80))),
               max_model_len=int(args.get("max_model_len", 16384)), max_num_seqs=int(args.get("max_num_seqs", 8)),
               enforce_eager=True, kv_cache_dtype="fp8", trust_remote_code=False,
               kernel_config={"linear_backend": args.get("linear_backend", "marlin")},
