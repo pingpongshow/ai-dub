@@ -9,6 +9,7 @@ let status = null;
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const gb = (n) => (n >= 1e9 ? (n / 1e9).toFixed(2) + " GB" : n >= 1e6 ? (n / 1e6).toFixed(1) + " MB" : Math.round((n || 0) / 1e3) + " kB");
 const when = (t) => (t ? new Date(t * 1000).toLocaleString() : "");
+const counts = (o) => Object.entries(o || {}).filter(([, v]) => v).map(([k, v]) => `${v} ${k}`).join(", ") || "none";
 const dur = (s) => { s = Math.round(s || 0); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60; return h ? `${h}h ${m}m` : `${m}m ${s % 60}s`; };
 
 async function api(path, opts = {}) {
@@ -166,7 +167,7 @@ async function pageHistory() {
   main.innerHTML = `<h2>History</h2>` + (jobs.length ? jobs.map((j) => {
     const r = j.record || {}, qc = r.qc || {};
     const tag = { done: "ok", skipped: "", failed: "bad", cancelled: "" }[j.status] ?? "";
-    const fit = qc.fit ? Object.entries(qc.fit).filter(([, v]) => v).map(([k, v]) => `${k} ${v}`).join(", ") : "";
+    const fit = counts(qc.fit);
     return `<div class="panel" data-id="${j.id}">
       <div class="row"><span class="grow path">${esc(j.path.split("/").pop())}</span><span class="tag ${tag}">${esc(j.status)}</span></div>
       <div class="small muted">${esc(j.message)} · ${when(j.finished)} · profile ${esc(j.profile)}</div>
@@ -175,10 +176,10 @@ async function pageHistory() {
         `<div class="row" style="margin-top:6px"><button data-act="remove">Remove from history</button></div>`}
       ${r.version ? `<details><summary class="small">QC summary and version stamp</summary>
         <table class="small"><tr><th>Text from</th><td>${esc(r.text_source || "")}</td></tr>
-        <tr><th>Lines</th><td>${esc(JSON.stringify(qc.lines || {}))}</td></tr>
+        <tr><th>Lines</th><td>${esc(counts(qc.lines))}</td></tr>
         <tr><th>Timing fit</th><td>${esc(fit)}</td></tr>
         <tr><th>Fell back to original</th><td>${((qc.fallback_rate || 0) * 100).toFixed(1)} %</td></tr>
-        <tr><th>Minor-speaker voices</th><td>${esc(JSON.stringify(qc.minor_speaker_substitutions || {}))}</td></tr>
+        <tr><th>Minor-speaker voices</th><td>${esc(counts(qc.minor_speaker_substitutions))}</td></tr>
         <tr><th>Subtitle tracks added</th><td>${esc(((r.delivered || {}).subtitle_tracks || []).map((s) => s.title).join(", ") || "none")}</td></tr>
         <tr><th>Ai Dub</th><td>${esc(r.version)}</td></tr>
         <tr><th>Models</th><td>${esc(Object.entries(r.models || {}).map(([k, v]) => `${k}: ${v}`).join("; "))}</td></tr>
@@ -201,7 +202,7 @@ async function pageHistory() {
 async function pageProfiles(slug) {
   if (slug) return pageProfile(slug);
   const list = await api("/profiles");
-  main.innerHTML = `<h2>Profiles</h2>` + (list.length ? `<div class="panel"><table>
+  main.innerHTML = `<h2>Profiles</h2>` + (list.length ? `<div class="panel tablewrap"><table>
     <tr><th>Show</th><th>Characters</th><th>Glossary</th><th>Episodes</th><th>Size</th></tr>
     ${list.map((p) => `<tr><td><a href="#profiles/${encodeURIComponent(p.slug)}">${esc(p.name)}</a></td><td>${p.characters}</td>
       <td>${p.glossary}</td><td>${p.episodes}</td><td>${gb(p.size)}</td></tr>`).join("")}</table></div>` : `<div class="panel muted">No profiles yet. One is made for each show you dub.</div>`);
@@ -294,8 +295,8 @@ async function pageOriginals() {
         <button id="scan">Rescan folders</button>
         <button class="danger" id="delsel" disabled>Delete selected</button>
         <button class="danger" id="delall" ${data.items.length ? "" : "disabled"}>Delete all</button></div></div>
-    ${data.items.length ? `<div class="panel"><table><tr><th></th><th>File</th><th>Kind</th><th>Size</th><th>Set aside</th><th></th></tr>
-      ${data.items.map((o) => `<tr data-id="${o.id}"><td><input type="checkbox" class="pick"></td><td style="overflow-wrap:anywhere">${esc(o.path)}</td>
+    ${data.items.length ? `<div class="panel tablewrap"><table><tr><th></th><th>File</th><th>Kind</th><th>Size</th><th>Set aside</th><th></th></tr>
+      ${data.items.map((o) => `<tr data-id="${o.id}"><td><input type="checkbox" class="pick"></td><td style="overflow-wrap:anywhere">${esc(o.path.split("/").pop())}<br><span class="small muted">${esc(o.path.split("/").slice(0, -1).join("/"))}</span></td>
         <td>${esc(o.kind)}</td><td>${gb(o.size)}</td><td class="small">${when(o.created)}${o.job_id ? ` · job ${o.job_id}` : ""}</td>
         <td><button data-act="restore">Restore</button></td></tr>`).join("")}</table></div>` : ""}`;
   const picks = () => [...main.querySelectorAll("tr[data-id]")].filter((r) => $(".pick", r).checked).map((r) => Number(r.dataset.id));
@@ -327,7 +328,7 @@ async function pageModels() {
       <div class="row"><span class="grow">${missing ? `${missing} of ${list.length} not installed yet` : "All models installed"}</span>
         <button class="primary" id="installall" ${missing && !busy ? "" : "disabled"}>Install all missing</button>
         <button id="voices">Make generic voices</button></div></div>
-    <div class="panel"><table>
+    <div class="panel tablewrap"><table>
       <tr><th>Step</th><th>Model</th><th>Licence</th><th>Download</th><th>Status</th><th></th></tr>
       ${list.map((m) => {
         const st = m.job === "installing" ? `<span class="tag warn">installing…</span>` : m.job === "queued" ? `<span class="tag">queued</span>`
@@ -369,7 +370,7 @@ async function pageSettings() {
         <span class="tag ${set ? "ok" : ""}">${set ? "set" : "not set"}</span>
         <input type="password" data-secret="${esc(k)}" placeholder="new value" autocomplete="off"><button data-save="${esc(k)}">Save</button>
         ${set ? `<button data-clear="${esc(k)}">Clear</button>` : ""}</div>`).join("")}</div>
-    <div class="panel"><h2>Models per step</h2><table class="small">
+    <div class="panel tablewrap"><h2>Models per step</h2><table class="small">
       ${Object.entries(s.effective.stages || {}).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v.worker || "")}</td><td>${esc(v.model || "")}</td>
         <td>${status && status.workers[v.worker] ? '<span class="tag ok">installed</span>' : '<span class="tag warn">not installed</span>'}</td></tr>`).join("")}</table>
       <p class="small muted">Install models on the Models page. Choose different ones in config.yaml in the app data folder.</p></div>

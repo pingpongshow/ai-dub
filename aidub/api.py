@@ -21,8 +21,9 @@ from .service import Service
 
 VIDEO_EXT = {".mkv", ".mp4", ".m4v", ".avi", ".ts", ".m2ts", ".mov", ".wmv", ".webm"}
 WEB_DIR = Path(os.environ.get("AIDUB_WEB", Path(__file__).resolve().parent.parent / "web"))
-SECRET_NAMES = ["BAZARR_API_KEY", "HF_TOKEN", "OPENSUBTITLES_API_KEY", "OPENSUBTITLES_USER", "OPENSUBTITLES_PASS",
-                "SUBDL_API_KEY", "JIMAKU_API_KEY"]
+# Keys for features that exist. Direct subtitle providers (OpenSubtitles, Subdl,
+# Jimaku) get theirs when those providers are built.
+SECRET_NAMES = ["BAZARR_API_KEY", "HF_TOKEN"]
 
 
 def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
@@ -315,6 +316,14 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
             bad(400, "unknown secret")
         cfg.save_secret(name, value)
         return {"ok": True}
+
+    @app.middleware("http")
+    async def _no_stale_ui(request, call_next):
+        # The UI is plain files; make browsers re-check them so an update shows at once.
+        resp = await call_next(request)
+        if not request.url.path.startswith("/api/"):
+            resp.headers["Cache-Control"] = "no-cache"
+        return resp
 
     if WEB_DIR.exists():
         app.mount("/", StaticFiles(directory=str(WEB_DIR), html=True), name="web")
