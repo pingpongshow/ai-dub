@@ -148,6 +148,9 @@ SYSTEM = (
     "voice actors will speak over the original picture. Write free, natural spoken English the way a "
     "professional dub reads: keep meaning, tone, character and intent; do not translate word for word. "
     "Each line must be speakable in the given time, so aim for the target syllable count. "
+    "The source-language text is what was actually spoken and is authoritative. A subtitle hint is "
+    "a human translation that may be inaccurate, cut differently or belong to a neighbouring line: "
+    "use it for names and nuance only where it agrees with the source text. "
     "Reply with JSON only."
 )
 
@@ -158,12 +161,16 @@ def translate_prompt(batch: list[L.Line], prev: list[L.Line], ctx: str, rate: fl
         d = {"id": ln.id, "speaker": names.get(ln.character, ln.character), "text": ln.source_text,
              "seconds": round(ln.duration, 2), "target_syllables": target_syllables(ln.duration, rate)}
         if ln.english_ref:
-            d["subtitle_meaning"] = ln.english_ref
+            d["subtitle_hint"] = ln.english_ref
+        elif ln.english_context:
+            d["nearby_subtitle"] = ln.english_context
         items.append(d)
     before = [{"speaker": names.get(l.character, l.character), "text": l.source_text} for l in prev]
     user = (f"{ctx}\n\nEarlier in the scene:\n{json.dumps(before, ensure_ascii=False)}\n\n"
-            "Lines to dub, in order (subtitle_meaning, when present, is a human English subtitle: follow its "
-            "meaning and names, but rewrite it as natural speech of the right length):\n"
+            "Lines to dub, in order. Translate what the source text says. subtitle_hint (a human English "
+            "subtitle for the line) helps with names and nuance but loses to the source text when they "
+            "disagree; nearby_subtitle may cover this and a neighbouring line, so use only the part that "
+            "matches:\n"
             f"{json.dumps(items, ensure_ascii=False, indent=0)}\n\n"
             'Return {"lines": [{"id": <id>, "en": "<dub line>", "short": "<shorter alternative, about 75% '
             'of the syllables>"}]} with one entry per id.')
@@ -197,10 +204,11 @@ def rewrite_prompt(batch: list[L.Line], ctx: str, rate: float, names: dict, draf
 def condense_prompt(items: list[dict], ctx: str) -> list[dict]:
     """Ask for shorter dub lines that keep the meaning.
 
-    items: {"id", "speaker", "text" (source), "subtitle_meaning", "current" (too long),
+    items: {"id", "speaker", "text" (source, authoritative), "subtitle_hint", "current" (too long),
             "max_syllables"}."""
     user = (f"{ctx}\n\nThese dub lines are too long for the time the character speaks. Rewrite each so it "
-            "fits max_syllables when spoken, keeping the meaning and tone. You may drop filler and repeated "
+            "fits max_syllables when spoken, keeping the meaning of the source text (what was actually said) "
+            "and its tone. You may drop filler and repeated "
             "words, use contractions and shorter synonyms, and leave out names or details the scene makes "
             "obvious. Never change what is being said. When max_syllables is 1 or 2, use the single word or "
             "short interjection that carries the line's meaning (for example \"What?\", \"No!\", \"Run!\", "
@@ -214,8 +222,9 @@ def condense_prompt(items: list[dict], ctx: str) -> list[dict]:
 def meaning_check_prompt(items: list[dict], ctx: str) -> list[dict]:
     """Ask whether shortened lines still mean what the original says.
 
-    items: {"id", "text" (source), "meaning" (subtitle or full English), "options": {"a": ..., "b": ...}}"""
-    user = (f"{ctx}\n\nFor each line, check every shortened option against the meaning. An option passes only "
+    items: {"id", "text" (source, authoritative), "full_english", "options": {"a": ..., "b": ...}}"""
+    user = (f"{ctx}\n\nFor each line, check every shortened option against what the source text says (the "
+            "spoken words are authoritative; full_english is the longer dub line). An option passes only "
             "if a viewer would understand the same thing: same intent, same key information, nothing cut "
             "off mid-thought (\"I\" for \"I know\" fails; \"Got it.\" for \"I understand\" passes).\n"
             f"{json.dumps(items, ensure_ascii=False, indent=0)}\n\n"

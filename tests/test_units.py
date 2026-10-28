@@ -198,3 +198,13 @@ def test_short_text_rules_are_looser():
     loose = rules.for_short_text()
     assert loose.factor_min == 0.75 and loose.stretch_max == 1.25
     assert fit.factor_for(1.0, 0.8, rules) is None and fit.factor_for(1.0, 0.8, loose) == pytest.approx(0.8)
+
+
+def test_split_line_keeps_subtitle_only_as_context():
+    from aidub import align
+    ln = L.Line(1, 0.0, 2.0, source_text="わかったよ行くぞ", english_ref="I know. Let's go.", text_origin="asr",
+                words=[L.Word("わかった", 0.0, 0.8), L.Word("よ", 0.8, 0.9), L.Word("行く", 1.2, 1.7), L.Word("ぞ", 1.7, 2.0)])
+    turns = [{"start": 0.0, "end": 1.0, "speaker": "S1"}, {"start": 1.1, "end": 2.0, "speaker": "S2"}]
+    parts = align.split_by_speaker(ln, turns, "ja")
+    assert len(parts) == 2
+    assert all(p.english_ref == "" and p.english_context == "I know. Let's go." for p in parts)

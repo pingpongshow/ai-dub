@@ -427,7 +427,7 @@ def run_condense(job: Job) -> None:
             limit = max(1, int((window * rules.stretch_max - overhead) * pace))
             ln.fit.setdefault("long_en", ln.en)
             items.append({"id": ln.id, "speaker": names.get(ln.character, ln.character), "text": ln.source_text,
-                          "subtitle_meaning": ln.english_ref, "current": ln.en, "max_syllables": limit})
+                          "subtitle_hint": ln.english_ref, "current": ln.en, "max_syllables": limit})
         job.status(f"round {rnd + 1}: shortening {len(todo)} lines")
         by_id = {ln.id: ln for ln in todo}
         with T.LLM(job) as llm:
@@ -446,7 +446,7 @@ def run_condense(job: Job) -> None:
                     job.log(f"condense reply unusable: {exc}")
             # Meaning check: a shortened line is used only if it still says the same thing.
             checks = [{"id": i, "text": by_id[i].source_text,
-                       "meaning": by_id[i].english_ref or by_id[i].fit.get("long_en", by_id[i].en),
+                       "full_english": by_id[i].fit.get("long_en", by_id[i].en),
                        "options": {k: v for k, v in opts.items() if v and v != by_id[i].en}}
                       for i, opts in short.items() if i in by_id]
             checks = [c for c in checks if c["options"]]

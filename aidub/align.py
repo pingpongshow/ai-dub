@@ -16,6 +16,7 @@ from . import lines as L
 from . import media, scenes
 from .job import Job
 from .subtitles.model import DIALOGUE, SONG
+from .subtitles.score import cer
 from .subtitles.step import load_chosen
 
 STEP = "align"
@@ -31,6 +32,7 @@ INTERJECTION_WORDS = {
 }
 WORDLESS_EVENTS = {"Laughter", "Cry", "Cough", "Sneeze", "Breath", "laughter", "cry", "cough", "sneeze", "breath"}
 MIN_LINE_S = 0.5
+SUBTITLE_DISAGREES = 0.6   # character error rate between a source subtitle line and what was heard
 SENTENCE_END = re.compile(r"[。！？!?…]$|[.!?]$")
 
 
@@ -128,11 +130,9 @@ def split_by_speaker(line: L.Line, turns: list[dict], lang: str) -> list[L.Line]
         ws = [{"text": w.text, "start": w.start, "end": w.end} for w in part]
         out.append(L.Line(id=0, start=part[0].start, end=part[-1].end, source_text=join_words(ws, lang),
                           source_lang=lang, text_origin=line.text_origin, words=list(part)))
-    # Split the English reference proportionally by source length.
-    if line.english_ref:
-        ref = line.english_ref.split()
-        cut = max(1, round(len(ref) * len(out[0].source_text) / max(1, len(line.source_text))))
-        out[0].english_ref, out[1].english_ref = " ".join(ref[:cut]), " ".join(ref[cut:])
+    # A subtitle can't be cut between speakers reliably: both halves keep it only as context.
+    for o in out:
+        o.english_context = line.english_ref or line.english_context
     return out
 
 
@@ -173,9 +173,16 @@ def build(job: Job) -> list[L.Line]:
         all_src = load_chosen(job, "source")
         for q in src_cues:
             i = all_src.index(q) if q in all_src else -1
-            ws = sub_words.get(str(i)) or words_in(words, q.start, q.end)
-            ln = L.Line(id=0, start=q.start, end=q.end, source_text=q.text, source_lang=lang,
-                        text_origin=f"subtitle:{src_cand}", kind=L.SONG if q.kind == SONG else L.SPEECH,
+            heard = words_in(words, q.start, q.end)
+            ws = sub_words.get(str(i)) or heard
+            text, origin = q.text, f"subtitle:{src_cand}"
+            spoken = join_words(heard, lang)
+            # What was actually said wins: a subtitle line that disagrees with the speech
+            # (wrong line, different cut, mistranslation in a fan sub) gives way to recognition.
+            if len(spoken) >= 3 and cer(q.text, spoken) > SUBTITLE_DISAGREES:
+                text, origin, ws = spoken, "asr", heard
+            ln = L.Line(id=0, start=q.start, end=q.end, source_text=text, source_lang=lang,
+                        text_origin=origin, kind=L.SONG if q.kind == SONG else L.SPEECH,
                         words=[L.Word(**w) for w in ws], name_hint=q.name)
             raw.append(ln)
             covered.append((q.start, q.end))
@@ -259,8 +266,34 @@ def measure(job: Job, lines: list[L.Line]) -> None:
             ln.pan = round((r - l) / max(1e-9, r + l), 3)
 
 
+def check_english_refs(job: Job, lines: list[L.Line]) -> None:
+    """The spoken audio is authoritative. An English subtitle line is kept as a
+    line's meaning only if it matches what was said (cross-lingual similarity
+    clearly above that of unrelated pairs); otherwise it becomes a hint."""
+    cands = [ln for ln in lines if ln.english_ref and len(ln.source_text) >= 4 and ln.kind == L.SPEECH]
+    if len(cands) < 4 or not job.cfg.get("stages.speaker.worker"):
+        return
+    k = max(1, len(cands) // 2)
+    pairs = [[ln.english_ref, ln.source_text] for ln in cands]
+    shifted = [[ln.english_ref, cands[(i + k) % len(cands)].source_text] for i, ln in enumerate(cands)]
+    with job.worker("speaker", gpu_stage="speaker") as w:
+        w.call("load", {})
+        sims = w.call("text_similarity", {"pairs": pairs + shifted})["similarity"]
+    true, unrelated = sims[: len(cands)], sims[len(cands):]
+    floor = float(np.percentile(unrelated, 75)) if unrelated else 0.0
+    moved = 0
+    for ln, s in zip(cands, true):
+        if s <= floor:
+            ln.english_context, ln.english_ref = ln.english_ref, ""
+            moved += 1
+    job.qc["subtitle_lines_disagreeing_with_speech"] = moved
+    if moved:
+        job.log(f"{moved} English subtitle lines didn't match the speech; used only as hints")
+
+
 def run(job: Job) -> None:
     lines = build(job)
+    check_english_refs(job, lines)
     cuts = job["scenes"]["cuts"]
     windows = job["scenes"]["windows"]
     for i, ln in enumerate(lines):

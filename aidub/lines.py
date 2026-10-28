@@ -33,7 +33,8 @@ class Line:
     source_text: str = ""
     source_lang: str = ""
     text_origin: str = "asr"          # "asr", "subtitle:<label>", "subtitle-en:<label>"
-    english_ref: str = ""             # English subtitle text for meaning, when one won
+    english_ref: str = ""             # English subtitle for this line, when it agrees with the speech
+    english_context: str = ""         # nearby subtitle text that may not match this line exactly (hint only)
     words: list[Word] = field(default_factory=list)
     scene: int = 0
     overlap: bool = False
