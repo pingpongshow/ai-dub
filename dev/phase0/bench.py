@@ -51,6 +51,7 @@ def cfg():
     c.data["paths"]["work"] = str(ROOT / "jobs")
     c.data["paths"]["appdata"] = str(ROOT / "appdata")
     c.data["subtitles"]["providers"]["bazarr"]["enabled"] = False
+    c.data["ingest"]["skip_english_audio"] = False  # some samples have an official English dub to compare against
     return c
 
 
