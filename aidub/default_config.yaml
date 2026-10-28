@@ -31,7 +31,7 @@ stages:
   translate:   { worker: llm, model: RedHatAI/Qwen3.8-27B-MXFP4, gpu_memory_utilization: 0.80, max_model_len: 16384,
                  linear_backend: marlin, attention_backend: TRITON_ATTN }
   speak:       { worker: tts-indextts, model: IndexTeam/IndexTTS-2.5 }
-  bwe:         { worker: bwe-flashsr, enabled: true }
+  bwe:         { worker: bwe-flashsr, enabled: true, mode: auto }   # auto: only when the original is brighter
   voicedesign: { worker: voicedesign, model: Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign }
 
 # An OpenAI-compatible endpoint can stand in for the built-in translation

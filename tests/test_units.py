@@ -227,3 +227,12 @@ def test_no_drift_when_halves_fit_at_zero():
     speech = score.mask([(0, 25)] + spans, 300)   # a 25 s song at the start counts as "speech"
     cues = [Cue(a, b, "x") for a, b in spans]
     assert score.drift(cues, speech, 300) == 0.0
+
+
+def test_high_band_share():
+    from aidub import bwe
+    sr = 48000
+    t = np.arange(sr) / sr
+    low = np.sin(2 * np.pi * 300 * t)
+    bright = low + 0.5 * np.sin(2 * np.pi * 12000 * t)
+    assert bwe.high_band_share(low, sr) < 0.01 < bwe.high_band_share(bright, sr)
