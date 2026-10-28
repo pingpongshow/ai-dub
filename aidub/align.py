@@ -30,6 +30,7 @@ INTERJECTION_WORDS = {
     "zh": {"啊", "哦", "嗯", "呃", "哈", "唉", "哎", "嘿", "呀", "哼", "噢"},
     "en": {"ah", "oh", "uh", "um", "hmm", "huh", "ha", "eh", "mm", "ugh", "whoa", "wow", "hey"},
 }
+SINGING_EVENTS = {"Sing", "sing", "Singing", "singing"}  # songs keep the original audio, untranslated
 WORDLESS_EVENTS = {"Laughter", "Cry", "Cough", "Sneeze", "Breath", "laughter", "cry", "cough", "sneeze", "breath"}
 MIN_LINE_S = 0.5
 SUBTITLE_DISAGREES = 0.6   # character error rate between a source subtitle line and what was heard
@@ -226,7 +227,10 @@ def build(job: Job) -> list[L.Line]:
 def classify(job: Job, lines: list[L.Line]) -> None:
     turns = job["diarization"]["segments"]
     ev = job.get("events") or []
-    songs = job["ingest"].get("song_ranges", [])
+    songs = list(job["ingest"].get("song_ranges", []))
+    # Any chosen subtitle (source-language or English) that marks a moment as a song.
+    for which in ("source", "english"):
+        songs += [[q.start, q.end] for q in load_chosen(job, which) if q.kind == SONG]
     lang = job["subtitles"].get("source_language", "")
     for ln in lines:
         tags: list[str] = []
@@ -244,7 +248,7 @@ def classify(job: Job, lines: list[L.Line]) -> None:
         ln.events = tags
         ln.emotion = max(emotion, key=emotion.get) if emotion else ""
         top_lang = max(langs, key=langs.get) if langs else ""
-        if ln.kind == L.SONG or _in_ranges(ln.start, ln.end, songs):
+        if ln.kind == L.SONG or _in_ranges(ln.start, ln.end, songs) or set(tags) & SINGING_EVENTS:
             ln.kind = L.SONG
         elif top_lang == "en" and lang != "en" and ln.duration >= 0.8:
             ln.kind = L.ENGLISH

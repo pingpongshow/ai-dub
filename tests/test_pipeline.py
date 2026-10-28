@@ -157,3 +157,15 @@ def test_overrunning_lines_get_shorter_english(cfg, media_root):
     qc = job["record"]["qc"]
     assert qc["fit"]["condensed"] > 0
     assert qc["fallback_rate"] <= 0.15, qc["fallback_lines"]
+
+
+def test_songs_are_not_translated(cfg, media_root):
+    """Lines a subtitle marks as sung keep the original audio and get no English."""
+    ep = synth.episode(media_root / "Song.mkv")
+    srt = synth.srt(media_root / "Song.en.srt", text="Hello there")
+    text = srt.read_text(encoding="utf-8").replace("Hello there 1", "♪ la la la ♪").replace("Hello there 2", "♪ la la ♪")
+    srt.write_text(text, encoding="utf-8")
+    svc = Service(cfg)
+    job = run_service_job(svc, ep)
+    assert job["status"] == J.DONE, job["message"]
+    assert job["record"]["qc"]["lines"].get("song", 0) >= 2
