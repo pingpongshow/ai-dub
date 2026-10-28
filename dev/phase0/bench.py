@@ -505,10 +505,15 @@ def cmd_diarization() -> None:
         res = {"Nemotron 3": {"speakers": len(d["speakers"]), "turns": len(d["segments"]),
                               "overlap_share": round(sum(1 for s in d["segments"] if s.get("overlap")) / max(1, len(d["segments"])), 3)}}
         if (Path(c.models) / "envs" / "diarize-diarizen").exists():
-            with Worker(c, "diarize-diarizen", log=lambda l: None) as w:
-                w.call("load", {})
-                segs = w.call("diarize", {"input": str(job.path("audio", "dialogue16k.wav"))})["segments"]
-            res["DiariZen"] = {"speakers": len({s["speaker"] for s in segs}), "turns": len(segs)}
+            try:
+                with Worker(c, "diarize-diarizen", log=lambda l: None) as w:
+                    w.call("load", {})
+                    t0 = time.time()
+                    segs = w.call("diarize", {"input": str(job.path("audio", "dialogue16k.wav"))})["segments"]
+                res["DiariZen"] = {"speakers": len({s["speaker"] for s in segs}), "turns": len(segs),
+                                   "seconds": round(time.time() - t0, 1)}
+            except Exception as exc:
+                res["DiariZen"] = {"error": str(exc)[:300]}
         out[clip["name"]] = res
         log(clip["name"], res)
     save("diarization", out)
