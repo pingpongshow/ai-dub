@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import collections
 import html
+import mimetypes
 from contextlib import asynccontextmanager
 import os
 import threading
@@ -19,6 +20,8 @@ from .config import Config
 from .models import Installer
 from .pipeline import STEP_NAMES, TITLES
 from .service import Service
+
+mimetypes.add_type("audio/mp4", ".m4a")  # missing from some system tables; Safari needs it
 
 VIDEO_EXT = {".mkv", ".mp4", ".m4v", ".avi", ".ts", ".m2ts", ".mov", ".wmv", ".webm"}
 WEB_DIR = Path(os.environ.get("AIDUB_WEB", Path(__file__).resolve().parent.parent / "web"))

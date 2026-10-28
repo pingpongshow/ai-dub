@@ -81,6 +81,7 @@ def test_listening_pages(client, cfg):
     r = c.get("/listen/voice", follow_redirects=False)
     assert r.status_code in (307, 302) and r.headers["location"] == "/listen/voice/"
     assert c.get("/listen/voice/").text == "<p>test</p>"
-    assert c.get("/listen/voice/001-A.m4a").content == b"x" * 10
+    r = c.get("/listen/voice/001-A.m4a")
+    assert r.content == b"x" * 10 and r.headers["content-type"] == "audio/mp4"
     assert c.get("/listen/../config.yaml").status_code == 404
     assert c.get("/listen/voice/%2e%2e/%2e%2e/secrets.yaml").status_code == 404
