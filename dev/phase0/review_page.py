@@ -6,10 +6,12 @@ the fixes are made and the clips re-dubbed. This page shows, per clip:
   - lines whose outcome changed (dubbed vs kept original, English wording, voice
     source) or whose dub audio changed, and lines that are new,
   - lines left unjudged last time.
-Lines marked Acceptable and unchanged are left out. Optional voice-setting
-variants (variants.json from variants.py) are shown as extra rows to compare.
+A line marked Acceptable that is still dubbed keeps exactly what was approved:
+its English and its dub audio are put back into the job (--pin), so the owner is
+never asked about it again; accepted kept-original lines stay kept. Optional
+voice-setting variants (variants.json from variants.py) are extra rows to compare.
 
-    python review_page.py /work/check /work/listen/recheck-flagged /work/listen/<new-name> clip1 clip2 ...
+    python review_page.py [--pin] /work/check /work/listen/recheck-flagged /work/listen/<new-name> clip1 clip2 ...
 The app serves the page at http://<server>:8790/listen/<new-name>/.
 """
 
@@ -21,7 +23,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-import numpy as np
 
 
 def enc(src: Path, dst: Path, start=None, dur=None) -> str:
@@ -37,26 +38,6 @@ def enc(src: Path, dst: Path, start=None, dur=None) -> str:
             "-c:a", "aac", "-b:a", "160k", str(dst)]
     subprocess.run(cmd, check=True)
     return dst.name
-
-
-def pcm(path: Path) -> np.ndarray:
-    raw = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(path), "-ac", "1", "-ar", "16000",
-                          "-f", "f32le", "-"], capture_output=True, check=True).stdout
-    return np.frombuffer(raw, dtype=np.float32)
-
-
-def same_audio(a: Path, b: Path) -> bool:
-    """True if two clips are the same take (lossy copies of it)."""
-    x, y = pcm(a), pcm(b)
-    if not len(x) or not len(y) or abs(len(x) - len(y)) > 0.08 * 16000:
-        return False
-    x, y = x - x.mean(), y - y.mean()
-    # Peak of the cross-correlation within +-60 ms (encoder delay shifts lossy copies).
-    n = 1 << int(np.ceil(np.log2(len(x) + len(y))))
-    xc = np.fft.irfft(np.fft.rfft(x, n) * np.conj(np.fft.rfft(y, n)), n)
-    lag = int(0.06 * 16000)
-    peak = float(max(np.max(xc[:lag]), np.max(xc[-lag:])))
-    return peak / (np.linalg.norm(x) * np.linalg.norm(y) + 1e-9) > 0.9
 
 
 def norm(t: str) -> str:
@@ -75,7 +56,18 @@ def old_rows(page_dir: Path) -> dict[str, dict]:
         rows[item] = {"clip": clip, "start": float(t), "who": html.unescape(who), "src": html.unescape(src),
                       "en": html.unescape(en), "status": html.unescape(status), "verdict": fb.get(item, {}).get("verdict", ""),
                       "comment": fb.get(item, {}).get("comment", ""), "dub": page_dir / f"{item}-dub.m4a"}
+        # The original clip ran from the line's start to 0.2 s past its end.
+        rows[item]["end"] = float(t) + max(0.1, seconds(page_dir / f"{item}-orig.m4a") - 0.2)
     return rows
+
+
+def seconds(path: Path) -> float:
+    r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
+                       capture_output=True, text=True)
+    try:
+        return float(r.stdout.strip())
+    except ValueError:
+        return 0.0
 
 
 def status_of(ln: dict) -> str:
@@ -102,22 +94,42 @@ def outcome(status: str) -> str:
     return "kept" if status.startswith("kept original") else "dubbed"
 
 
-def match(ln: dict, olds: list[dict]) -> dict | None:
-    best, key = None, None
-    for o in olds:
-        dt = abs(o["start"] - ln["start"])
-        if dt > 0.6:
-            continue
-        sim = difflib.SequenceMatcher(None, norm(o["src"]), norm(ln.get("source_text", ""))).ratio() \
-            if (o["src"] or ln.get("source_text")) else 1.0
-        k = (sim, -dt)
-        if sim >= 0.5 and (key is None or k > key):
-            best, key = o, k
-    return best
+def overlap(ln: dict, o: dict) -> float:
+    """Shared time as a share of the shorter of the two lines."""
+    shared = min(ln["end"], o["end"]) - max(ln["start"], o["start"])
+    return max(0.0, shared) / max(0.1, min(ln["end"] - ln["start"], o["end"] - o["start"]))
+
+
+def text_sim(ln: dict, o: dict) -> float:
+    a, b = norm(o["src"]), norm(ln.get("source_text", ""))
+    return difflib.SequenceMatcher(None, a, b).ratio() if (a and b) else 1.0
+
+
+def matches(ln: dict, olds: list[dict]) -> list[dict]:
+    """Old rows that are this line (same moment, same words), best first."""
+    found = [o for o in olds if (overlap(ln, o) >= 0.4 or abs(o["start"] - ln["start"]) <= 0.4) and text_sim(ln, o) >= 0.4]
+    return sorted(found, key=lambda o: (-overlap(ln, o) - text_sim(ln, o), abs(o["start"] - ln["start"])))
+
+
+def pin(ln: dict, o: dict, job: Path) -> None:
+    """Put the approved English and dub audio back on the line."""
+    dst = job / "lines" / f"{ln['id']:05d}" / "accepted.wav"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(o["dub"]), "-ac", "1", "-ar", "48000",
+                    str(dst)], check=True)
+    ln["take"], ln["en"], ln["fallback"] = str(dst), o["en"], ""
+    ln.setdefault("fit", {})["method"] = "accepted in review"
+
+
+PIN = False
 
 
 def main():
-    root, old_dir, out = Path(sys.argv[1]), Path(sys.argv[2]), Path(sys.argv[3])
+    global PIN
+    args = sys.argv[1:]
+    if args and args[0] == "--pin":
+        PIN, args = True, args[1:]
+    root, old_dir, out = Path(args[0]), Path(args[1]), Path(args[2])
     out.mkdir(parents=True, exist_ok=True)
     olds = old_rows(old_dir)
     variants = json.loads((root / "variants.json").read_text()) if (root / "variants.json").exists() else {}
@@ -125,12 +137,12 @@ def main():
              "margin:16px;background:#14171c;color:#e6e9ef}td{padding:6px;border-bottom:1px solid #2d333d;vertical-align:top}"
              "audio{height:28px;width:170px}.m{color:#9aa3b2;font-size:12px}.was{color:#e3a33b;font-size:12px}"
              "h3{margin-top:18px}</style>"
-             "<h1>Re-dub review: only what changed</h1><p>Lines you marked Acceptable that didn't change are not "
-             "shown. Each row says why it's here; your earlier comment is shown in orange. Mark each row Acceptable "
+             "<h1>Re-dub review: only what changed</h1><p>Lines you marked Acceptable keep exactly what you "
+             "approved and are not shown. Each row says why it's here; your earlier comment is shown in orange. Mark each row Acceptable "
              "or Poor; for Poor, say what is wrong. Answers save as you go.</p>"
              '<script src="/listen-feedback.js" defer></script>']
     summary = []
-    for clip in sys.argv[4:]:
+    for clip in args[3:]:
         job = root / "jobs" / f"job-chk-{clip}"
         lines = json.loads((job / "lines.json").read_text())
         prof = json.loads(next((root / "appdata" / "profiles").glob(f"check-{clip}/profile.json")).read_text())
@@ -142,41 +154,39 @@ def main():
         var_ids = {v["id"] for v in vs}
         var_notes: dict[int, str] = {}
         src = root / f"{clip}.mkv"
+        pinned = 0
         for ln in lines:
             if ln["kind"] not in ("speech", "wordless", "song", "english", "crowd", "background"):
                 continue
             st = status_of(ln)
-            o = match(ln, [x for x in mine if x["item"] not in used])
+            found = matches(ln, [x for x in mine if x["item"] not in used])
+            o, extra = (found[0], found[1:]) if found else (None, [])
+            for x in found:
+                used.add(x["item"])
+            if ln["kind"] == "song" and not any(x["verdict"] in ("poor", "") for x in found):
+                continue  # a kept song you didn't flag needs no judging
             if ln["id"] in var_ids:  # judged in the voice-settings section below
-                if o:
-                    used.add(o["item"])
-                    var_notes[ln["id"]] = o.get("comment", "")
+                var_notes[ln["id"]] = " / ".join(x["comment"] for x in found if x.get("comment"))
                 continue
-            # Old rows this line absorbed (duplicates merged into it).
-            extra = [x for x in mine if x is not o and x["item"] not in used and abs(x["start"] - ln["start"]) <= 0.6
-                     and norm(x["src"]) and norm(x["src"]) in norm(ln.get("source_text", ""))]
             reasons = []
             if o is None:
                 reasons.append("new line")
             else:
-                used.add(o["item"])
-                if o["verdict"] == "poor":
+                if any(x["verdict"] == "poor" for x in found):
                     reasons.append("you marked it Poor")
-                elif not o["verdict"]:
+                if any(not x["verdict"] for x in found):
                     reasons.append("not judged last time")
                 if outcome(o["status"]) != outcome(st):
                     reasons.append(f"now {outcome(st)} (was {outcome(o['status'])})")
-                elif outcome(st) == "dubbed":
-                    if norm(o["en"]) != norm(ln.get("en", "")):
-                        reasons.append("English changed")
-                    elif o["status"].split(" (")[0] != st.split(" (")[0]:
-                        reasons.append("voice source changed")
-                    elif o["dub"].exists() and ln.get("take") and Path(ln["take"]).exists() \
-                            and not same_audio(o["dub"], Path(ln["take"])):
-                        reasons.append("dub audio changed")
-            for x in extra:
-                used.add(x["item"])
-                reasons.append(f"merged duplicate of the old line at {x['start']:.1f}s")
+                if extra:
+                    reasons.append("merged with the old line(s) at " + ", ".join(f"{x['start']:.1f}s" for x in extra))
+            if not reasons:
+                if outcome(st) == "dubbed" and o["dub"].exists():
+                    if PIN:
+                        pin(ln, o, job)
+                    pinned += 1
+                same += 1
+                continue
             was = [x for x in ([o] if o else []) + extra if x.get("comment")]
             if not reasons:
                 same += 1
@@ -198,7 +208,8 @@ def main():
             rows.append(f"<tr><td>{x['start']:.1f}s</td><td>{html.escape(x['src'])}<br><span class=m>this line is gone "
                         f"(merged or removed)</span><br><span class=was>before: \"{html.escape(x['comment'])}\"</span></td>"
                         f"<td colspan=2 class=m>nothing to judge</td></tr>")
-        parts.append(f"<h2>{clip}</h2><p class=m>{shown} lines to judge; {same} accepted lines unchanged and not shown.</p>")
+        parts.append(f"<h2>{clip}</h2><p class=m>{shown} lines to judge; {same} lines you accepted are kept exactly "
+                     f"as you approved them and not shown.</p>")
         parts.append("<table>" + "".join(rows) + "</table>")
         # Voice-setting variants for lines that sounded robotic, accented or unlike the speaker.
         if vs:
@@ -219,7 +230,9 @@ def main():
             parts.append("</table>")
             (out / f"{clip}-variants-key.json").write_text(json.dumps(
                 {f"{clip}-{v['id']:03d}{chr(97 + k)}": label for v in vs for k, label in enumerate(v["takes"])}, indent=1))
-        summary.append(f"{clip}: {shown} to judge, {same} unchanged")
+        summary.append(f"{clip}: {shown} to judge, {same} accepted and kept ({pinned} dubs kept as approved)")
+        if PIN:
+            (job / "lines.json").write_text(json.dumps(lines, ensure_ascii=False, indent=1))
     (out / "index.html").write_text("".join(parts))
     print("written", out / "index.html", "|", "; ".join(summary))
 

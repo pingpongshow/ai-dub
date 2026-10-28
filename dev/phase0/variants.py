@@ -26,7 +26,8 @@ SETTINGS = {"low-emo": {"emo_alpha": 0.35}, "tag-emo": {"emotion": "vector"}, "o
 def main():
     cfg = config.load(sys.argv[1])
     root = Path(cfg.data["paths"]["work"]).parent
-    out = {}
+    root_json = Path(cfg.data["paths"]["work"]).parent / "variants.json"
+    out = json.loads(root_json.read_text()) if root_json.exists() else {}  # other clips' variants stay
     for arg in sys.argv[2:]:
         clip, ids = arg.split(":")
         ids = [int(x) for x in ids.split(",") if x]
@@ -69,7 +70,7 @@ def main():
                         row["takes"].pop(label)
         out[clip] = rows
         print(clip, len(rows), "lines,", len(reqs), "variant takes")
-    (root / "variants.json").write_text(json.dumps(out, indent=1, ensure_ascii=False))
+    root_json.write_text(json.dumps(out, indent=1, ensure_ascii=False))
 
 
 if __name__ == "__main__":

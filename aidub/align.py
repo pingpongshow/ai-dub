@@ -46,6 +46,7 @@ BACKGROUND_DB = 6.0  # music & effects this far above the voice: the speech is i
 CROWD_MAX_S = 2.0     # longer lines over other voices (a TV, a crowd) are still one person's line
 CROWD_SHARE = 0.6     # share of a line with overlapping speakers that keeps the original
 LATIN = re.compile(r"[A-Za-z]")
+NON_LATIN = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]")  # kana, CJK, Hangul: not English
 SUBTITLE_DISAGREES = 0.6   # character error rate between a source subtitle line and what was heard
 SENTENCE_END = re.compile(r"[。！？!?…]$|[.!?]$")
 
@@ -493,7 +494,7 @@ def classify(job: Job, lines: list[L.Line]) -> None:
         top_lang = max(langs, key=langs.get) if langs else ""
         if ln.kind == L.SONG or _in_ranges(ln.start, ln.end, songs) or set(tags) & SINGING_EVENTS:
             ln.kind = L.SONG
-        elif top_lang == "en" and lang != "en" and ln.duration >= 0.8:
+        elif top_lang == "en" and lang != "en" and ln.duration >= 0.8 and not NON_LATIN.search(ln.source_text):
             ln.kind = L.ENGLISH
         elif ln.kind == L.SPEECH and ln.music_db >= BACKGROUND_DB:
             ln.kind = L.BACKGROUND  # the voice is in the music & effects track; a dub can't replace it

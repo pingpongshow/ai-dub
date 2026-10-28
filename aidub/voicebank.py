@@ -215,14 +215,35 @@ def generic_voices(job: Job) -> list[dict]:
     return out
 
 
+def own_voice_clips(job: Job, prof: Profile, lines: list[L.Line], min_s: float) -> dict[str, str]:
+    """For each character, their longest clean line in this episode as a voice clip,
+    for their lines too short to clone from when the voice bank has nothing yet."""
+    best: dict[str, L.Line] = {}
+    for ln in lines:
+        if ln.kind != L.SPEECH or ln.overlap or not ln.character or ln.duration < min_s:
+            continue
+        cid = prof.voice_source(ln.character)
+        if cid not in best or ln.duration > best[cid].duration:
+            best[cid] = ln
+    if not best:
+        return {}
+    dlg, sr = media.read_wav(job.path("audio", "dialogue.wav"), mono=True)
+    out = {}
+    for cid, ln in best.items():
+        a, b = int(max(0.0, ln.start - 0.05) * sr), int((ln.end + 0.05) * sr)
+        out[cid] = str(media.write_wav(job.path("voices", f"{cid}.wav"), dlg[a:b], sr))
+    return out
+
+
 def assign_voices(job: Job, prof: Profile, lines: list[L.Line], voices: dict[int, dict] | None = None) -> None:
     """Pick the reference clip for every dubbed line.
 
     A character with enough clean speech uses their voice-bank clips. One without
     (a minor speaker, or a main character early in a show) speaks from the line's
-    own audio, which is always the right person; another character's voice or a
-    designed generic voice is the last resort, for lines too short to clone from
-    when the character has no clips at all. A line whose own audio clearly doesn't
+    own audio, which is always the right person; a line too short for that uses
+    the character's voice from their longest line in the episode. Another
+    character's voice or a designed generic voice is the last resort, for a
+    character with no line long enough to clone from at all. A line whose own audio clearly doesn't
     match the chosen voice (voice, gender, or child vs adult) is voiced from its
     own audio instead, so nobody speaks with someone else's voice."""
     min_s = float(job.cfg.get("speakers.min_clean_seconds", 4.0))
@@ -266,6 +287,7 @@ def assign_voices(job: Job, prof: Profile, lines: list[L.Line], voices: dict[int
     voices = voices or {}
     min_match = float(job.cfg.get("speakers.line_voice_min", 0.35))
     own = 0
+    elsewhere = own_voice_clips(job, prof, lines, own_min)
     for ln in lines:
         if ln.kind != L.SPEECH:
             continue
@@ -276,6 +298,9 @@ def assign_voices(job: Job, prof: Profile, lines: list[L.Line], voices: dict[int
             ln.voice, ln.voice_note = "", "own line as reference"
         elif refs:
             ln.voice = str(prof.root / refs[0]["file"])
+        elif prof.voice_source(ln.character) in elsewhere:
+            # A line too short to clone from: the same character's voice from another of their lines.
+            ln.voice, ln.voice_note = elsewhere[prof.voice_source(ln.character)], "own voice from another line"
         elif ln.character in subs:
             ln.voice, ln.voice_note = subs[ln.character]
             used[ln.voice_note] += 1

@@ -356,14 +356,20 @@ def test_thin_characters_speak_with_their_own_audio(tmp_path, monkeypatch):
     prof.characters[loid]["refs"] = [{"file": "refs/loid/a.flac", "duration": 9.0, "score": 0.9}]
     monkeypatch.setattr(voicebank, "generic_voices", lambda job: [
         {"name": "female young 1", "gender": "female", "age": "young", "path": "/v/f.wav"}])
+    from aidub import media
     job = _StubJob({}, {})
     job.qc = {}
+    job.path = lambda *parts: (tmp_path / "job").joinpath(*parts)
+    (tmp_path / "job" / "audio").mkdir(parents=True)
+    (tmp_path / "job" / "voices").mkdir(parents=True)
+    media.write_wav(job.path("audio", "dialogue.wav"), np.zeros((48000 * 12, 1), np.float32), 48000)
     lines = [L.Line(1, 0, 2.0, character=anya), L.Line(2, 3, 3.4, character=anya),
              L.Line(3, 5, 7.0, character=loid), L.Line(4, 8, 10.0, character=loid)]
     voices = {4: {"emb": [1.0, 0.0, 0.0], "gender": "male", "age": "child"}}
     voicebank.assign_voices(job, prof, lines, voices)
     assert lines[0].voice == "" and lines[0].voice_note == "own line as reference"   # long enough: own audio
-    assert lines[1].voice_note.startswith("generic voice")                           # too short, nothing else
+    assert lines[1].voice_note == "own voice from another line"                     # too short: her longest line
+    assert lines[1].voice.endswith(f"{anya}.wav")
     assert lines[2].voice.endswith("a.flac")                                          # main character: voice bank
     assert lines[3].voice == "" and "age" in lines[3].voice_note                     # a child's line, adult voice
 
