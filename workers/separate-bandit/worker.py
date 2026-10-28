@@ -56,9 +56,12 @@ def load(args):
     from torch import nn
     sys.path.insert(0, _src())
     sys.modules.setdefault("pytorch_lightning", types.SimpleNamespace(LightningModule=nn.Module))
-    tio = types.ModuleType("torchaudio.io")
-    tio.StreamReader = None
-    sys.modules.setdefault("torchaudio.io", tio)
+    try:  # torchaudio.io was removed in 2.9; stub it only when it's really missing
+        import torchaudio.io  # noqa: F401
+    except ImportError:
+        tio = types.ModuleType("torchaudio.io")
+        tio.StreamReader = None
+        sys.modules["torchaudio.io"] = tio
     from src.models.bandit.bandit import Bandit
     from src.system.inference_handler import StandardTensorChunkedInferenceHandler
     model = Bandit(in_channels=1, stems=STEMS, fs=FS, band_type="musical", n_bands=64,

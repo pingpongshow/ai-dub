@@ -194,17 +194,26 @@ def cmd_separation() -> None:
         inp = media.write_wav(ROOT / "sep" / clip["name"] / "input.wav", stereo, sr)
         refs = source_reference(clip)
         en = english_reference(job)
-        rows = {}
+        done = json.loads((RESULTS / "separation.json").read_text()) if (RESULTS / "separation.json").exists() else {}
+        out.update(done)
+        rows = {k: v for k, v in done.get(clip["name"], {}).items() if "error" not in v}
         models = SEPARATORS + (["bandit-v2"] if (Path(c.models) / "envs" / "separate-bandit").exists() else [])
         for model in models:
+            if model in rows:
+                continue
             d = ROOT / "sep" / clip["name"] / model.split(".")[0]
             worker = "separate-bandit" if model == "bandit-v2" else "separate"
             log(clip["name"], "separating with", model)
-            with Worker(c, worker, log=lambda l: None) as w:
-                w.call("load", {"model": None if model == "bandit-v2" else model})
-                t0 = time.time()
-                res = w.call("separate", {"input": str(inp), "out_dir": str(d)})
-                took = time.time() - t0
+            try:
+                with Worker(c, worker, log=lambda l: None) as w:
+                    w.call("load", {"model": None if model == "bandit-v2" else model})
+                    t0 = time.time()
+                    res = w.call("separate", {"input": str(inp), "out_dir": str(d)})
+                    took = time.time() - t0
+            except Exception as exc:
+                rows[model] = {"error": str(exc)[:300]}
+                log(clip["name"], model, "failed:", exc)
+                continue
             # Recognition on this dialogue stem, and on the M&E stem (voice that leaked into the bed).
             dl, dsr = media.read_wav(res["vocals"], mono=True)
             mn, msr = media.read_wav(res["instrumental"], mono=True)
