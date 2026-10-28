@@ -4,6 +4,7 @@ SenseVoice labels one language, one emotion and one event per input, so it is
 run on each diarized turn separately (turns longer than 30 s are cut).
 """
 
+import os
 import re
 import tempfile
 from pathlib import Path
@@ -17,10 +18,23 @@ EMOTIONS = {"HAPPY", "SAD", "ANGRY", "NEUTRAL", "FEARFUL", "DISGUSTED", "SURPRIS
 state = {}
 
 
+def _local(name: str) -> str:
+    """The downloaded copy of a ModelScope model, so loading doesn't depend on reaching
+    the hub (a failed lookup there makes FunASR report the model as "not registered")."""
+    cache = Path(os.environ.get("MODELSCOPE_CACHE", Path.home() / ".cache" / "modelscope"))
+    org, _, model = name.partition("/")
+    for cfg in [*sorted(cache.glob(f"models/{org}--{model}/snapshots/*/config.yaml")),
+                cache / "models" / org / model / "config.yaml", cache / "hub" / org / model / "config.yaml"]:
+        if cfg.exists():
+            return str(cfg.parent)
+    return name
+
+
 def load(args):
     from funasr import AutoModel
     name = args.get("model") or "iic/SenseVoiceSmall"
-    state["model"] = AutoModel(model=name, device="cuda:0" if device() == "cuda" else "cpu", disable_update=True)
+    state["model"] = AutoModel(model=_local(name), device="cuda:0" if device() == "cuda" else "cpu",
+                               disable_update=True)
     return {"model": name}
 
 
