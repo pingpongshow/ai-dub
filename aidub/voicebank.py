@@ -226,7 +226,7 @@ def assign_voices(job: Job, prof: Profile, lines: list[L.Line], voices: dict[int
     match the chosen voice (voice, gender, or child vs adult) is voiced from its
     own audio instead, so nobody speaks with someone else's voice."""
     min_s = float(job.cfg.get("speakers.min_clean_seconds", 4.0))
-    own_min = float(job.cfg.get("speakers.own_line_min_s", 1.0))
+    own_min = float(job.cfg.get("speakers.own_line_min_s", 0.5))
     scenes_of: dict[str, set[int]] = defaultdict(set)
     for ln in lines:
         scenes_of[prof.voice_source(ln.character)].add(ln.scene)
