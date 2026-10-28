@@ -7,7 +7,7 @@ SRC="$ENV/src/DiariZen"
 [ -d "$SRC/.git" ] || git clone --depth 1 https://github.com/BUTSpeechFIT/DiariZen.git "$SRC"
 PY="$ENV/bin/python"
 uv pip install --python "$PY" "torch==2.8.0+cu128" "torchaudio==2.8.0+cu128" --index-url https://download.pytorch.org/whl/cu128
-uv pip install --python "$PY" "numpy==1.26.4" "setuptools<82" wheel toml scipy einops soundfile huggingface_hub "lightning<2.7" psutil
+uv pip install --python "$PY" "numpy==1.26.4" "setuptools<82" wheel toml scipy einops soundfile huggingface_hub "lightning<2.7" psutil accelerate
 uv pip install --python "$PY" --no-build-isolation -e "$SRC/pyannote-audio" \
   --extra-index-url https://download.pytorch.org/whl/cu128 --index-strategy unsafe-best-match
 uv pip install --python "$PY" --no-deps -e "$SRC"
