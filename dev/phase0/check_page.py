@@ -3,6 +3,8 @@ original audio, the dub, the character and why a line was kept original.
 
     python check_page.py /work/check /work/listen/<name> clip1 clip2 ...   (jobs in /work/check/jobs/job-chk-<clip>)
 The app serves the page at http://<server>:8790/listen/<name>/; delete the folder when the review is over.
+Each row gets an Acceptable/Poor choice and a comment box (web/listen-feedback.js),
+saved on the server as <page>/feedback.json.
 Lines whose English matches one of FLAG (the owner's earlier notes) are highlighted.
 """
 
@@ -41,7 +43,9 @@ def main():
              "margin:16px;background:#14171c;color:#e6e9ef}td{padding:6px;border-bottom:1px solid #2d333d;vertical-align:top}"
              "tr.flag{background:#3a2f12}audio{height:28px;width:170px}.m{color:#9aa3b2;font-size:12px}</style>"
              "<h1>Re-dubbed lines: voice and kept-original check</h1><p>Every line of each clip in time order. "
-             "Highlighted rows are the lines you flagged before. \"Kept original\" lines are not dubbed.</p>"]
+             "Highlighted rows are the lines you flagged before. \"Kept original\" lines are not dubbed. "
+             "Mark each row Acceptable or Poor; for Poor, say what is wrong. Answers save as you go.</p>"
+             '<script src="/listen-feedback.js" defer></script>']
     for clip in sys.argv[3:]:
         job = root / "jobs" / f"job-chk-{clip}"
         lines = json.loads((job / "lines.json").read_text())

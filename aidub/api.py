@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import collections
 import html
+import json
 import mimetypes
 from contextlib import asynccontextmanager
 import os
 import threading
+import time
 from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request
@@ -324,12 +326,49 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
     # Listening pages -------------------------------------------------------------------------
     # Review pages (comparison tests, preview dubs) are written to <work>/listen on the server
     # and opened from there; they are deleted when the review is over.
-    @app.get("/listen/{rel:path}")
-    def listen(request: Request, rel: str = ""):
+    # A page that loads /listen-feedback.js gets an Acceptable/Poor choice and a comment
+    # per row, saved next to the page as feedback.json.
+    feedback_lock = threading.Lock()
+
+    def listen_path(rel: str) -> Path:
         root = (cfg.work / "listen").resolve()
         target = (root / rel).resolve()
         if not target.is_relative_to(root) or not target.exists():
             bad(404, "not found")
+        return target
+
+    def feedback_file(page: str) -> Path:
+        d = listen_path(page.strip("/"))
+        if not d.is_dir() or d == (cfg.work / "listen").resolve():
+            bad(404, "not a listening page")
+        return d / "feedback.json"
+
+    @app.get("/api/listen/feedback")
+    def get_feedback(page: str):
+        f = feedback_file(page)
+        return json.loads(f.read_text()) if f.exists() else {}
+
+    @app.post("/api/listen/feedback")
+    def save_feedback(page: str = Body(...), item: str = Body(...), verdict: str = Body(""),
+                      comment: str = Body("")):
+        if verdict not in ("", "acceptable", "poor") or not 0 < len(item) <= 100 or len(comment) > 4000:
+            bad(400, "bad feedback")
+        f = feedback_file(page)
+        with feedback_lock:
+            data = json.loads(f.read_text()) if f.exists() else {}
+            if verdict or comment.strip():
+                data[item] = {"verdict": verdict, "comment": comment.strip(),
+                              "at": time.strftime("%Y-%m-%d %H:%M:%S")}
+            else:
+                data.pop(item, None)
+            tmp = f.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False, indent=1))
+            tmp.replace(f)
+        return {"ok": True}
+
+    @app.get("/listen/{rel:path}")
+    def listen(request: Request, rel: str = ""):
+        target = listen_path(rel)
         if target.is_file():
             return FileResponse(target)
         if not request.url.path.endswith("/"):

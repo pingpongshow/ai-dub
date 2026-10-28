@@ -85,3 +85,22 @@ def test_listening_pages(client, cfg):
     assert r.content == b"x" * 10 and r.headers["content-type"] == "audio/mp4"
     assert c.get("/listen/../config.yaml").status_code == 404
     assert c.get("/listen/voice/%2e%2e/%2e%2e/secrets.yaml").status_code == 404
+
+
+def test_listening_feedback(client, cfg):
+    c, _ = client
+    (cfg.work / "listen" / "check").mkdir(parents=True)
+    assert c.get("/api/listen/feedback", params={"page": "check"}).json() == {}
+    assert c.post("/api/listen/feedback", json={"page": "check", "item": "spy-001", "verdict": "poor",
+                                                "comment": " man's voice for a girl "}).json()["ok"]
+    c.post("/api/listen/feedback", json={"page": "check/", "item": "spy-002", "verdict": "acceptable"})
+    got = c.get("/api/listen/feedback", params={"page": "check"}).json()
+    assert got["spy-001"]["verdict"] == "poor" and got["spy-001"]["comment"] == "man's voice for a girl"
+    assert got["spy-002"]["verdict"] == "acceptable"
+    c.post("/api/listen/feedback", json={"page": "check", "item": "spy-002", "verdict": ""})  # cleared
+    assert "spy-002" not in c.get("/api/listen/feedback", params={"page": "check"}).json()
+    assert c.post("/api/listen/feedback", json={"page": "check", "item": "x", "verdict": "great"}).status_code == 400
+    assert c.post("/api/listen/feedback", json={"page": "../..", "item": "x", "verdict": "poor"}).status_code == 404
+    assert c.post("/api/listen/feedback", json={"page": "", "item": "x", "verdict": "poor"}).status_code == 404
+    assert c.post("/api/listen/feedback", json={"page": "nope", "item": "x", "verdict": "poor"}).status_code == 404
+    assert c.get("/listen-feedback.js").status_code == 200
