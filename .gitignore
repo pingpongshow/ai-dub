@@ -10,6 +10,7 @@ CLAUDE.local.md
 samples/
 dev/samples/
 dev/listening/out/
+dev/phase0/results/
 *.aidub-original
 *.aidub-dubbed
 *.aidub-partial

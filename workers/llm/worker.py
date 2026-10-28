@@ -20,10 +20,14 @@ def load(args):
               enforce_eager=True, kv_cache_dtype="fp8", trust_remote_code=False,
               kernel_config={"linear_backend": args.get("linear_backend", "marlin")},
               attention_config={"backend": args.get("attention_backend", "TRITON_ATTN")})
-    try:
-        state["llm"] = LLM(language_model_only=True, **kw)
-    except TypeError:
-        state["llm"] = LLM(**kw)  # model or vLLM without the vision/text split
+    if args.get("language_model_only", True):
+        try:
+            state["llm"] = LLM(language_model_only=True, **kw)
+        except (TypeError, ValueError) as exc:  # a text-only model, or a vLLM without the split
+            log(f"language_model_only not applicable ({exc}); loading normally")
+            state["llm"] = LLM(**kw)
+    else:
+        state["llm"] = LLM(**kw)
     state["name"] = name
     log(f"loaded {name}")
     return {"model": name}
@@ -31,8 +35,10 @@ def load(args):
 
 def chat(args):
     from vllm import SamplingParams
-    sp = SamplingParams(temperature=float(args.get("temperature", 0.3)), top_p=0.8, top_k=20,
-                        max_tokens=int(args.get("max_tokens", 4096)), presence_penalty=0.5)
+    sp = SamplingParams(temperature=float(args.get("temperature", 0.3)), top_p=float(args.get("top_p", 0.8)),
+                        top_k=int(args.get("top_k", 20)), max_tokens=int(args.get("max_tokens", 4096)),
+                        presence_penalty=float(args.get("presence_penalty", 0.5)),
+                        repetition_penalty=float(args.get("repetition_penalty", 1.0)))
     outs = state["llm"].chat(args["conversations"], sampling_params=sp, use_tqdm=False,
                              chat_template_kwargs={"enable_thinking": False})
     return {"outputs": [o.outputs[0].text for o in outs]}

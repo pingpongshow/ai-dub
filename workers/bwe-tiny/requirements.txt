@@ -1,0 +1,6 @@
+torch==2.11.0+cu128
+torchaudio==2.11.0+cu128
+FastAudioSR @ git+https://github.com/ysharma3501/FlashSR.git
+librosa
+soundfile
+huggingface_hub
