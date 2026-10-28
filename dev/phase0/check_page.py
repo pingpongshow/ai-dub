@@ -27,7 +27,9 @@ def enc(src: Path, dst: Path, start=None, dur=None) -> str:
     cmd += ["-i", str(src)]
     if dur is not None:
         cmd += ["-t", f"{dur:.2f}"]
-    subprocess.run(cmd + ["-vn", "-c:a", "aac", "-b:a", "128k", str(dst)], check=True)
+    # Same format for every clip: stereo 48 kHz, level-matched (quiet originals were hard to hear).
+    subprocess.run(cmd + ["-vn", "-sn", "-dn", "-ac", "2", "-ar", "48000", "-af", "loudnorm=I=-20:TP=-1.5:LRA=11",
+                          "-c:a", "aac", "-b:a", "160k", str(dst)], check=True)
     return dst.name
 
 
@@ -66,6 +68,8 @@ def main():
                 status = "kept original (no words spoken here)" if ln.get("heard_chars") == 0 else "kept original (sound, not words)"
             elif ln.get("fallback"):
                 status = "kept original: " + ln["fallback"]
+            elif not dub:
+                status = "no dub made" + ("" if ln.get("en") else " (no English line)")
             else:
                 status = html.escape(ln.get("voice_note") or "character's voice")
             cls = ' class="flag"' if flagged(clip, [ln.get("en", ""), ln.get("english_ref", ""), ln.get("english_context", "")]) else ""

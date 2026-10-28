@@ -68,6 +68,31 @@ def wer(ref: str, hyp: str) -> float:
     return 1.0 - matched / max(len(a), len(b))
 
 
+STOPWORDS = set("""a an the and or but so if then of to in on at by for with from up out off over into onto as is am
+are was were be been being do does did have has had will would shall should can could may might must not no yes
+i you he she it we they me him her us them my your his its our their this that these those there here what who whom
+which when where why how all any some just very too also only own same such than now oh ah uh um huh hey okay ok
+well right yeah let go get got come came say said""".split())
+
+
+def missed_words(text: str, heard: str) -> list[str]:
+    """Key words of the line the back-check didn't hear exactly ("shady" heard as
+    "shoddy"). Names (capitalised mid-sentence) are left out: recognition spells
+    them its own way."""
+    raw = re.findall(r"[A-Za-z0-9'’]+", text)
+    names = {w.lower() for i, w in enumerate(raw) if i and w[0].isupper()}
+    heard_set = set(_words(heard))
+    out = []
+    for w in _words(text):
+        if len(w) < 3 or w in STOPWORDS or w in names or w in heard_set:
+            continue
+        # Plural, possessive and simple tense endings still count as heard.
+        if any(h.rstrip("s") == w.rstrip("s") or h.rstrip("ed") == w.rstrip("ed") for h in heard_set):
+            continue
+        out.append(w)
+    return out
+
+
 def _line_dir(job: Job, ln: L.Line) -> Path:
     return job.dir("lines", f"{ln.id:05d}")
 
@@ -152,6 +177,7 @@ def score_files(job: Job, items: list[tuple[L.Line, str, str]]) -> dict[str, dic
             for (ln, text, p), r in zip(part, res["results"]):
                 ws = _words(text)
                 out[p] = {"wer": round(wer(text, r.get("text", "")), 3), "heard": r.get("text", ""),
+                          "missed": missed_words(text, r.get("text", "")), "words": len(ws),
                           "interjection": len(ws) == 1 and len(ws[0]) <= 4,
                           "seconds": round(media.duration(p), 2)}
             job.status(f"back-check {min(i + 16, len(items))}/{len(items)}", progress=0.5 * min(1.0, (i + 16) / len(items)))
@@ -194,6 +220,9 @@ def _passes(s: dict, cfg) -> bool:
     if s.get("interjection"):
         max_wer = max(max_wer, 0.7)
     if s.get("wer", 1) > max_wer:
+        return False
+    # Every key word of a short line must come out right; a longer line may slip on one.
+    if len(s.get("missed", [])) > (0 if s.get("words", 0) <= int(cfg.get("speak.strict_words_max", 12)) else 1):
         return False
     sim, med = s.get("sim"), s.get("sim_median")
     if sim is None or s.get("seconds", 99) < float(cfg.get("speak.min_similarity_seconds", 1.0)):

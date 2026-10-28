@@ -10,8 +10,10 @@ import json
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-SPEECH, ENGLISH, WORDLESS, SONG = "speech", "english", "wordless", "song"
-KEPT_KINDS = {ENGLISH, WORDLESS, SONG}
+SPEECH, ENGLISH, WORDLESS, SONG, CROWD, BACKGROUND = "speech", "english", "wordless", "song", "crowd", "background"
+# crowd: several people talking at once; background: speech that is part of the background
+# sound (a station announcement, a TV across the room), so it stays in the music & effects.
+KEPT_KINDS = {ENGLISH, WORDLESS, SONG, CROWD, BACKGROUND}
 
 
 @dataclass
@@ -37,6 +39,8 @@ class Line:
     english_context: str = ""         # nearby subtitle text that may not match this line exactly (hint only)
     words: list[Word] = field(default_factory=list)
     heard_chars: int = -1              # characters speech recognition heard in this span (-1: not measured)
+    relisten: str = ""                # what recognition heard re-listening to this line alone (wordless check)
+    music_db: float = -99.0           # music & effects level under the line, relative to the voice
     scene: int = 0
     overlap: bool = False
     emotion: str = ""                 # SenseVoice emotion tag

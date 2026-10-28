@@ -11,6 +11,7 @@ samples/
 dev/samples/
 dev/listening/out/
 dev/phase0/results/
+TEST-FILES.md
 *.aidub-original
 *.aidub-dubbed
 *.aidub-partial

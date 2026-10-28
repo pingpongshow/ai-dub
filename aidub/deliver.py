@@ -93,7 +93,7 @@ def subtitle_tracks(job: Job, lines: list[L.Line]) -> list[dict]:
             title = "English (AI translation)"
         else:
             cues = [Cue(l.start, l.end, l.source_text, raw=l.source_text) for l in lines
-                    if l.kind in (L.SPEECH, L.ENGLISH) and l.source_text]
+                    if l.kind in (L.SPEECH, L.ENGLISH, L.CROWD) and l.source_text]
             title = f"{LANG_TITLE.get(lang, lang)} (AI transcript)"
         if not cues:
             continue

@@ -8,7 +8,9 @@ recognition alone. Each line gets exact times, one speaker, a kind
 
 from __future__ import annotations
 
+import json
 import re
+from pathlib import Path
 
 import numpy as np
 
@@ -26,14 +28,21 @@ INTERJECTION_CHARS = set("あいうえおぁぃぅぇぉっーんアイウエオ
                          "きゃキャくっちっ・…!?！？、。~〜 ")
 INTERJECTION_WORDS = {
     "ja": {"あ", "あっ", "ああ", "え", "えっ", "えー", "う", "うう", "うん", "ふん", "はぁ", "はあ", "ん", "んっ",
-           "お", "おお", "ひっ", "きゃー", "わぁ", "わあ", "ほう", "へえ", "へー", "ちっ", "くっ", "はっ", "ふう", "ふぅ"},
-    "ko": {"아", "어", "음", "응", "흠", "헉", "하", "흐", "으", "엇", "앗"},
+           "お", "おお", "ひっ", "きゃー", "わぁ", "わあ", "ほう", "へえ", "へー", "ちっ", "くっ", "はっ", "ふう", "ふぅ",
+           "うわ", "うわぁ", "おっ", "おや", "ふふ", "へへ", "あはは", "うふふ", "ひぃ", "ぎゃ", "うぅ", "はは"},
+    "ko": {"아", "어", "음", "응", "흠", "헉", "하", "흐", "으", "엇", "앗", "아이", "아이고", "아유", "어머", "에이",
+           "에휴", "아휴", "어휴", "휴", "흥", "헐", "와", "오", "우와", "쯧", "흑", "허", "후", "하하", "히히", "흐흐"},
     "zh": {"啊", "哦", "嗯", "呃", "哈", "唉", "哎", "嘿", "呀", "哼", "噢"},
     "en": {"ah", "oh", "uh", "um", "hmm", "huh", "ha", "eh", "mm", "ugh", "whoa", "wow", "hey"},
 }
 SINGING_EVENTS = {"Sing", "sing", "Singing", "singing"}  # songs keep the original audio, untranslated
 WORDLESS_EVENTS = {"Laughter", "Cry", "Cough", "Sneeze", "Breath", "laughter", "cry", "cough", "sneeze", "breath"}
 MIN_LINE_S = 0.5
+SONG_MUSIC_DB = -6.0  # music this loud under a voice (relative to it), next to a song, is part of the song
+SONG_REACH_S = 3.0
+BACKGROUND_DB = 6.0  # music & effects this far above the voice: the speech is in the background track
+CROWD_SHARE = 0.6     # share of a line with overlapping speakers that keeps the original
+LATIN = re.compile(r"[A-Za-z]")
 SUBTITLE_DISAGREES = 0.6   # character error rate between a source subtitle line and what was heard
 SENTENCE_END = re.compile(r"[。！？!?…]$|[.!?]$")
 
@@ -89,6 +98,27 @@ def sentences(words: list[dict], turns: list[dict], max_len: float = 8.0, gap: f
     return out
 
 
+def assign_words(words: list[dict], cues: list, slack: float = 0.25) -> list[list[dict]]:
+    """Give each recognised word to exactly one subtitle cue: the one it overlaps
+    most (cue times widened by `slack`), ties to the nearer cue centre. Overlapping
+    cues (a TV playing under the dialogue, two speakers at once) otherwise claim
+    the same words and the same speech is voiced twice."""
+    out: list[list[dict]] = [[] for _ in cues]
+    for w in words:
+        mid = (w["start"] + w["end"]) / 2
+        best, key = None, None
+        for k, q in enumerate(cues):
+            o = min(w["end"], q.end + slack) - max(w["start"], q.start - slack)
+            if o <= 0 or o < 0.5 * max(0.01, w["end"] - w["start"]):
+                continue
+            kk = (round(o, 3), -abs(mid - (q.start + q.end) / 2))
+            if key is None or kk > key:
+                best, key = k, kk
+        if best is not None:
+            out[best].append(w)
+    return out
+
+
 def words_in(words: list[dict], a: float, b: float) -> list[dict]:
     return [w for w in words if w["end"] > a and w["start"] < b
             and (min(w["end"], b) - max(w["start"], a)) >= 0.5 * max(0.01, w["end"] - w["start"])]
@@ -104,6 +134,16 @@ def main_speaker(turns: list[dict], a: float, b: float) -> tuple[str, bool, list
             overlap = overlap or s.get("overlap", False)
     ranked = sorted(share.items(), key=lambda kv: -kv[1])
     return (ranked[0][0] if ranked else ""), overlap, ranked
+
+
+def overlap_share(turns: list[dict], a: float, b: float) -> float:
+    """Share of [a, b] where two or more diarized speakers talk at once."""
+    if b <= a:
+        return 0.0
+    pts = sorted({a, b, *(t["start"] for t in turns if a < t["start"] < b), *(t["end"] for t in turns if a < t["end"] < b)})
+    both = sum(y - x for x, y in zip(pts, pts[1:])
+               if sum(1 for t in turns if t["start"] <= (x + y) / 2 <= t["end"]) >= 2)
+    return both / (b - a)
 
 
 def split_by_speaker(line: L.Line, turns: list[dict], lang: str) -> list[L.Line]:
@@ -154,6 +194,40 @@ def _attach(lines: list[L.Line], w: dict, lang: str, reach: float = 0.5) -> bool
     return True
 
 
+def _same_text(a: str, b: str) -> bool:
+    x, y = clean_norm(a), clean_norm(b)
+    if not x or not y:
+        return False
+    return x in y or y in x or cer(x, y) <= 0.35
+
+
+def merge_duplicates(lines: list[L.Line], lang: str) -> list[L.Line]:
+    """One stretch of speech must be one line. Subtitles (re-displayed image
+    subtitles above all) can repeat a cue, or show a fragment of the next cue at
+    the same moment ("サイレン" then "サイレンサー付きの拳銃だと"); those become one
+    line with the fuller text, instead of the same audio voiced twice."""
+    out: list[L.Line] = []
+    for ln in sorted(lines, key=lambda l: (l.start, -l.duration)):
+        prev = next((o for o in reversed(out[-3:]) if
+                     min(o.end, ln.end) - max(o.start, ln.start) >= 0.5 * max(0.05, min(o.duration, ln.duration))
+                     and _same_text(o.source_text, ln.source_text)), None)
+        if prev is None:
+            out.append(ln)
+            continue
+        keep, other = (prev, ln) if len(clean_norm(prev.source_text)) >= len(clean_norm(ln.source_text)) else (ln, prev)
+        merged = keep
+        merged.start, merged.end = min(prev.start, ln.start), max(prev.end, ln.end)
+        if not merged.words:
+            merged.words = other.words
+        merged.name_hint = merged.name_hint or other.name_hint
+        if merged.kind != L.SONG and other.kind == L.SONG:
+            merged.kind = L.SONG
+        refs = [r for r in (keep.english_ref, other.english_ref) if r]
+        merged.english_ref = refs[0] if refs else ""
+        out[out.index(prev)] = merged
+    return out
+
+
 def _in_ranges(a: float, b: float, ranges: list[list[float]]) -> bool:
     return any(min(b, r[1]) - max(a, r[0]) > 0.5 * (b - a) for r in ranges)
 
@@ -173,9 +247,10 @@ def build(job: Job) -> list[L.Line]:
     covered: list[tuple[float, float]] = []
     if src_cues:
         all_src = load_chosen(job, "source")
-        for q in src_cues:
+        owned = assign_words(words, src_cues, slack=0.1)
+        for k, q in enumerate(src_cues):
             i = all_src.index(q) if q in all_src else -1
-            heard = words_in(words, q.start, q.end)
+            heard = owned[k]
             ws = sub_words.get(str(i)) or heard
             text, origin = q.text, f"subtitle:{src_cand}"
             spoken = join_words(heard, lang)
@@ -189,13 +264,17 @@ def build(job: Job) -> list[L.Line]:
             raw.append(ln)
             covered.append((q.start, q.end))
     elif en_cues:
-        for q in en_cues:
-            ws = words_in(words, q.start - 0.25, q.end + 0.25)
+        owned = assign_words(words, en_cues)
+        for k, q in enumerate(en_cues):
+            ws = owned[k]
             a, b = (ws[0]["start"], ws[-1]["end"]) if ws else (q.start, q.end)
             raw.append(L.Line(id=0, start=a, end=b, source_text=join_words(ws, lang), source_lang=lang,
                               text_origin="asr", english_ref=q.text, kind=L.SONG if q.kind == SONG else L.SPEECH,
                               words=[L.Word(**w) for w in ws], name_hint=q.name))
             covered.append((a, b))
+
+    raw = merge_duplicates(raw, lang)
+    covered = [(ln.start, ln.end) for ln in raw]
 
     # Recognised speech no subtitle covers (or everything, without subtitles).
     rest = [w for w in words if not any(a - 0.1 <= (w["start"] + w["end"]) / 2 <= b + 0.1 for a, b in covered)]
@@ -221,12 +300,107 @@ def build(job: Job) -> list[L.Line]:
     for ln in sorted(raw, key=lambda l: l.start):
         split.extend(split_by_speaker(ln, turns, lang) if ln.words else [ln])
     for ln in split:
+        # A sliver of speech with no subtitle of its own (an echo, half a word) is too
+        # short to dub well and to tell whose voice it is: it keeps the original.
+        if (ln.kind == L.SPEECH and ln.text_origin == "asr" and not ln.english_ref
+                and ln.end - ln.start < MIN_LINE_S):
+            ln.kind = L.WORDLESS
         ln.speaker, ln.overlap, _ = main_speaker(turns, ln.start, ln.end)
         # How much speech recognition heard here (a subtitle can sit over a sigh). Only
         # measured where recognition ran; elsewhere it's unknown, not silence.
         listened = any(min(c["end"], ln.end) - max(c["start"], ln.start) > 0.5 * ln.duration for c in asr["segments"])
         ln.heard_chars = len(clean_norm(join_words(words_in(words, ln.start, ln.end), lang))) if listened else -1
     return split
+
+
+def relisten(job: Job, lines: list[L.Line], lang: str) -> None:
+    """Listen again, one line at a time, wherever a line looks wordless: no text, or
+    nothing heard under its subtitle. Chunked recognition can miss a quiet or
+    child's voice under music, or a turn diarization didn't mark; a line counts as
+    wordless only if this focused pass hears nothing (or only an interjection)."""
+    todo = [ln for ln in lines if ln.kind in (L.SPEECH, L.WORDLESS) and ln.duration >= 0.3
+            and (len(clean_norm(ln.source_text)) <= 1 or ln.heard_chars <= 0)]
+    if not todo or not job.cfg.get("stages.recognize.worker"):
+        return
+    data, sr = media.read_wav(job.path("audio", "dialogue16k.wav"), mono=True)
+    pad = 0.15
+    items = []
+    for i, ln in enumerate(todo):
+        a, b = max(0.0, ln.start - pad), ln.end + pad
+        items.append({"path": str(media.write_wav(job.path("asr", f"relisten{i:04d}.wav"),
+                                                   data[int(a * sr): int(b * sr)], sr))})
+    cfg = job.cfg.get("stages.recognize")
+    with job.worker("recognize") as w:
+        w.call("load", {"model": cfg.get("model"), "aligner": cfg.get("aligner")})
+        heard = []
+        for i in range(0, len(items), 16):
+            heard += w.call("transcribe", {"items": items[i:i + 16], "language": lang or None,
+                                           "timestamps": False})["results"]
+    for it in items:
+        Path(it["path"]).unlink(missing_ok=True)
+    found = 0
+    for ln, r in zip(todo, heard):
+        text = (r.get("text") or "").strip()
+        t = clean_norm(text)
+        # Speech that belongs to a neighbouring line isn't this line's (unless it is this line's text).
+        own = clean_norm(ln.source_text)
+        mine = bool(own) and (t in own or own in t or cer(own, t) <= 0.5)
+        near = [o for o in lines if o is not ln and o.end > ln.start - 0.5 and o.start < ln.end + 0.5]
+        if t and not mine and any(t in clean_norm(o.source_text) for o in near
+                                  if len(clean_norm(o.source_text)) >= len(t)):
+            t, text = "", ""
+        ln.relisten = text
+        if not t or is_interjection(text, lang):
+            ln.heard_chars = 0 if ln.heard_chars <= 0 else ln.heard_chars
+            continue
+        ln.heard_chars = max(ln.heard_chars, len(t))
+        if len(clean_norm(ln.source_text)) <= 1:
+            ln.source_text, ln.text_origin = text, "asr"
+        if ln.kind == L.WORDLESS:
+            ln.kind = L.SPEECH
+        found += 1
+    job.qc["relistened"] = {"lines": len(todo), "speech_found": found}
+    job.log(f"re-listened to {len(todo)} lines that looked wordless; speech in {found}")
+
+
+def measure_music(job: Job, lines: list[L.Line]) -> None:
+    """Level of the music & effects under each line, relative to the voice."""
+    data, sr = media.read_wav(job.path("audio", "dialogue16k.wav"), mono=True)
+    stems = job.path("audio", "stems.json")
+    if not stems.exists():
+        return
+    mne = None
+    for st in json.loads(stems.read_text()).values():
+        m, msr = media.read_wav(st["mne"], mono=True)
+        m = media.resample(m, msr, sr)[:, 0]
+        mne = m if mne is None else mne[: len(m)] + m[: len(mne)]
+    for ln in lines:
+        a, b = int(ln.start * sr), int(ln.end * sr)
+        x = data[a:b, 0]
+        if len(x):
+            v = float(np.sqrt(np.mean(x ** 2)) + 1e-9)
+            m = float(np.sqrt(np.mean(mne[a:b] ** 2)) + 1e-9)
+            ln.music_db = round(20 * np.log10(m / v), 1)
+
+
+def extend_songs(lines: list[L.Line], lang: str) -> int:
+    """Song lines the subtitles didn't mark: a voice over music as loud as itself, with
+    music tagged, right next to a song line (the edges of an opening, a line of the
+    chorus between marked ones), or English words in a non-English show over such
+    music (lyrics). Spreads until nothing changes."""
+    changed, total = True, 0
+    while changed:
+        changed = False
+        songs = [ln for ln in lines if ln.kind == L.SONG]
+        for ln in lines:
+            if ln.kind == L.SONG or ln.music_db < SONG_MUSIC_DB or "BGM" not in ln.events:
+                continue
+            near = any(max(o.start - ln.end, ln.start - o.end) <= SONG_REACH_S for o in songs)
+            lyrics = lang != "en" and bool(LATIN.search(ln.source_text)) and not re.search(r"[^\x00-\x7f]", ln.source_text)
+            if near or lyrics:
+                ln.kind = L.SONG
+                changed, total = True, total + 1
+    return total
 
 
 def classify(job: Job, lines: list[L.Line]) -> None:
@@ -257,6 +431,10 @@ def classify(job: Job, lines: list[L.Line]) -> None:
             ln.kind = L.SONG
         elif top_lang == "en" and lang != "en" and ln.duration >= 0.8:
             ln.kind = L.ENGLISH
+        elif ln.kind == L.SPEECH and ln.music_db >= BACKGROUND_DB:
+            ln.kind = L.BACKGROUND  # the voice is in the music & effects track; a dub can't replace it
+        elif ln.kind == L.SPEECH and overlap_share(turns, ln.start, ln.end) >= CROWD_SHARE:
+            ln.kind = L.CROWD     # several people at once: one dubbed voice can't stand in for them
         elif ln.heard_chars == 0 and ln.kind == L.SPEECH:
             ln.kind = L.WORDLESS   # nothing spoken here (a sigh or breathing under a subtitle): keep the original
         elif is_interjection(ln.source_text, lang) or (set(tags) & WORDLESS_EVENTS and
@@ -304,7 +482,11 @@ def check_english_refs(job: Job, lines: list[L.Line]) -> None:
 
 
 def run(job: Job) -> None:
-    lines = build(job)
+    end = float(job["ingest"]["duration"])
+    # Subtitles can run past the audio (a preview, a clip): nothing to dub there.
+    lines = [ln for ln in build(job) if ln.start < end - 0.2]
+    for ln in lines:
+        ln.end = min(ln.end, end)
     check_english_refs(job, lines)
     cuts = job["scenes"]["cuts"]
     windows = job["scenes"]["windows"]
@@ -312,7 +494,10 @@ def run(job: Job) -> None:
         ln.id = i + 1
         ln.scene = scenes.scene_of(ln.start, cuts)
         ln.start, ln.end = round(ln.start, 3), round(max(ln.end, ln.start + 0.2), 3)
+    relisten(job, lines, job["subtitles"].get("source_language") or job["asr"].get("language", ""))
+    measure_music(job, lines)
     classify(job, lines)
+    extend_songs(lines, job["subtitles"].get("source_language", ""))
     measure(job, lines)
     # Translation context: which window each line belongs to.
     job.set("line_windows", [next((wi for wi, (a, b) in enumerate(windows) if a <= ln.start < b), len(windows) - 1)

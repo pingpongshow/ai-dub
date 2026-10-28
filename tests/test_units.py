@@ -285,3 +285,84 @@ def test_invisible_marks_are_ignored():
     assert clean.clean_text("\u200e(sighs)")[2] != "dialogue"
     assert clean.speaker_turns("\u200e- 아이…\n\u200e- 잠 깨, 가자") == []  # raw marks: callers strip first
     assert clean.speaker_turns(clean.INVISIBLE.sub("", "\u200e- 아이…\n\u200e- 잠 깨, 가자")) == ["아이…", "잠 깨, 가자"]
+
+
+def test_each_word_belongs_to_one_cue():
+    from aidub import align
+    words = [{"text": "よし", "start": 141.3, "end": 141.6}, {"text": "まず", "start": 172.7, "end": 173.0}]
+    cues = [Cue(141.2, 141.7, "Daddy!"), Cue(141.25, 141.65, "Close enough."), Cue(172.6, 173.4, "First...")]
+    owned = align.assign_words(words, cues)
+    assert sum(len(o) for o in owned) == 2 and owned[2] == [words[1]]
+
+
+def test_duplicate_cues_become_one_line():
+    from aidub import align
+    a = L.Line(id=0, start=168.6, end=169.1, source_text="サイレン")
+    b = L.Line(id=0, start=168.6, end=170.8, source_text="サイレンサー付きの拳銃だと")
+    c = L.Line(id=0, start=175.3, end=176.0, source_text="それとこいつ")
+    d = L.Line(id=0, start=175.3, end=176.0, source_text="それとこいつ")
+    e = L.Line(id=0, start=176.5, end=177.0, source_text="別の話")
+    out = align.merge_duplicates([a, b, c, d, e], "ja")
+    assert [(x.start, x.end, x.source_text) for x in out] == [
+        (168.6, 170.8, "サイレンサー付きの拳銃だと"), (175.3, 176.0, "それとこいつ"), (176.5, 177.0, "別の話")]
+
+
+def test_song_spreads_to_neighbouring_lines_over_music():
+    from aidub import align
+
+    def mk(a, b, kind, text, ev, db):
+        return L.Line(id=0, start=a, end=b, kind=kind, source_text=text, events=ev, music_db=db)
+    lines = [mk(0.0, 0.3, L.WORDLESS, "Take my", ["BGM"], -3), mk(0.3, 5.2, L.SONG, "heartbeat", ["BGM"], 3),
+             mk(34.7, 35.3, L.SPEECH, "뛰지 마", [], -7), mk(41.7, 43.0, L.SPEECH, "No effect", ["BGM"], -1),
+             mk(72.8, 75.3, L.SPEECH, "교감 쌤", ["BGM"], -26)]
+    align.extend_songs(lines, "ko")
+    assert [x.kind for x in lines] == [L.SONG, L.SONG, L.SPEECH, L.SONG, L.SPEECH]
+
+
+def test_overlap_share():
+    from aidub import align
+    turns = [{"start": 0.0, "end": 2.0}, {"start": 1.0, "end": 3.0}]
+    assert align.overlap_share(turns, 0.0, 2.0) == pytest.approx(0.5)
+    assert align.overlap_share(turns, 1.0, 2.0) == pytest.approx(1.0)
+
+
+def test_backcheck_misheard_key_word_fails():
+    from aidub import speak
+    assert speak.missed_words("But shady places often have incomplete records.",
+                              "But shabby places often have incomplete records.") == ["shady"]
+    assert speak.missed_words("I'll take her, Anya.", "I will take her Ania") == []
+    s = {"wer": 0.14, "missed": ["shady"], "words": 7, "sim": None}
+    assert not speak._passes(s, _Cfg())
+    assert speak._passes({**s, "missed": []}, _Cfg())
+
+
+class _Cfg:
+    def get(self, key, default=None):
+        return default
+
+
+def test_interjections_keep_the_original():
+    from aidub import align
+    assert align.is_interjection("아이…", "ko") and align.is_interjection("うわぁ!", "ja")
+    assert not align.is_interjection("잠 깨, 가자", "ko")
+
+
+def test_thin_characters_speak_with_their_own_audio(tmp_path, monkeypatch):
+    from aidub import voicebank
+    prof = profiles.Profiles(tmp_path).get_or_create("Spy")
+    loid = prof.new_character("Loid", gender="male", age="adult")
+    anya = prof.new_character("Anya", gender="female", age="child")
+    prof.characters[loid]["embedding"] = [1.0, 0.0, 0.0]
+    prof.characters[loid]["refs"] = [{"file": "refs/loid/a.flac", "duration": 9.0, "score": 0.9}]
+    monkeypatch.setattr(voicebank, "generic_voices", lambda job: [
+        {"name": "female young 1", "gender": "female", "age": "young", "path": "/v/f.wav"}])
+    job = _StubJob({}, {})
+    job.qc = {}
+    lines = [L.Line(1, 0, 2.0, character=anya), L.Line(2, 3, 3.4, character=anya),
+             L.Line(3, 5, 7.0, character=loid), L.Line(4, 8, 10.0, character=loid)]
+    voices = {4: {"emb": [1.0, 0.0, 0.0], "gender": "male", "age": "child"}}
+    voicebank.assign_voices(job, prof, lines, voices)
+    assert lines[0].voice == "" and lines[0].voice_note == "own line as reference"   # long enough: own audio
+    assert lines[1].voice_note.startswith("generic voice")                           # too short, nothing else
+    assert lines[2].voice.endswith("a.flac")                                          # main character: voice bank
+    assert lines[3].voice == "" and "age" in lines[3].voice_note                     # a child's line, adult voice

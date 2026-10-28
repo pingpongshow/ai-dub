@@ -26,6 +26,11 @@ def _bleed_db(dlg: np.ndarray, mne: np.ndarray) -> float:
     return 20 * np.log10(m / d)
 
 
+def _at_least(a: float, b: float, seconds: float) -> list[float]:
+    grow = max(0.0, seconds - (b - a)) / 2
+    return [max(0.0, a - grow), b + grow]
+
+
 def line_voices(job: Job, lines: list[L.Line]) -> dict[int, dict]:
     """A voice embedding and gender/age estimate for each speech line long enough to judge."""
     todo = [ln for ln in lines if ln.kind == L.SPEECH and ln.duration >= 0.6]
@@ -35,8 +40,10 @@ def line_voices(job: Job, lines: list[L.Line]) -> dict[int, dict]:
     with job.worker("speaker", gpu_stage="speaker") as w:
         w.call("load", {})
         embs = w.call("embed", {"input": audio, "segments": [[ln.start, ln.end] for ln in todo]})["embeddings"]
+        # Gender and age need a second of audio: lines from 0.8 s are widened evenly to 1 s.
         ga = w.call("gender_age", {"input": audio, "speakers": [
-            {"speaker": str(ln.id), "segments": [[ln.start, ln.end]]} for ln in todo if ln.duration >= 1.0]})["speakers"]
+            {"speaker": str(ln.id), "segments": [_at_least(ln.start, ln.end, 1.02)]} for ln in todo
+            if ln.duration >= 0.8]})["speakers"]
     return {ln.id: {"emb": e, **(ga.get(str(ln.id)) or {})} for ln, e in zip(todo, embs) if e}
 
 
@@ -209,10 +216,17 @@ def generic_voices(job: Job) -> list[dict]:
 
 
 def assign_voices(job: Job, prof: Profile, lines: list[L.Line], voices: dict[int, dict] | None = None) -> None:
-    """Pick the reference clip for every dubbed line, substituting for minor speakers.
-    A line whose own audio clearly doesn't match the chosen voice (or gender) is
-    voiced from its own audio instead, so nobody speaks with someone else's voice."""
+    """Pick the reference clip for every dubbed line.
+
+    A character with enough clean speech uses their voice-bank clips. One without
+    (a minor speaker, or a main character early in a show) speaks from the line's
+    own audio, which is always the right person; another character's voice or a
+    designed generic voice is the last resort, for lines too short to clone from
+    when the character has no clips at all. A line whose own audio clearly doesn't
+    match the chosen voice (voice, gender, or child vs adult) is voiced from its
+    own audio instead, so nobody speaks with someone else's voice."""
     min_s = float(job.cfg.get("speakers.min_clean_seconds", 4.0))
+    own_min = float(job.cfg.get("speakers.own_line_min_s", 1.0))
     scenes_of: dict[str, set[int]] = defaultdict(set)
     for ln in lines:
         scenes_of[prof.voice_source(ln.character)].add(ln.scene)
@@ -255,16 +269,18 @@ def assign_voices(job: Job, prof: Profile, lines: list[L.Line], voices: dict[int
     for ln in lines:
         if ln.kind != L.SPEECH:
             continue
-        if ln.character in subs:
+        refs = prof.refs(ln.character)
+        thin = ln.character in subs or prof.clean_seconds(prof.voice_source(ln.character)) < min_s
+        if thin and ln.duration >= own_min and not ln.overlap:
+            # Too little of this character in the bank: the line's own audio is the truest voice.
+            ln.voice, ln.voice_note = "", "own line as reference"
+        elif refs:
+            ln.voice = str(prof.root / refs[0]["file"])
+        elif ln.character in subs:
             ln.voice, ln.voice_note = subs[ln.character]
             used[ln.voice_note] += 1
         else:
-            refs = prof.refs(ln.character)
-            if refs:
-                ln.voice = str(prof.root / refs[0]["file"])
-            else:
-                # Nothing usable at all: this episode's own audio of the line (last resort).
-                ln.voice, ln.voice_note = "", "own line as reference"
+            ln.voice, ln.voice_note = "", "own line as reference"
         # The chosen voice must sound like the person speaking this line.
         v = voices.get(ln.id)
         ch = prof.characters.get(prof.voice_source(ln.character), {}) if ln.character else {}
@@ -276,13 +292,14 @@ def assign_voices(job: Job, prof: Profile, lines: list[L.Line], voices: dict[int
                                 if note.endswith(c.get("name", "\0"))), None)
             wrong_voice = bool(ref_emb) and speakers.cosine(v["emb"], ref_emb) < min_match
             wrong_gender = bool(v.get("gender") and ch.get("gender") and v["gender"] != ch["gender"])
-            if wrong_voice or wrong_gender:
+            wrong_age = bool(v.get("age") and ch.get("age") and (v["age"] == "child") != (ch["age"] == "child"))
+            if wrong_voice or wrong_gender or wrong_age:
                 ln.voice = ""  # speak with the line's own audio as the voice reference
-                ln.voice_note = "own line as reference (" + ("gender" if wrong_gender else "voice") + \
-                    " didn't match " + (ch.get("name") or "the character") + ")"
+                what = "gender" if wrong_gender else "age" if wrong_age else "voice"
+                ln.voice_note = f"own line as reference ({what} didn't match {ch.get('name') or 'the character'})"
                 own += 1
     job.qc["minor_speaker_substitutions"] = dict(used)
-    job.qc["lines_voiced_from_own_audio"] = own
+    job.qc["lines_voiced_from_own_audio"] = own + sum(1 for ln in lines if ln.voice_note == "own line as reference")
 
 
 def run(job: Job) -> None:
