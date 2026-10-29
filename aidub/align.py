@@ -250,9 +250,13 @@ def split_by_speaker(line: L.Line, turns: list[dict], lang: str) -> list[L.Line]
 
 
 def _attach(lines: list[L.Line], w: dict, lang: str, reach: float = 0.5) -> bool:
-    """Add a recognised word to the line it sits just before or after."""
+    """Add a recognised word to the line it sits just before or after. Not to a
+    subtitle line nothing was heard under: that is a voice recognition missed (a
+    child's quiet "六つ"), and the word next to it is someone else's ("うん?")."""
     best, gap = None, reach
     for ln in lines:
+        if not ln.words:
+            continue
         g = max(ln.start - w["end"], w["start"] - ln.end, 0.0)
         if g < gap:
             best, gap = ln, g

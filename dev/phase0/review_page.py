@@ -92,6 +92,18 @@ def old_rows(page_dir: Path, rnd: int = 0) -> dict[str, dict]:
     return rows
 
 
+def clip_span(ln: dict, lines: list[dict]) -> tuple[float, float]:
+    """The original clip: from just before the line to just past it, but not into the
+    neighbouring lines (a padded clip caught the start of the next speaker)."""
+    a, b = ln["start"] - 0.05, ln["end"] + 0.2
+    for o in lines:
+        if o is not ln and ln["end"] <= o["start"] < b:
+            b = o["start"]
+        if o is not ln and a < o["end"] <= ln["start"]:
+            a = o["end"]
+    return a, b - a
+
+
 def seconds(path: Path) -> float:
     r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)],
                        capture_output=True, text=True)
@@ -236,7 +248,9 @@ def main():
                 continue
             shown += 1
             n = f"{clip}-{ln['id']:03d}"
-            orig = enc(src, out / f"{n}-orig.m4a", ln["start"] - 0.05, ln["end"] - ln["start"] + 0.25)
+            orig = enc(src, out / f"{n}-orig.m4a", *clip_span(ln, lines))
+            if ln.get("overlap"):
+                st += "; two people talk at once in part of the original"
             dub = ""
             if ln.get("take") and Path(ln["take"]).exists() and outcome(st) == "dubbed":
                 dub = f'dub<br><audio controls preload="none" src="{enc(Path(ln["take"]), out / f"{n}-dub.m4a")}"></audio>'

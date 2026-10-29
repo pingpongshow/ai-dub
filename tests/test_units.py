@@ -151,6 +151,10 @@ def test_stray_words_join_nearby_line():
     assert align._attach([ln], {"text": "ぞ", "start": 2.2, "end": 2.4}, "ja")
     assert ln.end == 2.4 and ln.source_text == "行くぞ"
     assert not align._attach([ln], {"text": "は", "start": 5.0, "end": 5.2}, "ja")
+    # A subtitle nothing was heard under ("Six.", a child's quiet 六つ) doesn't take the next sound.
+    six = L.Line(2, 57.1, 57.79, source_text="", text_origin="asr", english_ref="Six.")
+    assert not align._attach([six], {"text": "うん", "start": 58.04, "end": 58.28}, "ja")
+    assert six.end == 57.79 and six.source_text == ""
 
 
 def test_backcheck_wer():
