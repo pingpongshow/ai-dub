@@ -47,7 +47,7 @@ def norm(t: str) -> str:
 
 
 ROW = re.compile(r'<td>([\d.]+)s<br><span class=m>(.*?)</span></td><td>(.*?)<br><b>(.*?)</b><br><span class=m>(.*?)</span>')
-PREFER = ["low-emo", "current", "tag-emo", "own-voice"]  # the default voice setting first
+PREFER = ["low-emo", "current", "tag-emo", "own-voice", "own-child2", "own-child4", "own-happy"]  # default first
 
 
 def old_rows(page_dir: Path, rnd: int = 0) -> dict[str, dict]:
@@ -206,7 +206,7 @@ def main():
             if ln["id"] in var_ids:  # judged in the voice-settings section below
                 var_notes[ln["id"]] = " / ".join(x["comment"] for x in found if x.get("comment"))
                 continue
-            reasons = []
+            reasons, redo_failed = [], False
             if o is None:
                 reasons.append("new line")
             else:
@@ -214,12 +214,17 @@ def main():
                     reasons.append("you marked it Poor")
                 if any(not x["verdict"] for x in found):
                     reasons.append("not judged last time")
-                if outcome(o["status"]) != outcome(st):
+                # An approved dub stays when only this run's take failed (the line is still speech).
+                redo_failed = (ln["kind"] == "speech" and ln.get("fallback") and o["verdict"] == "acceptable"
+                               and outcome(o["status"]) == "dubbed" and o["dub"].exists())
+                if outcome(o["status"]) != outcome(st) and not redo_failed:
                     reasons.append(f"now {outcome(st)} (was {outcome(o['status'])})")
+                if abs(ln["start"] - o["start"]) > 0.3 and outcome(o["status"]) == "dubbed":
+                    reasons.append(f"now starts at {ln['start']:.1f}s (was {o['start']:.1f}s)")
                 if extra:
                     reasons.append("merged with the old line(s) at " + ", ".join(f"{x['start']:.1f}s" for x in extra))
             if not reasons:
-                if outcome(st) == "dubbed" and o["dub"].exists():
+                if (outcome(st) == "dubbed" or redo_failed) and o["dub"].exists():
                     if PIN:
                         pin(ln, o, job)
                     pinned += 1
@@ -252,8 +257,8 @@ def main():
         # Voice-setting variants for lines that sounded robotic, accented or unlike the speaker.
         if vs:
             parts.append("<h3>Voice settings: which sounds most natural?</h3><p class=m>Lines you called robotic, "
-                         "accented or unlike the speaker, each voiced four ways (A is the normal setting). Mark each "
-                         "version Acceptable or Poor; the versions that do best become the default.</p><table>")
+                         "accented or unlike the speaker, each voiced several ways (A is the version used now). Mark each "
+                         "version Acceptable or Poor; the one you like best is kept.</p><table>")
             for v in vs:
                 for k, (label, path) in enumerate(v["takes"].items()):
                     n = f"{clip}-{v['id']:03d}{chr(97 + k)}"

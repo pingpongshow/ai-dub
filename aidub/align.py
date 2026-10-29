@@ -384,13 +384,14 @@ def build(job: Job) -> list[L.Line]:
     return split
 
 
-def relisten(job: Job, lines: list[L.Line], lang: str) -> dict[int, L.Line]:
+def relisten(job: Job, lines: list[L.Line], lang: str, only: list[L.Line] | None = None) -> dict[int, L.Line]:
     """Listen again, one line at a time, wherever a line looks wordless: no text, or
     nothing heard under its subtitle. Chunked recognition can miss a quiet or
     child's voice under music, or a turn diarization didn't mark; a line counts as
     wordless only if this focused pass hears nothing (or only an interjection).
-    Returns, for lines whose re-heard words were a neighbour's, that neighbour."""
-    todo = [ln for ln in lines if ln.kind in (L.SPEECH, L.WORDLESS) and ln.duration >= 0.3
+    Returns, for lines whose re-heard words were a neighbour's, that neighbour.
+    With `only`, just those of the lines are re-heard."""
+    todo = [ln for ln in (lines if only is None else only) if ln.kind in (L.SPEECH, L.WORDLESS) and ln.duration >= 0.3
             and (len(clean_norm(ln.source_text)) <= 1 or ln.heard_chars <= 0)]
     if not todo or not job.cfg.get("stages.recognize.worker"):
         return {}
@@ -445,7 +446,7 @@ def relisten(job: Job, lines: list[L.Line], lang: str) -> dict[int, L.Line]:
         if ln.kind == L.WORDLESS:
             ln.kind = L.SPEECH
         found += 1
-    job.qc["relistened"] = {"lines": len(todo), "speech_found": found}
+    job.qc["relistened" if only is None else "relistened_subtitle_gaps"] = {"lines": len(todo), "speech_found": found}
     job.log(f"re-listened to {len(todo)} lines that looked wordless; speech in {found}")
     return shared
 
@@ -511,6 +512,9 @@ def drop_pieces(lines: list[L.Line], shared: dict[int, L.Line], lang: str) -> li
         o = shared.get(ln.id)
         if id(ln) in drop or o is None or id(o) in drop or not _no_words(ln, lang):
             continue
+        # Someone else's sound just before it (a "うん" before a child's answer) stays theirs.
+        if ln.speaker and ln.speaker != o.speaker:
+            continue
         if max(o.start - ln.end, ln.start - o.end) <= ABSORB_GAP_S:
             # From the first sound recognition placed in the wordless line.
             a = max(ln.start, ln.words[0].start - 0.1) if ln.words else ln.start
@@ -530,7 +534,10 @@ def merge_fragments(lines: list[L.Line], lang: str) -> list[L.Line]:
         if (prev is not None and prev.speaker and prev.speaker == ln.speaker
                 and prev.text_origin == ln.text_origin == "asr"  # a subtitle's own cues are its sentences
                 and L.SONG not in (prev.kind, ln.kind)
-                and -0.1 <= ln.start - prev.end <= FRAGMENT_GAP_S
+                # From the last word to the next word (a subtitle can stretch a line's time).
+                and -0.1 <= ((ln.words[0].start if ln.words else ln.start)
+                             - (prev.words[-1].end if prev.words else prev.end)) <= FRAGMENT_GAP_S
+                and not (is_interjection(prev.source_text, lang) or is_interjection(ln.source_text, lang))
                 and min(prev.duration, ln.duration) <= FRAGMENT_S and ln.end - prev.start <= 8.0
                 and clean_norm(prev.source_text) and clean_norm(ln.source_text)
                 and not SENTENCE_END.search(prev.source_text.strip())):
@@ -546,6 +553,38 @@ def merge_fragments(lines: list[L.Line], lang: str) -> list[L.Line]:
             continue
         out.append(ln)
     return out
+
+
+def missed_cues(job: Job, lines: list[L.Line], lang: str) -> list[L.Line]:
+    """An English subtitle line no line carries (recognition missed a voice talking
+    over another, and its words went to the neighbour's line) gets a line of its own
+    over the part of its time no other line has, trimmed to the voice heard there.
+    Its words are found by re-listening; it goes again if nothing new is heard."""
+    refs = " ".join(f"{ln.english_ref} {ln.english_context}" for ln in lines)
+    turns = job["diarization"]["segments"]
+    cuts = job["scenes"]["cuts"]
+    new = []
+    for q in load_chosen(job, "english"):
+        if q.kind != DIALOGUE or not q.text.strip() or q.text.strip() in refs:
+            continue
+        if any(ln.kind == L.SONG and ln.end > q.start and ln.start < q.end for ln in lines):
+            continue
+        a, b = q.start, q.end
+        for ln in sorted(lines, key=lambda l: l.start):
+            if ln.start <= a < ln.end:
+                a = ln.end
+        b = min([b] + [ln.start for ln in lines if a < ln.start < b])
+        spk, overlap, _ = main_speaker(turns, a, b)
+        if not spk:
+            continue
+        mine = [t for t in turns if t["speaker"] == spk and t["end"] > a and t["start"] < b]
+        a, b = max(a, min(t["start"] for t in mine)), min(b, max(t["end"] for t in mine) + 0.1)
+        if b - a < MIN_LINE_S:
+            continue
+        new.append(L.Line(id=0, start=round(a, 3), end=round(b, 3), source_text="", source_lang=lang,
+                          text_origin="asr", english_ref=q.text, kind=L.SPEECH, speaker=spk, overlap=overlap,
+                          heard_chars=0, scene=scenes.scene_of(a, cuts)))
+    return new
 
 
 def measure_music(job: Job, lines: list[L.Line]) -> None:
@@ -698,6 +737,16 @@ def run(job: Job) -> None:
     lines = merge_fragments(drop_pieces(lines, shared, lang), lang)
     if len(lines) != n:
         job.log(f"{n - len(lines)} lines were pieces of a neighbouring line")
+    missed = missed_cues(job, lines, lang)
+    if missed:
+        lines = sorted(lines + missed, key=lambda l: l.start)
+        for i, ln in enumerate(lines):
+            ln.id = i + 1
+        relisten(job, lines, lang, only=missed)
+        gone = {id(ln) for ln in missed if not clean_norm(ln.source_text)}
+        lines = [ln for ln in lines if id(ln) not in gone]
+        if len(missed) > len(gone):
+            job.log(f"{len(missed) - len(gone)} subtitle lines no line carried were heard and added")
     for i, ln in enumerate(lines):
         ln.id = i + 1
     measure_music(job, lines)

@@ -358,16 +358,40 @@ def test_pieces_of_neighbouring_lines_go():
     supplies = _ln(172.71, 174.55, "まずは必要なものを揃えないとな", i=75, words=[("まず", 172.71)])
     girls = _ln(33.47, 34.88, "여자들 하지 마.", heard=6, i=12)
     run = _ln(34.66, 35.22, "뛰지 마", "S2", words=[("뛰지", 34.66), ("마", 34.74)], i=13)  # same audio, cut twice
-    hm = _ln(57.1, 58.28, "うん", kind=L.WORDLESS, words=[("うん", 58.04)], i=23)
-    six = _ln(58.59, 59.5, "六つ。", "", i=24)                                   # re-listen heard 六つ in both
-    out = align.drop_pieces([cool, between, supplies, girls, run, hm, six], {23: six}, "ja")
-    assert out == [cool, supplies, girls, six]
-    assert six.start == pytest.approx(57.94) and six.end == 59.5
+    hm = _ln(57.1, 58.28, "うん", kind=L.WORDLESS, words=[("うん", 58.04)], i=23)  # the director's
+    six = _ln(58.59, 59.5, "六つ。", "", i=24)                                   # re-listen heard うん六つ
+    breath = _ln(80.2, 80.6, "", "", L.WORDLESS, heard=0, words=[("あ", 80.3)], i=30)
+    go = _ln(80.8, 82.0, "行くぞ", "S2", words=[("行く", 80.8)], i=31)           # re-listen heard あ行くぞ
+    out = align.drop_pieces([cool, between, supplies, girls, run, hm, six, breath, go], {23: six, 30: go}, "ja")
+    assert out == [cool, supplies, girls, hm, six, go]
+    assert six.start == 58.59 and go.start == pytest.approx(80.2)
+
+
+def test_subtitle_line_nobody_carries_gets_a_line(monkeypatch):
+    from aidub import align
+    from aidub.subtitles.model import DIALOGUE, Cue
+    title = _ln(163.0, 164.72, "冒険アニメスパイウォーズ", "S2", words=[("ウォーズ", 164.52)])
+    title.english_ref = "The adventure cartoon, Spy Wars!"
+    nxt = _ln(167.43, 169.19, "よりによって", "S1")
+    nxt.english_ref = "Of all shows..."
+    cues = [Cue(start=162.6, end=165.37, text="The adventure cartoon, Spy Wars!", kind=DIALOGUE),
+            Cue(start=164.21, end=165.74, text="This is my favourite!", kind=DIALOGUE),
+            Cue(start=167.4, end=168.69, text="Of all shows...", kind=DIALOGUE)]
+    monkeypatch.setattr(align, "load_chosen", lambda job, which: cues if which == "english" else [])
+    job = {"diarization": {"segments": [{"start": 162.75, "end": 164.8, "speaker": "S2", "overlap": True},
+                                        {"start": 164.25, "end": 165.32, "speaker": "S3", "overlap": True},
+                                        {"start": 167.4, "end": 169.2, "speaker": "S1"}]},
+           "scenes": {"cuts": []}}
+    new = align.missed_cues(job, [title, nxt], "ja")
+    assert len(new) == 1
+    fav = new[0]
+    assert (fav.start, fav.end, fav.speaker, fav.english_ref) == (164.72, 165.42, "S3", "This is my favourite!")
+    assert fav.source_text == "" and fav.heard_chars == 0
 
 
 def test_cut_sentence_is_one_line():
     from aidub import align
-    a = _ln(175.27, 175.91, "それとこいつ", words=[("それと", 175.27)])
+    a = _ln(175.27, 175.91, "それとこいつ", words=[("それと", 175.27), ("こいつ", 175.7)])
     b = _ln(175.91, 177.03, "の身分証の偽造", words=[("の", 175.91)])
     c = _ln(177.75, 178.79, "ちょっと出かけてくる", words=[("ちょっと", 177.75)])
     d = _ln(179.27, 179.91, "おとなしく", "S2")
@@ -375,13 +399,16 @@ def test_cut_sentence_is_one_line():
     wars = _ln(164.52, 164.72, "ウォーズ", "S2")
     done = _ln(160.0, 160.5, "よし。", "S2")
     nxt = _ln(160.6, 161.0, "行こう", "S2")
+    looks = _ln(54.81, 56.81, "この子はどう見ても四五歳過疎から", words=[("この", 54.81), ("から", 56.57)])
+    hm = _ln(57.1, 58.28, "うん", words=[("うん", 58.04)])     # a subtitle stretched its start
+    assert len(align.merge_fragments([looks, hm], "ja")) == 2
     sub1, sub2 = _ln(55.0, 56.6, "너 작년 생일 생각해 봐"), _ln(56.9, 58.1, "올해도 금방 생일 됐지?")
     sub1.text_origin = sub2.text_origin = "subtitle:embedded:5"
     assert len(align.merge_fragments([sub1, sub2], "ko")) == 2
     out = align.merge_fragments([done, nxt, title, wars, a, b, c, d], "ja")
     assert [x.source_text for x in out] == ["よし。", "行こう", "冒険アニメスパイウォーズ", "それとこいつの身分証の偽造",
                                             "ちょっと出かけてくる", "おとなしく"]
-    assert out[3].end == 177.03 and len(out[3].words) == 2
+    assert out[3].end == 177.03 and len(out[3].words) == 3
 
 
 def test_overlap_share():
