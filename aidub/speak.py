@@ -100,15 +100,20 @@ def missed_words(text: str, heard: str) -> list[str]:
     names = {p.lower() for i, w in enumerate(raw) if (i or "-" in w) and w[0].isupper() for p in w.split("-")}
     heard_words = _words(heard)
     heard_set = set(heard_words)
-    # A made-up hyphenated word heard as one word ("ten-pent" as "tenpence").
-    for w in raw:
-        joined = w.lower().replace("-", "")
-        if "-" in w and joined not in pronounce.LEXICON and pronounce.LEXICON \
-                and any(pronounce.near(joined, h) for h in heard_words):
-            heard_set.update(p.lower() for p in w.split("-"))
+    # Made-up words heard as one word: a hyphenated one ("ten-pent" as "tenpence"), or a
+    # name and surname run together ("Anya Levski" as "Anielewski").
+    lower = [w.lower().replace("’", "'") for w in raw]
+    groups = [w.split("-") for w in lower if "-" in w and w.replace("-", "") not in pronounce.LEXICON]
+    groups += [[a, b] for a, b in zip(lower, lower[1:]) if not (a in pronounce.LEXICON and b in pronounce.LEXICON)]
+    for parts in groups:
+        joined = "".join(parts)
+        if pronounce.LEXICON and any(pronounce.near(joined, h) or pronounce.same_sound(joined, h) for h in heard_words):
+            heard_set.update(parts)
     out = []
     for w in _words(text):
-        if len(w) < 3 or w in STOPWORDS or w in names or w in heard_set or pronounce.heard_as(w, heard_words):
+        base = re.sub(r"'s$", "", w)  # "West's" heard as "West", "how's" as "how is"
+        if len(w) < 3 or base in STOPWORDS or w in names or base in names or w in heard_set or base in heard_set \
+                or pronounce.heard_as(w, heard_words) or pronounce.heard_as(base, heard_words):
             continue
         # Plural, possessive and simple tense endings still count as heard.
         if any(h.rstrip("s") == w.rstrip("s") or h.rstrip("ed") == w.rstrip("ed") for h in heard_set):
@@ -129,12 +134,19 @@ def _orig_clip(job: Job, ln: L.Line, dlg: np.ndarray, sr: int) -> Path:
     return p
 
 
+def spoken(text: str) -> str:
+    """The line as the voice model should read it: it garbles hyphenated words
+    ("self-esteem" came out as "self in Spain" in 4 of 4 takes, right in 4 of 4 as
+    "self esteem"), so hyphens between letters become spaces."""
+    return re.sub(r"(?<=[A-Za-z])-(?=[A-Za-z])", " ", text)
+
+
 def _requests(job: Job, ln: L.Line, text: str, takes: int, tag: str, dlg, sr, factor: float | None = None,
               seed_offset: int = 0) -> list[dict]:
     caps = job.get("tts_caps", {})
     orig = _orig_clip(job, ln, dlg, sr)
     min_emo = float(job.cfg.get("speak.min_emotion_ref_s", 1.0))
-    req_base = {"text": text, "speaker_ref": ln.voice or str(orig)}
+    req_base = {"text": spoken(text), "speaker_ref": ln.voice or str(orig)}
     if caps.get("emotion_ref", True) and ln.duration >= min_emo and not ln.overlap:
         req_base["emotion_ref"] = str(orig)
         req_base["emo_alpha"] = float(job.cfg.get("speak.emo_alpha", 0.35))

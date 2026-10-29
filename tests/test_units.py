@@ -500,6 +500,9 @@ def test_backcheck_hears_the_same_sound_spelled_differently(tmp_path):
         assert speak.missed_words("That costs a dalc. A ten-pent coin won't do.",
                                   "That costs a dalk. A tenpence coin won't do.") == []
         assert speak.missed_words("Secret comms.", "Secret comes.") == []
+        assert speak.missed_words("How's Karen?", "How is Karen?") == []
+        assert speak.missed_words("West's cipher?", "West Cipher.") == []
+        assert speak.missed_words("Anya Levski.", "Anielewski.") == []
         # Dictionary words must sound the same: a wrong vowel is still a miss.
         assert speak.missed_words("But shady places.", "But shoddy places.") == ["shady"]
         assert speak.wer("Bomb! Bomb!", "Bum bum.") > 0.35
@@ -509,3 +512,9 @@ def test_backcheck_hears_the_same_sound_spelled_differently(tmp_path):
     finally:
         pronounce.load(tmp_path / "none.dict")  # back to no dictionary for the other tests
     assert speak.missed_words("Brakes!", "Breaks.") == ["brakes"]  # without it, only exact spellings
+
+
+def test_voice_model_reads_hyphenated_words_as_two():
+    from aidub import speak
+    assert speak.spoken("Build self-esteem, Ga-yeong.") == "Build self esteem, Ga yeong."
+    assert speak.spoken("Ten-20 at 3-4.") == "Ten-20 at 3-4."  # only between letters
