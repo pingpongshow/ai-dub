@@ -5,7 +5,7 @@
  ],
  "index_strategy": "unsafe-best-match",
  "title": "Speech recognition + word timing",
- "models": "Qwen3-ASR-1.7B + Qwen3-ForcedAligner-0.6B",
+ "models": "Qwen3-ASR-1.7B + Qwen3-ForcedAligner-0.6B (+ CMU Pronouncing Dictionary, BSD, 3.6 MB)",
  "licence": "Apache-2.0",
  "download": "~6.5 GB"
 }

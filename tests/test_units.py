@@ -483,3 +483,29 @@ def test_words_follow_their_speaker_past_a_tv_cue():
             Cue(20.05, 22.0, "First, I'll have to secure...", name="")]
     owned = align.assign_words(words, cues, turns=turns)
     assert [w["text"] for w in owned[2]] == ["まず", "必要な", "もの"] and owned[1] == []
+
+
+def test_backcheck_hears_the_same_sound_spelled_differently(tmp_path):
+    from aidub import pronounce, speak
+    lex = tmp_path / "cmudict.dict"
+    lex.write_text("brakes B R EY1 K S\nbreaks B R EY1 K S\nshady SH EY1 D IY0\nshoddy SH AA1 D IY0\n"
+                   "toupee T UW2 P EY1\ntwo T UW1\np P IY1\nlloyd L OY1 D\nten T EH1 N\npent P EH1 N T\n"
+                   "comes K AH1 M Z\nbomb B AA1 M\nbum B AH1 M\n")
+    try:
+        assert pronounce.load(lex)
+        assert speak.missed_words("Brakes!", "Breaks.") == []
+        assert speak.missed_words("Kidnap the Minister's toupee.", "Kidnap the minister's two P.") == []
+        assert speak.missed_words("Daddy's toupee was stolen.", "Daddy's topee was stolen.") == []
+        assert speak.missed_words("Loid Forger. Occupation: psychiatrist.", "Lloyd Forger, occupation, psychiatrist.") == []
+        assert speak.missed_words("That costs a dalc. A ten-pent coin won't do.",
+                                  "That costs a dalk. A tenpence coin won't do.") == []
+        assert speak.missed_words("Secret comms.", "Secret comes.") == []
+        # Dictionary words must sound the same: a wrong vowel is still a miss.
+        assert speak.missed_words("But shady places.", "But shoddy places.") == ["shady"]
+        assert speak.wer("Bomb! Bomb!", "Bum bum.") > 0.35
+        assert speak.wer("Brakes, now!", "Breaks now.") == 0
+        assert pronounce.only_sounds(speak._words("Mm-hmm.")) and pronounce.only_sounds(speak._words("Shh."))
+        assert not pronounce.only_sounds(speak._words("Oh, no."))
+    finally:
+        pronounce.load(tmp_path / "none.dict")  # back to no dictionary for the other tests
+    assert speak.missed_words("Brakes!", "Breaks.") == ["brakes"]  # without it, only exact spellings

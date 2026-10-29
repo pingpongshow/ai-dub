@@ -4,7 +4,9 @@ Also used for the English back-check of dubbed takes and for force-aligning
 subtitle text to the speech.
 """
 
-from aidub_worker import device, log, read_mono, serve, torch_info
+from pathlib import Path
+
+from aidub_worker import device, log, model_dir, read_mono, serve, torch_info
 
 NAMES = {"ja": "Japanese", "ko": "Korean", "zh": "Chinese", "yue": "Cantonese", "en": "English", "es": "Spanish",
          "fr": "French", "de": "German", "it": "Italian", "pt": "Portuguese", "ru": "Russian", "ar": "Arabic",
@@ -81,11 +83,29 @@ def align(args):
     return {"results": out}
 
 
+LEXICON_URL = "https://raw.githubusercontent.com/cmusphinx/cmudict/master/"  # CMU Pronouncing Dictionary, BSD
+
+
 def prefetch(args):
     from huggingface_hub import snapshot_download
     for repo in (args.get("model") or "Qwen/Qwen3-ASR-1.7B", args.get("aligner") or "Qwen/Qwen3-ForcedAligner-0.6B"):
         snapshot_download(repo)
+    _lexicon()
     return {}
+
+
+def _lexicon():
+    """The pronouncing dictionary the back-check uses to tell a different spelling
+    of the same sound from a mispronunciation (models/lexicon/)."""
+    import urllib.request
+    d = Path(model_dir()) / "lexicon"
+    d.mkdir(parents=True, exist_ok=True)
+    for name in ("cmudict.dict", "LICENSE"):
+        if not (d / name).exists():
+            tmp = d / (name + ".part")
+            urllib.request.urlretrieve(LEXICON_URL + name, tmp)
+            tmp.replace(d / name)
+            log(f"downloaded {name} (CMU Pronouncing Dictionary)")
 
 
 def doctor(args):

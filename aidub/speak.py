@@ -33,6 +33,7 @@ from . import fit as F
 from . import gpu
 from . import lines as L
 from . import media
+from . import pronounce
 from .job import Job
 from .workers import Worker
 
@@ -71,6 +72,8 @@ def wer(ref: str, hyp: str) -> float:
     a, b = _words(ref), _words(hyp)
     if not a:
         return 0.0 if not b else 1.0
+    # A heard word that sounds like the script's word is that word ("breaks" for "brakes").
+    b = [h if h in a else next((w for w in a if pronounce.same_sound(w, h)), h) for h in b]
     if len(a) <= 2:
         ca, cb = "".join(a), "".join(b)
         sm = difflib.SequenceMatcher(None, ca, cb, autojunk=False)
@@ -88,16 +91,24 @@ well right yeah let go get got come came say said""".split())
 
 
 def missed_words(text: str, heard: str) -> list[str]:
-    """Key words of the line the back-check didn't hear exactly ("shady" heard as
-    "shoddy"). Names (capitalised mid-sentence) are left out: recognition spells
-    them its own way."""
+    """Key words of the line the back-check didn't hear ("shady" heard as "shoddy").
+    Names (capitalised mid-sentence) are left out: recognition spells them its own
+    way. A word heard with another spelling that sounds the same counts as heard
+    (see pronounce)."""
     raw = re.findall(r"[A-Za-z0-9'’]+(?:-[A-Za-z0-9'’]+)*", text)
     # Every part of a hyphenated name ("Ga-yeong", "Ok-hui") is the name.
     names = {p.lower() for i, w in enumerate(raw) if (i or "-" in w) and w[0].isupper() for p in w.split("-")}
-    heard_set = set(_words(heard))
+    heard_words = _words(heard)
+    heard_set = set(heard_words)
+    # A made-up hyphenated word heard as one word ("ten-pent" as "tenpence").
+    for w in raw:
+        joined = w.lower().replace("-", "")
+        if "-" in w and joined not in pronounce.LEXICON and pronounce.LEXICON \
+                and any(pronounce.near(joined, h) for h in heard_words):
+            heard_set.update(p.lower() for p in w.split("-"))
     out = []
     for w in _words(text):
-        if len(w) < 3 or w in STOPWORDS or w in names or w in heard_set:
+        if len(w) < 3 or w in STOPWORDS or w in names or w in heard_set or pronounce.heard_as(w, heard_words):
             continue
         # Plural, possessive and simple tense endings still count as heard.
         if any(h.rstrip("s") == w.rstrip("s") or h.rstrip("ed") == w.rstrip("ed") for h in heard_set):
@@ -245,6 +256,7 @@ def score_files(job: Job, items: list[tuple[L.Line, str, str]]) -> dict[str, dic
         return {}
     prof = job.profile
     out: dict[str, dict] = {}
+    pronounce.load(job.cfg.models / "lexicon" / "cmudict.dict")
     asr_cfg = job.cfg.get("stages.recognize")
     with job.worker("recognize") as w:
         w.call("load", {"model": asr_cfg.get("model")})
@@ -255,8 +267,9 @@ def score_files(job: Job, items: list[tuple[L.Line, str, str]]) -> dict[str, dic
                                         "timestamps": False})
             for (ln, text, p), r in zip(part, res["results"]):
                 ws = _words(text)
-                out[p] = {"wer": round(wer(text, r.get("text", "")), 3), "heard": r.get("text", ""),
-                          "missed": missed_words(text, r.get("text", "")), "words": len(ws),
+                sounds = pronounce.only_sounds(ws)  # "Shh.", "Mm-hmm.": nothing recognition can spell
+                out[p] = {"wer": 0.0 if sounds else round(wer(text, r.get("text", "")), 3), "heard": r.get("text", ""),
+                          "missed": [] if sounds else missed_words(text, r.get("text", "")), "words": len(ws),
                           "interjection": len(ws) == 1 and len(ws[0]) <= 4,
                           "seconds": round(media.duration(p), 2)}
             job.status(f"back-check {min(i + 16, len(items))}/{len(items)}", progress=0.5 * min(1.0, (i + 16) / len(items)))
