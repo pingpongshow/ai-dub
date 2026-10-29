@@ -163,6 +163,9 @@ def test_backcheck_wer():
     assert speak.wer("Kikoru.", "Kikaru.") < 0.2
     assert speak.wer("Then I must work harder.", "Then I must work harder") == 0
     assert speak.wer("Run, everyone!", "Sit down, nobody") > 0.5
+    assert speak.wer("Who's this kid?", "Who is this kid?") == 0
+    assert speak.wer("They're here, we've won.", "They are here, we have won.") == 0
+    assert speak._words("Karen's dad") == ["karen's", "dad"]  # a possessive stays
 
 
 def test_take_passes_relative_similarity():

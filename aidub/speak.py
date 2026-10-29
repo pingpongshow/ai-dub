@@ -59,9 +59,20 @@ CONTRACTIONS = {"it's": "it is", "i'm": "i am", "you're": "you are", "we're": "w
                 "gonna": "going to", "wanna": "want to", "gotta": "got to"}
 
 
+IS_CONTRACTED = {"who", "what", "where", "when", "why", "how", "that", "there", "here", "it", "he", "she", "this"}
+SUFFIXES = (("n't", " not"), ("'re", " are"), ("'ll", " will"), ("'ve", " have"), ("'m", " am"))
+
+
 def _words(text: str) -> list[str]:
     out = []
     for w in re.findall(r"[a-z0-9']+", text.lower().replace("’", "'")):
+        if w not in CONTRACTIONS:
+            if w.endswith("'s") and w[:-2] in IS_CONTRACTED:  # "who's" = "who is" (not a possessive)
+                w = w[:-2] + " is"
+            for suf, full in SUFFIXES:
+                if w.endswith(suf) and len(w) > len(suf):
+                    w = w[: -len(suf)] + full
+                    break
         out.extend(CONTRACTIONS.get(w, w).split())
     return out
 
