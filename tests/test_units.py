@@ -516,6 +516,7 @@ def test_backcheck_hears_the_same_sound_spelled_differently(tmp_path):
         assert speak.missed_words("That costs a dalc. A ten-pent coin won't do.",
                                   "That costs a dalk. A tenpence coin won't do.") == []
         assert speak.missed_words("Secret comms.", "Secret comes.") == []
+        assert speak.missed_words("That's a dalc. Ten pents won't buy it.", "That is a dalk. Ten pence won't buy it.") == []
         assert speak.missed_words("How's Karen?", "How is Karen?") == []
         assert speak.missed_words("West's cipher?", "West Cipher.") == []
         assert speak.missed_words("Anya Levski.", "Anielewski.") == []
@@ -527,6 +528,11 @@ def test_backcheck_hears_the_same_sound_spelled_differently(tmp_path):
         assert pronounce.respell("Nguyen") == "noo yen" and pronounce.respell("proud") is None
         assert speak.missed_words("Nguyen!", "No yen.") == [] and speak.missed_words("Nguyen!", "New Yin.") == []
         assert speak.missed_words("Nguyen!", "Gwen.") == ["nguyen"]
+        assert pronounce.skeleton("gh") == "" and not pronounce.near("ugh", "gh")
+        # A made-up word heard one sound off counts; a dictionary word doesn't get that slack.
+        assert speak.missed_words("Eeny, meeny...", "Ifny meany.") == []
+        assert speak.missed_words("Eeny, meeny...", "Disney Mini.") == ["eeny"]
+        assert speak.missed_words("But shady places.", "But shoddy places.") == ["shady"]
         assert speak.wer("Nguyen! Get the car.", "No yen, get the car.") == 0
         ln = L.Line(1, 0, 1, en="Nguyen! Get the car.", take_scores={"t": {"missed": ["nguyen", "car"]}})
         assert speak.respelled(ln) == "noo yen! Get the car."
@@ -541,3 +547,24 @@ def test_voice_model_reads_hyphenated_words_as_two():
     from aidub import speak
     assert speak.spoken("Build self-esteem, Ga-yeong.") == "Build self esteem, Ga yeong."
     assert speak.spoken("Ten-20 at 3-4.") == "Ten-20 at 3-4."  # only between letters
+
+
+def test_misheard_lines_follow_their_subtitle():
+    from aidub import translate
+    heard = L.Line(1, 0, 1, source_text="おじい。", relisten="おじい。", english_ref="Daddy!")
+    plain = L.Line(2, 1, 2, source_text="えらいえらい", english_ref="You bet I am!")
+    assert translate.source_unsure(heard) and not translate.source_unsure(plain)
+    msgs = translate.translate_prompt([heard, plain], [], "", 4.0, {})
+    assert msgs[1]["content"].count('"source_unsure": true') == 1
+    assert "source_unsure" in translate.reflect_prompt([heard], "", 4.0, {}, {})[1]["content"]
+
+
+def test_backcheck_spoken_forms_and_numbers():
+    from aidub import speak
+    assert speak.missed_words("I'd be thrilled to get her outta my hair.", "I'd be thrilled to get her out of my hair.") == []
+    assert speak.wer("Alright, hurry up!", "All right, hurry up.") == 0
+    assert speak.wer("K-212... K-212...", "K two hundred and twelve. K two hundred and twelve.") == 0
+    assert speak.wer("K-212... K-212...", "K two one two. K two one two.") == 0
+    assert speak.missed_words("K-212.", "K two hundred.") == ["212"]
+    assert speak.missed_words("K-212.", "K two one two.") == [] and speak.missed_words("Room 4.", "Room 4.") == []
+    assert speak.number_words(1999) == ["one", "thousand", "nine", "hundred", "ninety", "nine"]

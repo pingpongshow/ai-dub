@@ -155,6 +155,18 @@ SYSTEM = (
 )
 
 
+def source_unsure(ln: L.Line) -> bool:
+    """Recognition caught this line only when listening again on its own (a child's
+    "Daddy!" under music): its text may be misheard (ちち as おじい), so the line's own
+    English subtitle carries its meaning."""
+    return bool(ln.relisten and ln.english_ref)
+
+
+UNSURE = {"source_unsure": True}
+UNSURE_NOTE = ("source_unsure marks a line recognition barely heard: its source text may be misheard, so "
+               "subtitle_hint carries the meaning there. ")
+
+
 def translate_prompt(batch: list[L.Line], prev: list[L.Line], ctx: str, rate: float, names: dict) -> list[dict]:
     items = []
     for ln in batch:
@@ -164,13 +176,15 @@ def translate_prompt(batch: list[L.Line], prev: list[L.Line], ctx: str, rate: fl
             d["subtitle_hint"] = ln.english_ref
         elif ln.english_context:
             d["nearby_subtitle"] = ln.english_context
+        if source_unsure(ln):
+            d.update(UNSURE)
         items.append(d)
     before = [{"speaker": names.get(l.character, l.character), "text": l.source_text} for l in prev]
     user = (f"{ctx}\n\nEarlier in the scene:\n{json.dumps(before, ensure_ascii=False)}\n\n"
             "Lines to dub, in order. Translate what the source text says. subtitle_hint (a human English "
             "subtitle for the line) helps with names and nuance but loses to the source text when they "
             "disagree; nearby_subtitle may cover this and a neighbouring line, so use only the part that "
-            "matches:\n"
+            "matches. " + UNSURE_NOTE + "Lines:\n"
             f"{json.dumps(items, ensure_ascii=False, indent=0)}\n\n"
             'Return {"lines": [{"id": <id>, "en": "<dub line>", "short": "<shorter alternative, about 75% '
             'of the syllables>"}]} with one entry per id.')
@@ -180,10 +194,11 @@ def translate_prompt(batch: list[L.Line], prev: list[L.Line], ctx: str, rate: fl
 def reflect_prompt(batch: list[L.Line], ctx: str, rate: float, names: dict, draft: dict) -> list[dict]:
     items = [{"id": ln.id, "speaker": names.get(ln.character, ln.character), "text": ln.source_text,
               "draft": draft.get(ln.id, {}).get("en", ""), "target_syllables": target_syllables(ln.duration, rate),
-              "draft_syllables": syllables(draft.get(ln.id, {}).get("en", ""))} for ln in batch]
+              "draft_syllables": syllables(draft.get(ln.id, {}).get("en", "")),
+              **({**UNSURE, "subtitle_hint": ln.english_ref} if source_unsure(ln) else {})} for ln in batch]
     user = (f"{ctx}\n\nReview this draft English dub. For each line, note concrete problems: wrong meaning, "
             "unnatural or stiff English, wrong pronoun, inconsistent names, or a length far from "
-            "target_syllables. Say 'ok' when a line is fine.\n"
+            "target_syllables. Say 'ok' when a line is fine. " + UNSURE_NOTE + "\n"
             f"{json.dumps(items, ensure_ascii=False, indent=0)}\n\n"
             'Return {"notes": [{"id": <id>, "note": "..."}]}.')
     return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
@@ -192,9 +207,10 @@ def reflect_prompt(batch: list[L.Line], ctx: str, rate: float, names: dict, draf
 def rewrite_prompt(batch: list[L.Line], ctx: str, rate: float, names: dict, draft: dict, notes: dict) -> list[dict]:
     items = [{"id": ln.id, "speaker": names.get(ln.character, ln.character), "text": ln.source_text,
               "draft": draft.get(ln.id, {}).get("en", ""), "note": notes.get(ln.id, "ok"),
-              "target_syllables": target_syllables(ln.duration, rate)} for ln in batch]
+              "target_syllables": target_syllables(ln.duration, rate),
+              **({**UNSURE, "subtitle_hint": ln.english_ref} if source_unsure(ln) else {})} for ln in batch]
     user = (f"{ctx}\n\nRewrite the dub lines, fixing what each note says, so they sound natural when spoken "
-            "and fit target_syllables. Keep lines that are already good.\n"
+            "and fit target_syllables. Keep lines that are already good. " + UNSURE_NOTE + "\n"
             f"{json.dumps(items, ensure_ascii=False, indent=0)}\n\n"
             'Return {"lines": [{"id": <id>, "en": "<final line>", "short": "<shorter alternative, about 75% '
             'of the syllables>"}]}.')
@@ -205,14 +221,21 @@ def condense_prompt(items: list[dict], ctx: str) -> list[dict]:
     """Ask for shorter dub lines that keep the meaning.
 
     items: {"id", "speaker", "text" (source, authoritative), "subtitle_hint", "current" (too long),
-            "max_syllables"}."""
-    user = (f"{ctx}\n\nThese dub lines are too long for the time the character speaks. Rewrite each so it "
+            "max_syllables", optional "voice_could_not_say" (words the voice garbled), "voice_heard_as"
+            (what a listener heard from the voice's tries), "source_unsure"}."""
+    user = (f"{ctx}\n\nThese dub lines are too long for the time the character speaks, or the voice "
+            "couldn't say them clearly. Rewrite each so it "
             "fits max_syllables when spoken, keeping the meaning of the source text (what was actually said) "
             "and its tone. You may drop filler and repeated "
             "words, use contractions and shorter synonyms, and leave out names or details the scene makes "
             "obvious. Never change what is being said. When max_syllables is 1 or 2, use the single word or "
             "short interjection that carries the line's meaning (for example \"What?\", \"No!\", \"Run!\", "
-            "\"Thanks.\").\n"
+            "\"Thanks.\"). voice_heard_as is what a listener heard every time the voice said the current line: "
+            "the voice can't say that wording clearly, so for those lines en and shortest must use different "
+            "words from current (never the same words again), plain everyday ones the voice can say clearly; "
+            "voice_could_not_say lists the words it garbled. No abbreviations, slang clippings or nonsense "
+            "words: a counting rhyme becomes what it means, such as \"Which one, which one...\". Names stay. "
+            + UNSURE_NOTE + "\n"
             f"{json.dumps(items, ensure_ascii=False, indent=0)}\n\n"
             'Return {"lines": [{"id": <id>, "en": "<line within max_syllables>", "shortest": "<an even '
             'shorter version, about two thirds as long, same meaning>"}]}.')
@@ -222,9 +245,11 @@ def condense_prompt(items: list[dict], ctx: str) -> list[dict]:
 def meaning_check_prompt(items: list[dict], ctx: str) -> list[dict]:
     """Ask whether shortened lines still mean what the original says.
 
-    items: {"id", "text" (source, authoritative), "full_english", "options": {"a": ..., "b": ...}}"""
+    items: {"id", "text" (source, authoritative), "full_english", "options": {"a": ..., "b": ...},
+            optional "source_unsure"}"""
     user = (f"{ctx}\n\nFor each line, check every shortened option against what the source text says (the "
-            "spoken words are authoritative; full_english is the longer dub line). An option passes only "
+            "spoken words are authoritative; full_english is the longer dub line; where source_unsure is "
+            "set the source text may be misheard, so check against full_english). An option passes only "
             "if a viewer would understand the same thing: same intent, same key information, nothing cut "
             "off mid-thought (\"I\" for \"I know\" fails; \"Got it.\" for \"I understand\" passes).\n"
             f"{json.dumps(items, ensure_ascii=False, indent=0)}\n\n"

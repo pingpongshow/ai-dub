@@ -342,7 +342,10 @@ def build(job: Job) -> list[L.Line]:
         owned = assign_words(words, en_cues, turns=turns)
         for k, q in enumerate(en_cues):
             ws = owned[k]
-            a, b = (ws[0]["start"], ws[-1]["end"]) if ws else (q.start, q.end)
+            # A stray syllable (な at the edge of a whimper) doesn't time the line: the subtitle
+            # does, so the line is long enough to be listened to again.
+            heard = len(clean_norm(join_words(ws, lang))) > 1
+            a, b = (ws[0]["start"], ws[-1]["end"]) if ws and heard else (q.start, q.end)
             raw.append(L.Line(id=0, start=a, end=b, source_text=join_words(ws, lang), source_lang=lang,
                               text_origin="asr", english_ref=q.text, kind=L.SONG if q.kind == SONG else L.SPEECH,
                               words=[L.Word(**w) for w in ws], name_hint=q.name))
@@ -443,7 +446,9 @@ def relisten(job: Job, lines: list[L.Line], lang: str, only: list[L.Line] | None
             t, text = "", ""
         ln.relisten = text
         if not t or is_interjection(text, lang):
-            ln.source_text, ln.text_origin = first[ln.id]
+            # A stray syllable heard again as a sound (うわ) is that sound, not a word to translate.
+            if not (t and len(clean_norm(first[ln.id][0])) <= 1):
+                ln.source_text, ln.text_origin = first[ln.id]
             ln.heard_chars = 0 if ln.heard_chars <= 0 else ln.heard_chars
             continue
         ln.heard_chars = max(ln.heard_chars, len(t))

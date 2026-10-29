@@ -56,7 +56,9 @@ CONTRACTIONS = {"it's": "it is", "i'm": "i am", "you're": "you are", "we're": "w
                 "don't": "do not", "doesn't": "does not", "didn't": "did not", "can't": "cannot", "won't": "will not",
                 "isn't": "is not", "aren't": "are not", "wasn't": "was not", "i'll": "i will", "you'll": "you will",
                 "we'll": "we will", "i've": "i have", "you've": "you have", "i'd": "i would", "let's": "let us",
-                "gonna": "going to", "wanna": "want to", "gotta": "got to"}
+                "gonna": "going to", "wanna": "want to", "gotta": "got to", "outta": "out of", "kinda": "kind of",
+                "sorta": "sort of", "lemme": "let me", "gimme": "give me", "dunno": "do not know",
+                "alright": "all right", "ok": "okay"}
 
 
 IS_CONTRACTED = {"who", "what", "where", "when", "why", "how", "that", "there", "here", "it", "he", "she", "this"}
@@ -77,10 +79,45 @@ def _words(text: str) -> list[str]:
     return out
 
 
+ONES = ("zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen "
+        "sixteen seventeen eighteen nineteen").split()
+TENS = "_ _ twenty thirty forty fifty sixty seventy eighty ninety".split()
+
+
+def number_words(n: int) -> list[str]:
+    """212 as said: "two hundred twelve" (an "and" heard after "hundred" is dropped)."""
+    if n >= 1000:
+        return number_words(n // 1000) + ["thousand"] + (number_words(n % 1000) if n % 1000 else [])
+    if n >= 100:
+        return [ONES[n // 100], "hundred"] + (number_words(n % 100) if n % 100 else [])
+    if n >= 20:
+        return [TENS[n // 10]] + ([ONES[n % 10]] if n % 10 else [])
+    return [ONES[n]]
+
+
+def _numbers(words: list[str], digitwise: bool) -> list[str]:
+    """Numbers in the script as the voice may read them: as a number or digit by digit."""
+    out = []
+    for w in words:
+        if w.isdigit() and len(w) <= 6:
+            out.extend([ONES[int(d)] for d in w] if digitwise else number_words(int(w)))
+        else:
+            out.append(w)
+    return out
+
+
 def wer(ref: str, hyp: str) -> float:
     """Back-check error rate. Short lines (names, one or two words) are compared
-    letter by letter, so "Kikoru" heard as "Kikaru" is a small error, not 100%."""
+    letter by letter, so "Kikoru" heard as "Kikaru" is a small error, not 100%.
+    A number counts read either way ("212": "two hundred and twelve", "two one two")."""
     a, b = _words(ref), _words(hyp)
+    b = [w for i, w in enumerate(b) if not (w == "and" and i and b[i - 1] in ("hundred", "thousand"))]
+    if any(w.isdigit() for w in a):
+        return min(_wer(_numbers(a, d), _numbers(b, d)) for d in (False, True))
+    return _wer(a, b)
+
+
+def _wer(a: list[str], b: list[str]) -> float:
     if not a:
         return 0.0 if not b else 1.0
     # A heard word that sounds like the script's word is that word ("breaks" for "brakes").
@@ -123,13 +160,25 @@ def missed_words(text: str, heard: str) -> list[str]:
     lower = [w.lower().replace("’", "'") for w in raw]
     groups = [w.split("-") for w in lower if "-" in w and w.replace("-", "") not in pronounce.LEXICON]
     groups += [[a, b] for a, b in zip(lower, lower[1:]) if not (a in pronounce.LEXICON and b in pronounce.LEXICON)]
+    # ... or heard as two words ("ten pents" as "ten pence"), which excuses only the made-up part.
+    heard_pairs = [x + y for x, y in zip(heard_words, heard_words[1:])]
     for parts in groups:
         joined = "".join(parts)
-        if pronounce.LEXICON and any(pronounce.near(joined, h) or pronounce.same_sound(joined, h) for h in heard_words):
+        if not pronounce.LEXICON:
+            continue
+        if any(pronounce.near(joined, h) or pronounce.same_sound(joined, h) for h in heard_words):
             heard_set.update(parts)
+        elif any(pronounce.near(joined, h) or pronounce.same_sound(joined, h) for h in heard_pairs):
+            heard_set.update(p for p in parts if p not in pronounce.LEXICON)
     out = []
     for w in _words(text):
         base = re.sub(r"'s$", "", w)  # "West's" heard as "West", "how's" as "how is"
+        if w.isdigit():  # a number must be heard whole, as a number or digit by digit
+            said = [x for i, x in enumerate(heard_words) if not (x == "and" and i and heard_words[i - 1] in ("hundred", "thousand"))]
+            joined = f" {' '.join(said)} "
+            if not any(f" {' '.join(_numbers([w], d))} " in joined for d in (False, True)) and w not in heard_set:
+                out.append(w)
+            continue
         if len(w) < 3 or base in STOPWORDS or w in names or base in names or w in heard_set or base in heard_set \
                 or pronounce.heard_as(w, heard_words) or pronounce.heard_as(base, heard_words):
             continue
@@ -140,12 +189,17 @@ def missed_words(text: str, heard: str) -> list[str]:
     return out
 
 
+def missed_by_voice(ln: L.Line) -> list[str]:
+    """Words of the line the back-check didn't hear in some take."""
+    scores = list(ln.take_scores.values()) + list((ln.fit or {}).get("scores", {}).values())
+    return sorted({w for s in scores for w in s.get("missed", [])})
+
+
 def respelled(ln: L.Line) -> str:
     """The line with the words its takes missed spelled as they sound, where their
     spelling doesn't show it ("Nguyen!" as "noo yen!")."""
-    scores = list(ln.take_scores.values()) + list((ln.fit or {}).get("scores", {}).values())
     text = ln.en
-    for w in sorted({w for s in scores for w in s.get("missed", [])}):
+    for w in missed_by_voice(ln):
         sound = pronounce.respell(w)
         if sound:
             text = re.sub(rf"(?<![\w']){re.escape(w)}(?![\w'])", sound, text, flags=re.I)
@@ -394,7 +448,7 @@ def run_check(job: Job) -> None:
         ln.take_scores = mine
         best = max(mine, key=lambda p: mine[p].get("score", 0))
         if _passes(mine[best], job.cfg):
-            ln.take = best
+            ln.take, ln.fallback = best, ""  # (a resumed job may carry an earlier run's verdict)
         else:
             ln.take = ""
             ln.fallback = f"every take failed the back-check (best: WER {mine[best].get('wer')}, " \
@@ -594,8 +648,18 @@ def run_condense(job: Job) -> None:
             pace = _pace(job, ln) * (0.85 if rnd else 1.0)  # aim a little shorter on the second round
             limit = max(1, int((window * rules.stretch_max - overhead) * pace))
             ln.fit.setdefault("long_en", ln.en)
-            items.append({"id": ln.id, "speaker": names.get(ln.character, ln.character), "text": ln.source_text,
-                          "subtitle_hint": ln.english_ref, "current": ln.en, "max_syllables": limit})
+            item = {"id": ln.id, "speaker": names.get(ln.character, ln.character), "text": ln.source_text,
+                    "subtitle_hint": ln.english_ref, "current": ln.en, "max_syllables": limit}
+            # Came out garbled ("comm" as "con", "Eeny, meeny" as "Do you have any mini?"): reworded
+            # around what the voice can't say.
+            if missed_by_voice(ln):
+                item["voice_could_not_say"] = missed_by_voice(ln)
+            heard = list(dict.fromkeys(s_["heard"] for s_ in ln.take_scores.values() if s_.get("heard")))
+            if heard and "back-check" in ln.fallback:
+                item["voice_heard_as"] = heard[:3]
+            if T.source_unsure(ln):
+                item.update(T.UNSURE)
+            items.append(item)
         job.status(f"round {rnd + 1}: shortening {len(todo)} lines")
         by_id = {ln.id: ln for ln in todo}
         with T.LLM(job) as llm:
@@ -615,7 +679,8 @@ def run_condense(job: Job) -> None:
             # Meaning check: a shortened line is used only if it still says the same thing.
             checks = [{"id": i, "text": by_id[i].source_text,
                        "full_english": by_id[i].fit.get("long_en", by_id[i].en),
-                       "options": {k: v for k, v in opts.items() if v and v != by_id[i].en}}
+                       "options": {k: v for k, v in opts.items() if v and v != by_id[i].en},
+                       **(T.UNSURE if T.source_unsure(by_id[i]) else {})}
                       for i, opts in short.items() if i in by_id]
             checks = [c for c in checks if c["options"]]
             ok: dict[int, set] = {}

@@ -59,6 +59,8 @@ def skeleton(word: str) -> str:
     w = re.sub(r"mb$", "m", w)
     w = re.sub(r"c(?=[eiy])", "s", w)
     w = w.translate(str.maketrans("cqzdbgv", "kkstpkf"))
+    if not w:  # only silent letters ("gh")
+        return ""
     first = "A" if w[0] in "aeiouy" else ""
     rest = re.sub(r"[aeiouyhw]", "", w[1:] if first else w)
     return first + re.sub(r"(.)\1+", r"\1", rest)
@@ -99,10 +101,30 @@ def heard_split(word: str, x: str, y: str) -> bool:
     return len(x) <= 3 and len(y) <= 3 and (same_sound(word, x + y) or split_sound(word, x, y))
 
 
+def _one_apart(x: str, y: str) -> bool:
+    if abs(len(x) - len(y)) > 1:
+        return False
+    if len(x) == len(y):
+        return sum(p != q for p, q in zip(x, y)) <= 1
+    longer, shorter = (x, y) if len(x) > len(y) else (y, x)
+    return any(longer[:i] + longer[i + 1:] == shorter for i in range(len(longer)))
+
+
+def made_up_match(word: str, heard: str) -> bool:
+    """A word the dictionary doesn't know (a rhyme's "eeny", an invented name) heard
+    with one sound off ("Ifny"): recognition has to guess its spelling from a voice
+    that never quite matches. Dictionary words get no such slack."""
+    if not LEXICON or word in LEXICON:
+        return False
+    x, y = skeleton(word), skeleton(heard)
+    # Starting with a vowel or not must agree ("eeny" isn't "mini").
+    return min(len(x), len(y)) >= 2 and (x[0] == "A") == (y[0] == "A") and _one_apart(x, y)
+
+
 def heard_as(word: str, heard: list[str]) -> bool:
     """The word, or something sounding the same, is among the heard words; also as
     short pieces recognition split it into."""
-    if any(same_sound(word, h) for h in heard):
+    if any(same_sound(word, h) or made_up_match(word, h) for h in heard):
         return True
     return any(heard_split(word, x, y) for x, y in zip(heard, heard[1:]))
 
@@ -134,12 +156,7 @@ def respell(word: str) -> str | None:
 def near(a: str, b: str) -> bool:
     """Skeletons at most one sound apart, for longer made-up compounds ("ten-pent" heard as "tenpence")."""
     x, y = skeleton(a), skeleton(b)
-    if min(len(x), len(y)) < 5 or abs(len(x) - len(y)) > 1:
-        return False
-    if len(x) == len(y):
-        return sum(p != q for p, q in zip(x, y)) <= 1
-    longer, shorter = (x, y) if len(x) > len(y) else (y, x)
-    return any(longer[:i] + longer[i + 1:] == shorter for i in range(len(longer)))
+    return min(len(x), len(y)) >= 5 and _one_apart(x, y)
 
 
 def only_sounds(words: list[str]) -> bool:
