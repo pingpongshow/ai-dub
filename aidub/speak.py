@@ -133,6 +133,9 @@ def _requests(job: Job, ln: L.Line, text: str, takes: int, tag: str, dlg, sr, fa
             req_base["emo_vector"] = vec
     if factor is not None:
         req_base["duration_factor"] = factor
+    for key in ("num_beams", "diffusion_steps"):  # voice-model speed settings (unset: the model's own)
+        if job.cfg.get(f"speak.{key}"):
+            req_base[key] = int(job.cfg.get(f"speak.{key}"))
     out = []
     for t in range(takes):
         out.append({**req_base, "seed": 1000 + ln.id * 7 + t + seed_offset,

@@ -2,6 +2,8 @@
 
 Speaker timbre from a reference clip, emotion from the original line (or an
 8-value emotion vector), and a duration factor (>1 slower/longer, 0.5-2.0).
+Speed settings per item: num_beams (candidates weighed while writing the speech
+codes, model default 3) and diffusion_steps (refinement steps, model default 25).
 Output: 22.05 kHz mono WAV.
 """
 
@@ -31,9 +33,27 @@ def load(args):
             "sample_rate": 22050}
 
 
+def _refinement_steps(tts) -> None:
+    """The model fixes its refinement steps at 25 inside infer(); its refiner is
+    called with the step count as the sixth argument, so a wrapper can set it."""
+    cfm = tts.s2mel.models["cfm"]
+    if getattr(cfm, "_aidub_inference", None):
+        return
+    cfm._aidub_inference = cfm.inference
+
+    def inference(*a, **k):
+        a = list(a)
+        if state.get("steps") and len(a) > 5:
+            a[5] = state["steps"]
+        return cfm._aidub_inference(*a, **k)
+
+    cfm.inference = inference
+
+
 def synthesize(args):
     import torch
     tts = state["tts"]
+    _refinement_steps(tts)
     done = []
     for it in args["items"]:
         out = Path(it["out"])
@@ -42,6 +62,9 @@ def synthesize(args):
             torch.manual_seed(int(it["seed"]))
         kw = dict(spk_audio_prompt=it["speaker_ref"], text=it["text"], output_path=str(out), lang="EN",
                   duration_factor=float(it.get("duration_factor", 1.0)), verbose=False)
+        if it.get("num_beams"):
+            kw["num_beams"] = int(it["num_beams"])
+        state["steps"] = int(it.get("diffusion_steps") or 0)
         if it.get("emo_vector"):
             kw["emo_vector"] = list(it["emo_vector"])
             kw["emo_alpha"] = float(it.get("emo_alpha", 0.65))

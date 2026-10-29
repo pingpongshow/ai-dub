@@ -94,6 +94,8 @@ speakers:
 speak:
   takes: 2
   processes: 2              # voice-model processes sharing the GPU (one voices a line at a time, leaving it mostly idle)
+  num_beams:                # candidates the voice model weighs per take (empty: its default, 3)
+  diffusion_steps:          # its sound-refinement steps (empty: its default, 25)
   emo_alpha: 0.35            # how much of the original line's emotion the dub takes (0.35 judged most natural)
   min_emotion_ref_s: 1.0
   max_similarity_drop: 0.25 # reject a take this far below the character's median similarity
