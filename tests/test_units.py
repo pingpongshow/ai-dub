@@ -253,6 +253,9 @@ class _StubJob:
     def __getitem__(self, k):
         return self._data[k]
 
+    def get(self, k, d=None):
+        return self._data.get(k, d)
+
 
 def test_named_characters_merged_by_diarization_keep_own_voices(tmp_path):
     from aidub import voicebank
@@ -568,3 +571,83 @@ def test_backcheck_spoken_forms_and_numbers():
     assert speak.missed_words("K-212.", "K two hundred.") == ["212"]
     assert speak.missed_words("K-212.", "K two one two.") == [] and speak.missed_words("Room 4.", "Room 4.") == []
     assert speak.number_words(1999) == ["one", "thousand", "nine", "hundred", "ninety", "nine"]
+
+
+class _SimJob(_StubJob):
+    """A job whose speaker worker scores text pairs from a table (unknown pairs: unrelated)."""
+    def __init__(self, data, sims):
+        super().__init__({"stages.speaker.worker": "speaker"}, data)
+        self.qc, self.sims = {}, sims
+
+    def log(self, msg):
+        pass
+
+    def worker(self, *a, **k):
+        job = self
+
+        class W:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *e):
+                pass
+
+            def call(self, op, args):
+                return {"similarity": [job.sims.get(tuple(p), 0.1) for p in args.get("pairs", [])]}
+        return W()
+
+
+def test_subtitle_kept_where_recognition_misheard_and_english_agrees():
+    from aidub import align
+    misheard = L.Line(1, 0, 2, source_text="日々日々の重さ", text_origin="asr", subtitle_text="日比野カフカ",
+                      english_ref="Kafka Hibino...")
+    other_cut = L.Line(2, 3, 5, source_text="行くぞ みんな", text_origin="asr", subtitle_text="待って",
+                       english_ref="Let's go, everyone!")
+    fine = [L.Line(i, i * 3, i * 3 + 2, source_text=f"せりふ{i}です", english_ref=f"Line {i}.") for i in range(3, 7)]
+    sims = {("Kafka Hibino...", "日比野カフカ"): 0.8, ("Kafka Hibino...", "日々日々の重さ"): 0.2,
+            ("Let's go, everyone!", "行くぞ みんな"): 0.7, ("Let's go, everyone!", "待って"): 0.3}
+    sims.update({(f"Line {i}.", f"せりふ{i}です"): 0.7 for i in range(3, 7)})
+    job = _SimJob({"subtitles": {"source": "embedded:3"}}, sims)
+    align.check_english_refs(job, [misheard, other_cut] + fine)
+    assert misheard.source_text == "日比野カフカ" and misheard.text_origin == "subtitle:embedded:3"
+    assert misheard.english_ref == "Kafka Hibino..."            # now matches: kept as the meaning
+    assert other_cut.source_text == "行くぞ みんな" and other_cut.text_origin == "asr"   # the speech still wins
+    assert job.qc["subtitle_lines_kept_over_recognition"] == 1
+
+
+def test_loud_score_under_subtitled_dialogue_is_not_background(monkeypatch):
+    from aidub import align
+    from aidub.subtitles.model import Cue
+    job = _StubJob({}, {"diarization": {"segments": []}, "events": [], "ingest": {},
+                        "subtitles": {"source_language": "ja"}})
+    def lines():
+        return [L.Line(1, 0, 2, source_text="総員退避!", english_ref="Everyone, retreat!", music_db=8.0,
+                       loudness_db=-31.0),
+                L.Line(2, 3, 5, source_text="出入り口ドアが閉まります", music_db=27.0, loudness_db=-52.0),
+                L.Line(3, 6, 8, source_text="夢の中こぼれ落ちた", music_db=9.0, loudness_db=-30.0),
+                L.Line(4, 9, 11, source_text="ここは危ない", english_ref="It's dangerous here.", music_db=1.0,
+                       loudness_db=-30.0)]
+    monkeypatch.setattr(align, "load_chosen", lambda j, w: [Cue(start=0, end=2, text="x")] if w == "english" else [])
+    ls = lines()
+    align.classify(job, ls)
+    assert [ln.kind for ln in ls] == [L.SPEECH, L.BACKGROUND, L.BACKGROUND, L.SPEECH]
+    # Without English subtitles there's nothing to tell dialogue from lyrics: loud music keeps the original.
+    monkeypatch.setattr(align, "load_chosen", lambda j, w: [])
+    ls = lines()
+    align.classify(job, ls)
+    assert ls[0].kind == L.BACKGROUND
+
+
+def test_subtitle_led_prompt_offers_checked_subtitles_only():
+    from aidub import translate as T
+    plain = L.Line(1, 0, 2, source_text="総員退避!", english_ref="Everyone, retreat!")
+    unsure = L.Line(2, 3, 4, source_text="ちち", english_ref="Daddy!", relisten="ちち")
+    none = L.Line(3, 5, 6, source_text="はい")
+    led = T.translate_prompt([plain, unsure, none], [], "", 4.3, {}, "subtitle")[1]["content"]
+    assert '"subtitle": "Everyone, retreat!"' in led and "subtitle_ok" in led
+    assert '"subtitle_hint": "Daddy!"' in led                     # misheard lines keep their own rule
+    audio = T.translate_prompt([plain, unsure, none], [], "", 4.3, {})[1]["content"]
+    assert '"subtitle": ' not in audio and "subtitle_ok" not in audio and "subtitle-led" not in audio
+    plain.en_from = "subtitle"
+    assert T.flags(plain) == {"subtitle_led": True, "subtitle_hint": "Everyone, retreat!"}
+    assert T.flags(none) == {}

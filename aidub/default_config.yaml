@@ -81,6 +81,8 @@ translate:
   style: natural            # natural | close
   honorifics: keep          # keep | drop (per-show setting overrides)
   reflect: true             # translate -> reflect -> rewrite
+  lead: audio               # audio: translate what was said (subtitles are hints); subtitle: dub the English
+                            # subtitle where it means what was said (checked line by line), else the speech
   syllables_per_second: 4.3 # voice model's measured pace (plus ~0.25 s per line), used to size lines
 
 speakers:

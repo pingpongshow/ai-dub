@@ -657,8 +657,7 @@ def run_condense(job: Job) -> None:
             heard = list(dict.fromkeys(s_["heard"] for s_ in ln.take_scores.values() if s_.get("heard")))
             if heard and "back-check" in ln.fallback:
                 item["voice_heard_as"] = heard[:3]
-            if T.source_unsure(ln):
-                item.update(T.UNSURE)
+            item.update(T.flags(ln))
             items.append(item)
         job.status(f"round {rnd + 1}: shortening {len(todo)} lines")
         by_id = {ln.id: ln for ln in todo}
@@ -680,7 +679,7 @@ def run_condense(job: Job) -> None:
             checks = [{"id": i, "text": by_id[i].source_text,
                        "full_english": by_id[i].fit.get("long_en", by_id[i].en),
                        "options": {k: v for k, v in opts.items() if v and v != by_id[i].en},
-                       **(T.UNSURE if T.source_unsure(by_id[i]) else {})}
+                       **{k: v for k, v in T.flags(by_id[i]).items() if k != "subtitle_hint"}}
                       for i, opts in short.items() if i in by_id]
             checks = [c for c in checks if c["options"]]
             ok: dict[int, set] = {}

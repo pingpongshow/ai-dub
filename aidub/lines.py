@@ -40,6 +40,7 @@ class Line:
     words: list[Word] = field(default_factory=list)
     heard_chars: int = -1              # characters speech recognition heard in this span (-1: not measured)
     relisten: str = ""                # what recognition heard re-listening to this line alone (wordless check)
+    subtitle_text: str = ""           # the source subtitle's wording, where recognition heard something else
     music_db: float = -99.0           # music & effects level under the line, relative to the voice
     scene: int = 0
     overlap: bool = False
@@ -49,6 +50,7 @@ class Line:
     pan: float = 0.0                  # -1 left .. +1 right
     en: str = ""                      # dubbed English line
     en_short: str = ""                # shorter alternative for overruns
+    en_from: str = ""                 # "subtitle": written from the English subtitle (checked against the speech)
     voice: str = ""                   # reference clip used
     voice_note: str = ""              # minor-speaker substitution, if any
     take: str = ""                    # chosen fitted audio file

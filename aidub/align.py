@@ -43,7 +43,8 @@ MIN_SPLIT_S = 0.6
 PHRASE_GAP_S = 0.25   # words closer than this are one phrase when assigning them to subtitle cues
 SONG_MUSIC_DB = -6.0  # music this loud under a voice (relative to it), next to a song, is part of the song
 SONG_REACH_S = 3.0
-BACKGROUND_DB = 6.0  # music & effects this far above the voice: the speech is in the background track
+BACKGROUND_DB = 6.0  # music & effects this far above the voice: the speech may be in the background track
+BACKGROUND_QUIET_DB = 10.0  # ...and the voice this far below the episode's usual dialogue: it is
 CROWD_MAX_S = 2.0     # longer lines over other voices (a TV, a crowd) are still one person's line
 CROWD_SHARE = 0.6     # share of a line with overlapping speakers that keeps the original
 SONG_STRETCH_S = 15.0  # song lines this close together: what lies between is the same song
@@ -327,15 +328,16 @@ def build(job: Job) -> list[L.Line]:
             i = all_src.index(q) if q in all_src else -1
             heard = owned[k]
             ws = sub_words.get(str(i)) or heard
-            text, origin = q.text, f"subtitle:{src_cand}"
+            text, origin, disputed = q.text, f"subtitle:{src_cand}", ""
             spoken = join_words(heard, lang)
             # What was actually said wins: a subtitle line that disagrees with the speech
             # (wrong line, different cut, mistranslation in a fan sub) gives way to recognition.
+            # The English subtitle may yet show recognition misheard (check_english_refs).
             if len(spoken) >= 3 and cer(q.text, spoken) > SUBTITLE_DISAGREES:
-                text, origin, ws = spoken, "asr", heard
+                text, origin, ws, disputed = spoken, "asr", heard, q.text
             ln = L.Line(id=0, start=q.start, end=q.end, source_text=text, source_lang=lang,
                         text_origin=origin, kind=L.SONG if q.kind == SONG else L.SPEECH,
-                        words=[L.Word(**w) for w in ws], name_hint=q.name)
+                        words=[L.Word(**w) for w in ws], name_hint=q.name, subtitle_text=disputed)
             raw.append(ln)
             covered.append((q.start, q.end))
     elif en_cues:
@@ -656,6 +658,12 @@ def classify(job: Job, lines: list[L.Line]) -> None:
     for which in ("source", "english"):
         songs += [[q.start, q.end] for q in load_chosen(job, which) if q.kind == SONG]
     lang = job["subtitles"].get("source_language", "")
+    # Loud music alone doesn't make speech background: an action score runs 6-10 dB over
+    # ordinary dialogue. With English subtitles, a line at the usual dialogue level that
+    # has its own subtitle is dialogue; lyrics and chatter have none.
+    subtitled = bool(load_chosen(job, "english"))
+    levels = [ln.loudness_db for ln in lines if ln.kind == L.SPEECH]
+    usual = float(np.median(levels)) if levels else 0.0
     for ln in lines:
         tags: list[str] = []
         langs: dict[str, float] = {}
@@ -676,7 +684,8 @@ def classify(job: Job, lines: list[L.Line]) -> None:
             ln.kind = L.SONG
         elif top_lang == "en" and lang != "en" and ln.duration >= 0.8 and not NON_LATIN.search(ln.source_text):
             ln.kind = L.ENGLISH
-        elif ln.kind == L.SPEECH and ln.music_db >= BACKGROUND_DB:
+        elif (ln.kind == L.SPEECH and ln.music_db >= BACKGROUND_DB
+              and not (subtitled and ln.english_ref and ln.loudness_db > usual - BACKGROUND_QUIET_DB)):
             ln.kind = L.BACKGROUND  # the voice is in the music & effects track; a dub can't replace it
         elif (ln.kind == L.SPEECH and ln.duration <= CROWD_MAX_S
               and overlap_share(turns, ln.start, ln.end) >= CROWD_SHARE):
@@ -705,21 +714,41 @@ def measure(job: Job, lines: list[L.Line]) -> None:
 def check_english_refs(job: Job, lines: list[L.Line]) -> None:
     """The spoken audio is authoritative. An English subtitle line is kept as a
     line's meaning only if it matches what was said (cross-lingual similarity
-    clearly above that of unrelated pairs); otherwise it becomes a hint."""
+    clearly above that of unrelated pairs); otherwise it becomes a hint.
+
+    Where recognition overruled the source subtitle, the English subtitle also
+    settles who was right: over loud music recognition mishears (日比野カフカ as
+    日々日々の重さ), and if the English matches the source subtitle better than
+    what was heard (and better than unrelated pairs), the two subtitles agree on
+    what was said and the source subtitle's wording is kept."""
     cands = [ln for ln in lines if ln.english_ref and len(ln.source_text) >= 4 and ln.kind == L.SPEECH]
+    disputed = [ln for ln in lines if ln.subtitle_text and ln.english_ref and ln.kind == L.SPEECH]
     if len(cands) < 4 or not job.cfg.get("stages.speaker.worker"):
         return
     k = max(1, len(cands) // 2)
     pairs = [[ln.english_ref, ln.source_text] for ln in cands]
     shifted = [[ln.english_ref, cands[(i + k) % len(cands)].source_text] for i, ln in enumerate(cands)]
+    alts = [[ln.english_ref, ln.subtitle_text] for ln in disputed]
     with job.worker("speaker", gpu_stage="speaker") as w:
         w.call("load", {})
-        sims = w.call("text_similarity", {"pairs": pairs + shifted})["similarity"]
-    true, unrelated = sims[: len(cands)], sims[len(cands):]
+        sims = w.call("text_similarity", {"pairs": pairs + shifted + alts})["similarity"]
+    n = len(cands)
+    true, unrelated, alt = sims[:n], sims[n: 2 * n], sims[2 * n:]
     floor = float(np.percentile(unrelated, 75)) if unrelated else 0.0
+    heard = {id(ln): s for ln, s in zip(cands, true)}
+    kept = 0
+    for ln, s in zip(disputed, alt):
+        if s > max(floor, heard.get(id(ln), -1.0)):
+            ln.source_text, ln.text_origin = ln.subtitle_text, f"subtitle:{job['subtitles'].get('source')}"
+            if id(ln) in heard:
+                heard[id(ln)] = s
+            kept += 1
+    job.qc["subtitle_lines_kept_over_recognition"] = kept
+    if kept:
+        job.log(f"{kept} source subtitle lines recognition misheard were kept (the English subtitle agrees)")
     moved = 0
-    for ln, s in zip(cands, true):
-        if s <= floor:
+    for ln in cands:
+        if heard[id(ln)] <= floor:
             ln.english_context, ln.english_ref = ln.english_ref, ""
             moved += 1
     job.qc["subtitle_lines_disagreeing_with_speech"] = moved
@@ -759,9 +788,9 @@ def run(job: Job) -> None:
     for i, ln in enumerate(lines):
         ln.id = i + 1
     measure_music(job, lines)
+    measure(job, lines)
     classify(job, lines)
     extend_songs(lines, job["subtitles"].get("source_language", ""))
-    measure(job, lines)
     # Translation context: which window each line belongs to.
     job.set("line_windows", [next((wi for wi, (a, b) in enumerate(windows) if a <= ln.start < b), len(windows) - 1)
                              for ln in lines])

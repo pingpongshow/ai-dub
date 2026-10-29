@@ -150,7 +150,8 @@ SYSTEM = (
     "Each line must be speakable in the given time, so aim for the target syllable count. "
     "The source-language text is what was actually spoken and is authoritative. A subtitle hint is "
     "a human translation that may be inaccurate, cut differently or belong to a neighbouring line: "
-    "use it for names and nuance only where it agrees with the source text. "
+    "use it for names and nuance only where it agrees with the source text, and for who is meant "
+    "(he, she, they) where the source leaves the person unsaid. "
     "Reply with JSON only."
 )
 
@@ -166,13 +167,51 @@ UNSURE = {"source_unsure": True}
 UNSURE_NOTE = ("source_unsure marks a line recognition barely heard: its source text may be misheard, so "
                "subtitle_hint carries the meaning there. ")
 
+# Subtitle-led translation (translate.lead: subtitle): a line's English subtitle, when the
+# translator finds it means what was said, is what the dub says, fitted to the time. The
+# speech checks the subtitle instead of being the text translated.
+LED = {"subtitle_led": True}
+LED_NOTE = ("subtitle_led marks a line written from its subtitle, which was checked to mean what was said: "
+            "the dub carries subtitle_hint's meaning, so judge it against that. ")
 
-def translate_prompt(batch: list[L.Line], prev: list[L.Line], ctx: str, rate: float, names: dict) -> list[dict]:
+
+def led(ln: L.Line) -> bool:
+    return ln.en_from == "subtitle"
+
+
+def flags(ln: L.Line) -> dict:
+    """What a prompt is told about where a line's meaning comes from."""
+    return {**UNSURE, "subtitle_hint": ln.english_ref} if source_unsure(ln) else \
+        {**LED, "subtitle_hint": ln.english_ref} if led(ln) else {}
+
+
+def source_notes(items: list[dict]) -> str:
+    return UNSURE_NOTE + (LED_NOTE if any(it.get("subtitle_led") for it in items) else "")
+
+
+def lead(job: Job) -> str:
+    """"audio" (translate what was said; subtitles are hints) or "subtitle"."""
+    return str(job.profile.settings.get("lead", job.cfg.get("translate.lead", "audio")))
+
+
+LEAD_NOTE = ("Lines with \"subtitle\" are subtitle-led: it is the human English subtitle shown at this moment. "
+             "First compare its meaning with the source text: the gist, not word for word (subtitles are "
+             "condensed and cut differently, and may also cover a neighbouring line). If they say the same "
+             "thing, set \"subtitle_ok\": true and write the dub from the subtitle: natural spoken English "
+             "of about target_syllables, only the part this line says, keeping its names and who is meant. "
+             "If the source text clearly says something else, set \"subtitle_ok\": false and translate the "
+             "source text instead. ")
+
+
+def translate_prompt(batch: list[L.Line], prev: list[L.Line], ctx: str, rate: float, names: dict,
+                     lead_by: str = "audio") -> list[dict]:
     items = []
     for ln in batch:
         d = {"id": ln.id, "speaker": names.get(ln.character, ln.character), "text": ln.source_text,
              "seconds": round(ln.duration, 2), "target_syllables": target_syllables(ln.duration, rate)}
-        if ln.english_ref:
+        if ln.english_ref and lead_by == "subtitle" and not source_unsure(ln):
+            d["subtitle"] = ln.english_ref
+        elif ln.english_ref:
             d["subtitle_hint"] = ln.english_ref
         elif ln.english_context:
             d["nearby_subtitle"] = ln.english_context
@@ -183,22 +222,23 @@ def translate_prompt(batch: list[L.Line], prev: list[L.Line], ctx: str, rate: fl
     user = (f"{ctx}\n\nEarlier in the scene:\n{json.dumps(before, ensure_ascii=False)}\n\n"
             "Lines to dub, in order. Translate what the source text says. subtitle_hint (a human English "
             "subtitle for the line) helps with names and nuance but loses to the source text when they "
-            "disagree; nearby_subtitle may cover this and a neighbouring line, so use only the part that "
-            "matches. " + UNSURE_NOTE + "Lines:\n"
+            "disagree; take he/she from it when the source doesn't say who; nearby_subtitle may cover this and a neighbouring line, so use only the part that "
+            "matches. " + UNSURE_NOTE + (LEAD_NOTE if any("subtitle" in d for d in items) else "") + "Lines:\n"
             f"{json.dumps(items, ensure_ascii=False, indent=0)}\n\n"
             'Return {"lines": [{"id": <id>, "en": "<dub line>", "short": "<shorter alternative, about 75% '
-            'of the syllables>"}]} with one entry per id.')
+            'of the syllables>"' + (', "subtitle_ok": <true|false, for lines with subtitle>'
+                                     if any("subtitle" in d for d in items) else "") +
+            '}]} with one entry per id.')
     return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
 
 
 def reflect_prompt(batch: list[L.Line], ctx: str, rate: float, names: dict, draft: dict) -> list[dict]:
     items = [{"id": ln.id, "speaker": names.get(ln.character, ln.character), "text": ln.source_text,
               "draft": draft.get(ln.id, {}).get("en", ""), "target_syllables": target_syllables(ln.duration, rate),
-              "draft_syllables": syllables(draft.get(ln.id, {}).get("en", "")),
-              **({**UNSURE, "subtitle_hint": ln.english_ref} if source_unsure(ln) else {})} for ln in batch]
+              "draft_syllables": syllables(draft.get(ln.id, {}).get("en", "")), **flags(ln)} for ln in batch]
     user = (f"{ctx}\n\nReview this draft English dub. For each line, note concrete problems: wrong meaning, "
             "unnatural or stiff English, wrong pronoun, inconsistent names, or a length far from "
-            "target_syllables. Say 'ok' when a line is fine. " + UNSURE_NOTE + "\n"
+            "target_syllables. Say 'ok' when a line is fine. " + source_notes(items) + "\n"
             f"{json.dumps(items, ensure_ascii=False, indent=0)}\n\n"
             'Return {"notes": [{"id": <id>, "note": "..."}]}.')
     return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
@@ -207,10 +247,9 @@ def reflect_prompt(batch: list[L.Line], ctx: str, rate: float, names: dict, draf
 def rewrite_prompt(batch: list[L.Line], ctx: str, rate: float, names: dict, draft: dict, notes: dict) -> list[dict]:
     items = [{"id": ln.id, "speaker": names.get(ln.character, ln.character), "text": ln.source_text,
               "draft": draft.get(ln.id, {}).get("en", ""), "note": notes.get(ln.id, "ok"),
-              "target_syllables": target_syllables(ln.duration, rate),
-              **({**UNSURE, "subtitle_hint": ln.english_ref} if source_unsure(ln) else {})} for ln in batch]
+              "target_syllables": target_syllables(ln.duration, rate), **flags(ln)} for ln in batch]
     user = (f"{ctx}\n\nRewrite the dub lines, fixing what each note says, so they sound natural when spoken "
-            "and fit target_syllables. Keep lines that are already good. " + UNSURE_NOTE + "\n"
+            "and fit target_syllables. Keep lines that are already good. " + source_notes(items) + "\n"
             f"{json.dumps(items, ensure_ascii=False, indent=0)}\n\n"
             'Return {"lines": [{"id": <id>, "en": "<final line>", "short": "<shorter alternative, about 75% '
             'of the syllables>"}]}.')
@@ -235,7 +274,7 @@ def condense_prompt(items: list[dict], ctx: str) -> list[dict]:
             "words from current (never the same words again), plain everyday ones the voice can say clearly; "
             "voice_could_not_say lists the words it garbled. No abbreviations, slang clippings or nonsense "
             "words: a counting rhyme becomes what it means, such as \"Which one, which one...\". Names stay. "
-            + UNSURE_NOTE + "\n"
+            + source_notes(items) + "\n"
             f"{json.dumps(items, ensure_ascii=False, indent=0)}\n\n"
             'Return {"lines": [{"id": <id>, "en": "<line within max_syllables>", "shortest": "<an even '
             'shorter version, about two thirds as long, same meaning>"}]}.')
@@ -249,7 +288,9 @@ def meaning_check_prompt(items: list[dict], ctx: str) -> list[dict]:
             optional "source_unsure"}"""
     user = (f"{ctx}\n\nFor each line, check every shortened option against what the source text says (the "
             "spoken words are authoritative; full_english is the longer dub line; where source_unsure is "
-            "set the source text may be misheard, so check against full_english). An option passes only "
+            "set the source text may be misheard, so check against full_english" +
+            ("; so also where subtitle_led is set: the line carries its checked subtitle"
+             if any(it.get("subtitle_led") for it in items) else "") + "). An option passes only "
             "if a viewer would understand the same thing: same intent, same key information, nothing cut "
             "off mid-thought (\"I\" for \"I know\" fails; \"Got it.\" for \"I understand\" passes).\n"
             f"{json.dumps(items, ensure_ascii=False, indent=0)}\n\n"
@@ -292,7 +333,8 @@ def _collect(reply: str) -> dict[int, dict]:
     out = {}
     for item in data.get("lines", []):
         try:
-            out[int(item["id"])] = {"en": str(item.get("en", "")).strip(), "short": str(item.get("short", "")).strip()}
+            out[int(item["id"])] = {"en": str(item.get("en", "")).strip(), "short": str(item.get("short", "")).strip(),
+                                    "subtitle_ok": item.get("subtitle_ok") is True}
         except (KeyError, ValueError, TypeError):
             continue
     return out
@@ -308,6 +350,7 @@ def run(job: Job) -> None:
     names = {cid: ch["name"] for cid, ch in prof.characters.items()}
     batches = _batches(lines, windows)
     by_id = {ln.id: ln for ln in lines}
+    lead_by = lead(job)
 
     with LLM(job) as llm:
         # Pass 1: every scene at once (the engine batches them); each scene sees
@@ -315,7 +358,8 @@ def run(job: Job) -> None:
         drafts: dict[int, dict] = {}
         ctxs = [_context_block(prof, {l.character for l in b}, lang) for b in batches]
         prevs = [batches[bi - 1][-4:] if bi else [] for bi in range(len(batches))]
-        replies = llm.chat_many([translate_prompt(b, p, c, rate, names) for b, p, c in zip(batches, prevs, ctxs)])
+        replies = llm.chat_many([translate_prompt(b, p, c, rate, names, lead_by)
+                                 for b, p, c in zip(batches, prevs, ctxs)])
         retry = []
         for b, p, c, reply in zip(batches, prevs, ctxs, replies):
             try:
@@ -325,7 +369,7 @@ def run(job: Job) -> None:
             drafts.update(got)
             missing = [l for l in b if l.id not in got or not got[l.id]["en"]]
             if missing:
-                retry.append(translate_prompt(missing, p, c, rate, names))
+                retry.append(translate_prompt(missing, p, c, rate, names, lead_by))
         for reply in llm.chat_many(retry) if retry else []:  # one retry for lines the model skipped
             try:
                 drafts.update({k: v for k, v in _collect(reply).items() if v["en"]})
@@ -333,6 +377,13 @@ def run(job: Job) -> None:
                 pass
         job.check()
         job.status(f"translated {len(batches)} scenes", progress=0.5 if reflect else 1.0)
+        if lead_by == "subtitle":
+            offered = [ln for b in batches for ln in b if ln.english_ref and not source_unsure(ln)]
+            for ln in offered:
+                ln.en_from = "subtitle" if drafts.get(ln.id, {}).get("subtitle_ok") else ""
+            took = sum(led(ln) for ln in offered)
+            job.qc["subtitle_led"] = {"lines": took, "rejected": len(offered) - took}
+            job.log(f"subtitle-led: {took} lines from the subtitle, {len(offered) - took} didn't match the speech")
 
         final = dict(drafts)
         if reflect and batches:
