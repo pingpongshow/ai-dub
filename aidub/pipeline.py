@@ -23,7 +23,6 @@ STEPS: list[tuple[str, str, Callable[[Job], None]]] = [
     ("translate", "English script", translate.run),
     ("speak", "Speak", speak.run_speak),
     ("check", "Check takes", speak.run_check),
-    ("fit", "Fit timing", speak.run_fit),
     ("finalize", "Choose takes", speak.run_finalize),
     ("condense", "Shorten long lines", speak.run_condense),
     ("bwe", "Sound quality", bwe.run),

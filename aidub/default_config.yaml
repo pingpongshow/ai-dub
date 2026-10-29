@@ -29,7 +29,8 @@ stages:
   events:      { worker: events, model: iic/SenseVoiceSmall }
   ocr:         { worker: ocr }
   translate:   { worker: llm, model: RedHatAI/Qwen3.8-27B-MXFP4, gpu_memory_utilization: 0.80, max_model_len: 16384,
-                 linear_backend: marlin, attention_backend: TRITON_ATTN }
+                 linear_backend: marlin, attention_backend: TRITON_ATTN,
+                 max_num_seqs: 32, enforce_eager: false }   # all scenes at once; CUDA graphs: ~3.5x faster writing
   speak:       { worker: tts-indextts, model: IndexTeam/IndexTTS-2.5 }
   bwe:         { worker: bwe-flashsr, enabled: true, mode: auto }   # auto: only when the original is brighter
   voicedesign: { worker: voicedesign, model: Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign }
@@ -92,6 +93,7 @@ speakers:
 
 speak:
   takes: 2
+  processes: 2              # voice-model processes sharing the GPU (one voices a line at a time, leaving it mostly idle)
   emo_alpha: 0.35            # how much of the original line's emotion the dub takes (0.35 judged most natural)
   min_emotion_ref_s: 1.0
   max_similarity_drop: 0.25 # reject a take this far below the character's median similarity
@@ -112,7 +114,8 @@ fit:
 
 condense:                   # lines that still don't fit get shorter English with the same meaning
   enabled: true
-  rounds: 2
+  rounds: 1                 # each round loads the translation, voice and checking models once
+  takes: 2                  # takes of every shorter option per round
   line_overhead_s: 0.25
 
 mix:

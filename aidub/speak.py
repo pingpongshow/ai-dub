@@ -1,29 +1,40 @@
 """Steps 7-8: voice-cloned takes, back-check scoring and timing fit.
 
+Each step loads its models once and does all of their work (no switching back
+and forth): the voice model voices everything, then the checking models score
+everything, then the choice needs no model.
+
   speak    - 2-4 takes per line at natural speed: character's voice reference,
-             the original line as emotion reference (or a detected-emotion vector)
-  check    - score takes: recognition back-check (did it say the words?) and
-             speaker similarity; keep the best
-  fit      - lines that miss their window: speed factor (models that have one),
-             then the shorter wording, regenerated while the voice model is loaded
-  finalize - score the refits, then choose per line in order of quality cost:
-             fitted take, shorter wording, time-stretch up to the limit, or the
-             original audio (listed in the QC summary)
+             the original line as emotion reference (or a detected-emotion vector);
+             for lines that miss their window, a speed factor (models that have
+             one) and the shorter wording, in the same session
+  check    - score takes and refits: recognition back-check (did it say the
+             words?) and speaker similarity; keep the best take
+  finalize - choose per line in order of quality cost: fitted take, shorter
+             wording, time-stretch up to the limit, or the original audio
+             (listed in the QC summary)
+  condense - lines still in the original language: shorter English, voiced and
+             checked again
 """
 
 from __future__ import annotations
 
 import difflib
+import queue
 import re
+import threading
+from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
 
 from . import fit as F
+from . import gpu
 from . import lines as L
 from . import media
 from .job import Job
+from .workers import Worker
 
 EMOTIONS = ["happy", "angry", "sad", "afraid", "disgusted", "melancholic", "surprised", "calm"]
 SENSEVOICE_TO_VECTOR = {"HAPPY": "happy", "ANGRY": "angry", "SAD": "sad", "FEARFUL": "afraid",
@@ -130,10 +141,63 @@ def _requests(job: Job, ln: L.Line, text: str, takes: int, tag: str, dlg, sr, fa
 
 
 def _synthesize(job: Job, w, reqs: list[dict], label: str) -> None:
+    """Voice the requests in groups of 8, shared between the voice processes (`w`
+    is one worker or a list). Each take has its own seed, so who voices it doesn't
+    change it."""
+    ws = w if isinstance(w, list) else [w]
+    parts: queue.Queue = queue.Queue()
     for i in range(0, len(reqs), 8):
-        job.check()
-        w.call("synthesize", {"items": reqs[i:i + 8]})
-        job.status(f"{label}: {min(i + 8, len(reqs))}/{len(reqs)}", progress=min(1.0, (i + 8) / max(1, len(reqs))))
+        parts.put(reqs[i:i + 8])
+    done, errors, stop = [0], [], threading.Event()
+
+    def run(worker) -> None:
+        while not stop.is_set():
+            try:
+                part = parts.get_nowait()
+            except queue.Empty:
+                return
+            try:
+                worker.call("synthesize", {"items": part})
+            except Exception as exc:
+                errors.append(exc)
+                stop.set()
+                return
+            done[0] += len(part)
+
+    threads = [threading.Thread(target=run, args=(x,), daemon=True) for x in ws]
+    for t in threads:
+        t.start()
+    while any(t.is_alive() for t in threads):
+        for t in threads:
+            t.join(timeout=0.5)
+        if job.cancel_event.is_set():
+            stop.set()
+        job.status(f"{label}: {done[0]}/{len(reqs)}", progress=min(1.0, done[0] / max(1, len(reqs))))
+    if errors:
+        raise errors[0]
+    job.check()
+
+
+@contextmanager
+def _voices(job: Job):
+    """The voice model, loaded in up to `speak.processes` processes sharing the GPU:
+    one voice process leaves most of the card idle (it voices one line at a time).
+    Extra processes start only while there is room for them; never waits for one."""
+    want = max(1, int(job.cfg.get("speak.processes", 2)))
+    need = int((job.cfg.get("gpu.min_free_mb") or {}).get("speak", 4000))
+    with ExitStack() as stack:
+        ws = [stack.enter_context(job.worker("speak"))]
+        _load_tts(job, ws[0])
+        for _ in range(want - 1):
+            st = gpu.query()
+            if st.present and st.free_mb < need:
+                break
+            w = stack.enter_context(Worker(job.cfg, ws[0].name, log=job.log))
+            w.call("load", {"model": job.cfg.get("stages.speak").get("model")})
+            ws.append(w)
+        if len(ws) > 1:
+            job.log(f"voicing with {len(ws)} voice-model processes")
+        yield ws
 
 
 def _load_tts(job: Job, w) -> dict:
@@ -148,17 +212,27 @@ def _load_tts(job: Job, w) -> dict:
 
 # speak --------------------------------------------------------------------------------------
 def run_speak(job: Job) -> None:
+    """All voicing in one load of the voice model: the takes, then for lines that
+    run long or short, speed-factor versions and the shorter wording. The checks
+    for all of them come next, in one load of the checking models."""
     lines = L.load(job.path("lines.json"))
     todo = [ln for ln in lines if ln.dubbed and ln.en]
     takes = max(1, int(job.cfg.get("speak.takes", 2)))
+    rules = F.FitRules.from_config(job.cfg)
     dlg, sr = media.read_wav(job.path("audio", "dialogue.wav"), mono=True)
-    with job.worker("speak") as w:
-        _load_tts(job, w)
+    with _voices(job) as w:
+        caps = job.get("tts_caps", {})
         reqs = []
         for ln in todo:
             reqs += [r for r in _requests(job, ln, ln.en, takes, "take", dlg, sr) if not Path(r["out"]).exists()]
+        # Same speaker reference back to back: the model reuses that voice's analysis.
+        reqs.sort(key=lambda r: r["speaker_ref"])
         _synthesize(job, w, reqs, "takes")
-    job.status(f"{len(todo) * takes} takes for {len(todo)} lines")
+        plan = _plan_fit(job, lines, rules)
+        if plan:
+            _fit(job, w, caps, plan, dlg, sr, rules)
+    L.save(lines, job.path("lines.json"))
+    job.status(f"{len(todo) * takes} takes for {len(todo)} lines; {len(plan)} refitted")
 
 
 # check ----------------------------------------------------------------------------------------
@@ -234,16 +308,26 @@ def _passes(s: dict, cfg) -> bool:
     return med is None or sim >= med - float(cfg.get("speak.max_similarity_drop", 0.25))
 
 
+FIT_FILES = (("fit1_0.wav", "en"), ("fit0_0.wav", "en"), ("short_0.wav", "en_short"), ("shortfit_0.wav", "en_short"))
+
+
 def run_check(job: Job) -> None:
+    """Back-check and voice-match every take and every fitted version at once."""
     lines = L.load(job.path("lines.json"))
-    items = []
+    items, fitted = [], []
     for ln in lines:
         if not (ln.dubbed and ln.en):
             continue
-        for p in sorted(_line_dir(job, ln).glob("take_*.wav")):
+        d = _line_dir(job, ln)
+        for p in sorted(d.glob("take_*.wav")):
             F.trim(p)
             items.append((ln, ln.en, str(p)))
-    scores = score_files(job, items)
+        for name, field in FIT_FILES:
+            if (d / name).exists():
+                fitted.append((ln, getattr(ln, field), str(d / name)))
+    scores = score_files(job, items + fitted)
+    for ln, _, p in fitted:
+        ln.fit.setdefault("scores", {})[p] = scores.get(p, {})
     failed = 0
     for ln in lines:
         mine = {p: s for (l, _, p), s in ((it, scores.get(it[2], {})) for it in items) if l.id == ln.id}
@@ -264,71 +348,68 @@ def run_check(job: Job) -> None:
 
 
 # fit ----------------------------------------------------------------------------------------
-def run_fit(job: Job) -> None:
-    lines = L.load(job.path("lines.json"))
-    rules = F.FitRules.from_config(job.cfg)
+def _plan_fit(job: Job, lines: list[L.Line], rules: F.FitRules) -> list[L.Line]:
+    """Each line's window and how its first take compares; the lines needing a
+    speed factor or shorter wording. The first take is the one a speed-factor
+    version re-voices (same seed), so its length sets the factor."""
     win = F.windows([l for l in lines if l.kind == L.SPEECH], job["scenes"]["cuts"], rules, job["ingest"]["duration"])
     job.set("fit_windows", {str(k): v for k, v in win.items()})
-    caps = job.get("tts_caps", {})
-    dlg, sr = media.read_wav(job.path("audio", "dialogue.wav"), mono=True)
     plan = []
     for ln in lines:
-        if not ln.take:
+        first = _line_dir(job, ln) / "take_0.wav"
+        if not (ln.dubbed and ln.en and first.exists()):
             continue
-        measured = media.duration(ln.take)
+        measured = F.trim(first)
         state = F.needs_fit(measured, win[ln.id], ln.duration, rules)
         ln.fit = {"window": win[ln.id], "measured": round(measured, 3), "state": state or "fits"}
         if state:
             plan.append(ln)
-    if not plan:
-        L.save(lines, job.path("lines.json"))
-        job.status("every line fits its window")
-        return
+    return plan
 
-    with job.worker("speak") as w:
-        caps = _load_tts(job, w)
-        if caps["duration_control"]:
-            # Up to two factor passes: the factor isn't exact, so measure and correct once.
-            for attempt in range(2):
-                reqs = []
-                for ln in plan:
-                    measured = ln.fit.get(f"factor{attempt - 1}_measured") if attempt else ln.fit["measured"]
-                    prev = ln.fit.get(f"factor{attempt - 1}", 1.0) if attempt else 1.0
-                    if measured is None:
-                        continue
-                    target = ln.fit["window"] if ln.fit["state"] == "over" else max(ln.duration * 0.92, measured)
-                    if attempt and F.needs_fit(measured, ln.fit["window"], ln.duration, rules) == "":
-                        continue
-                    f = F.factor_for(measured, target - rules.tolerance / 2, rules)
-                    if f is None:
-                        continue
-                    ln.fit[f"factor{attempt}"] = round(prev * f, 4)
-                    reqs += _requests(job, ln, ln.en, 1, f"fit{attempt}", dlg, sr, factor=ln.fit[f"factor{attempt}"])
-                _synthesize(job, w, reqs, f"speed-factor pass {attempt + 1}")
-                for ln in plan:
-                    p = _line_dir(job, ln) / f"fit{attempt}_0.wav"
-                    if p.exists() and f"factor{attempt}" in ln.fit:
-                        ln.fit[f"factor{attempt}_measured"] = round(F.trim(p), 3)
-        # Shorter wording for overruns, at natural speed (and fitted if possible).
-        reqs = []
-        for ln in plan:
-            if ln.fit["state"] == "over" and ln.en_short and ln.en_short != ln.en:
-                reqs += _requests(job, ln, ln.en_short, 1, "short", dlg, sr)
-        _synthesize(job, w, reqs, "shorter wording")
-        if caps["duration_control"]:
+
+def _fit(job: Job, w, caps: dict, plan: list[L.Line], dlg, sr: int, rules: F.FitRules) -> None:
+    """Speed-factor versions (measured and corrected once) and the shorter wording
+    (fitted too if needed) for the planned lines, in the open voice-model session."""
+    if caps["duration_control"]:
+        # Up to two factor passes: the factor isn't exact, so measure and correct once.
+        for attempt in range(2):
             reqs = []
             for ln in plan:
-                p = _line_dir(job, ln) / "short_0.wav"
-                if p.exists():
-                    m = F.trim(p)
-                    ln.fit["short_measured"] = round(m, 3)
-                    f = F.factor_for(m, ln.fit["window"] - rules.tolerance / 2, rules)
-                    if m > ln.fit["window"] + rules.tolerance and f is not None:
-                        ln.fit["short_factor"] = f
-                        reqs += _requests(job, ln, ln.en_short, 1, "shortfit", dlg, sr, factor=f)
-            _synthesize(job, w, reqs, "fitting shorter wording")
-    L.save(lines, job.path("lines.json"))
-    job.status(f"refitted {len(plan)} lines")
+                measured = ln.fit.get(f"factor{attempt - 1}_measured") if attempt else ln.fit["measured"]
+                prev = ln.fit.get(f"factor{attempt - 1}", 1.0) if attempt else 1.0
+                if measured is None:
+                    continue
+                target = ln.fit["window"] if ln.fit["state"] == "over" else max(ln.duration * 0.92, measured)
+                if attempt and F.needs_fit(measured, ln.fit["window"], ln.duration, rules) == "":
+                    continue
+                f = F.factor_for(measured, target - rules.tolerance / 2, rules)
+                if f is None:
+                    continue
+                ln.fit[f"factor{attempt}"] = round(prev * f, 4)
+                reqs += _requests(job, ln, ln.en, 1, f"fit{attempt}", dlg, sr, factor=ln.fit[f"factor{attempt}"])
+            _synthesize(job, w, reqs, f"speed-factor pass {attempt + 1}")
+            for ln in plan:
+                p = _line_dir(job, ln) / f"fit{attempt}_0.wav"
+                if p.exists() and f"factor{attempt}" in ln.fit:
+                    ln.fit[f"factor{attempt}_measured"] = round(F.trim(p), 3)
+    # Shorter wording for overruns, at natural speed (and fitted if possible).
+    reqs = []
+    for ln in plan:
+        if ln.fit["state"] == "over" and ln.en_short and ln.en_short != ln.en:
+            reqs += _requests(job, ln, ln.en_short, 1, "short", dlg, sr)
+    _synthesize(job, w, reqs, "shorter wording")
+    if caps["duration_control"]:
+        reqs = []
+        for ln in plan:
+            p = _line_dir(job, ln) / "short_0.wav"
+            if p.exists():
+                m = F.trim(p)
+                ln.fit["short_measured"] = round(m, 3)
+                f = F.factor_for(m, ln.fit["window"] - rules.tolerance / 2, rules)
+                if m > ln.fit["window"] + rules.tolerance and f is not None:
+                    ln.fit["short_factor"] = f
+                    reqs += _requests(job, ln, ln.en_short, 1, "shortfit", dlg, sr, factor=f)
+        _synthesize(job, w, reqs, "fitting shorter wording")
 
 
 # finalize ---------------------------------------------------------------------------------------
@@ -359,18 +440,6 @@ def _qc_fallbacks(job: Job, lines: list[L.Line]) -> None:
 def run_finalize(job: Job) -> None:
     lines = L.load(job.path("lines.json"))
     rules = F.FitRules.from_config(job.cfg)
-    new_items = []
-    for ln in lines:
-        if not ln.take:
-            continue
-        d = _line_dir(job, ln)
-        for name, text in (("fit1_0.wav", ln.en), ("fit0_0.wav", ln.en), ("short_0.wav", ln.en_short),
-                           ("shortfit_0.wav", ln.en_short)):
-            p = d / name
-            if p.exists():
-                F.trim(p)
-                new_items.append((ln, text, str(p)))
-    scores = score_files(job, new_items)
     roomy = F.windows([l for l in lines if l.kind == L.SPEECH], job["scenes"]["cuts"],
                       replace(rules, borrow=rules.short_borrow), job["ingest"]["duration"])
     counts = {"fits": 0, "speed_factor": 0, "shorter": 0, "stretched": 0, "fallback": 0, "padded": 0}
@@ -390,7 +459,7 @@ def run_finalize(job: Job) -> None:
         # An underrun prefers the slower regenerated take; otherwise the natural take comes first.
         options: list[tuple[str, Path]] = factor + natural if ln.fit.get("state") == "under" else natural + factor
         options += [("shorter", d / "shortfit_0.wav"), ("shorter", d / "short_0.wav")]
-        all_scores = {**ln.take_scores, **scores}
+        all_scores = {**ln.take_scores, **ln.fit.get("scores", {})}
         chosen = choose(options, all_scores, window, rules, job.cfg)
         if chosen is None and short_text(ln.en):  # one- or two-word lines may go a little faster
             chosen = choose(options, all_scores, window, rules.for_short_text(), job.cfg)
@@ -439,11 +508,14 @@ def _pace(job: Job, ln: L.Line) -> float:
 def run_condense(job: Job) -> None:
     """Lines still in the original language get shorter English that keeps the
     meaning, sized to the time available from the voice's measured pace, then
-    are voiced, back-checked and fitted again. Up to `condense.rounds` rounds."""
+    are voiced, back-checked and fitted again. Each round loads every model once
+    (translation, voice, checks), so a round voices several takes of every option
+    rather than coming back for another round. Up to `condense.rounds` rounds."""
     from . import translate as T
     lines = L.load(job.path("lines.json"))
     rules = F.FitRules.from_config(job.cfg)
-    rounds = int(job.cfg.get("condense.rounds", 2))
+    rounds = int(job.cfg.get("condense.rounds", 1))
+    takes = max(1, int(job.cfg.get("condense.takes", 2)))
     if not job.cfg.get("condense.enabled", True) or rounds <= 0:
         return
     win = F.windows([l for l in lines if l.kind == L.SPEECH], job["scenes"]["cuts"], rules, job["ingest"]["duration"])
@@ -502,8 +574,8 @@ def run_condense(job: Job) -> None:
             if rejected:
                 job.log(f"meaning check rejected {rejected} shortened options")
         texts: dict[str, tuple[L.Line, str]] = {}
-        with job.worker("speak") as w:
-            caps = _load_tts(job, w)
+        with _voices(job) as w:
+            caps = job.get("tts_caps", {})
             reqs = []
             for ln in todo:
                 alts = [(f"cond{rnd}{k}", short.get(ln.id, {}).get(k)) for k in ("a", "b")]
@@ -511,9 +583,10 @@ def run_condense(job: Job) -> None:
                 # Nothing shorter that keeps the meaning: try the current line again with new seeds.
                 alts.append((f"cond{rnd}r", ln.en))
                 for tag, text in alts:
-                    for r in _requests(job, ln, text, 1, tag, dlg, sr, seed_offset=100 * (rnd + 1)):
+                    for r in _requests(job, ln, text, takes, tag, dlg, sr, seed_offset=100 * (rnd + 1)):
                         reqs.append(r)
                         texts[r["out"]] = (ln, text)
+            reqs.sort(key=lambda r: r["speaker_ref"])
             _synthesize(job, w, reqs, f"voicing shorter lines (round {rnd + 1})")
             if caps["duration_control"]:  # a speed factor for near misses (more for one- or two-word lines)
                 reqs = []
@@ -526,8 +599,9 @@ def run_condense(job: Job) -> None:
                     r_ = rules.for_short_text() if short_text(text) else rules
                     f = F.factor_for(m, window - rules.tolerance / 2, r_)
                     if m > window + rules.tolerance and f is not None:
-                        r = _requests(job, ln, text, 1, p.stem.rsplit("_", 1)[0] + "f", dlg, sr, factor=f,
-                                      seed_offset=100 * (rnd + 1))[0]
+                        base, k = p.stem.rsplit("_", 1)
+                        r = _requests(job, ln, text, 1, f"{base}f{k}", dlg, sr, factor=f,
+                                      seed_offset=100 * (rnd + 1) + int(k))[0]
                         reqs.append(r)
                         texts[r["out"]] = (ln, text)
                 _synthesize(job, w, reqs, "fitting shorter lines")
@@ -538,14 +612,21 @@ def run_condense(job: Job) -> None:
                 F.trim(p)
                 items_to_score.append((ln, text, out))
         scores = score_files(job, items_to_score)
+        # Shorter wording first (a, then the shortest b), then the current line retried;
+        # each option's natural takes before its speed-factor versions (cond0a_1, cond0af1_0).
+        prefix = f"cond{rnd}"
+
+        def rank(p: Path) -> tuple:
+            base, k = p.stem.rsplit("_", 1)
+            tag = base[len(prefix):]
+            return "abr".index(tag[0]), len(tag) > 1, int(tag[2:] or 0) if len(tag) > 1 else int(k)
+
         for ln in todo:
             d = _line_dir(job, ln)
             window = win.get(ln.id, ln.duration + rules.borrow)
-            opts = []
-            for tag in ("a", "af", "b", "bf", "r", "rf"):
-                p = d / f"cond{rnd}{tag}_0.wav"
-                if str(p) in texts:
-                    opts.append(("condensed" if tag[0] in "ab" else "retried", p))
+            mine = sorted((Path(o) for o, (l, _) in texts.items() if l is ln and Path(o).name.startswith(prefix)),
+                          key=rank)
+            opts = [("condensed" if p.name[len(prefix)] in "ab" else "retried", p) for p in mine]
             # Shorter wording first; looser fitting only applies to one- or two-word lines.
             chosen = choose(opts, scores, window, rules, job.cfg)
             if chosen is None:

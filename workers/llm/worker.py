@@ -1,7 +1,9 @@
 """Local translation LLM with vLLM (offline engine, no server, no network).
 
-Default model: a 4-bit build of Qwen3.8-27B that fits one 32 GB card with
-CUDA graphs off (--enforce-eager), text-only, thinking switched off.
+Default model: a 4-bit build of Qwen3.8-27B that fits one 32 GB card, text-only,
+thinking switched off. CUDA graphs (enforce_eager false) make writing about 3.5x
+faster for a few seconds more start-up once vLLM's compile cache (under the models
+folder) is warm; the first start with new settings compiles for about a minute.
 """
 
 from aidub_worker import log, serve
@@ -39,7 +41,7 @@ def load(args):
     # the 4-bit layers and Triton for attention. Both are configurable.
     kw = dict(model=name, gpu_memory_utilization=_utilization(float(args.get("gpu_memory_utilization", 0.80))),
               max_model_len=int(args.get("max_model_len", 16384)), max_num_seqs=int(args.get("max_num_seqs", 8)),
-              enforce_eager=True, kv_cache_dtype="fp8", trust_remote_code=False,
+              enforce_eager=bool(args.get("enforce_eager", True)), kv_cache_dtype="fp8", trust_remote_code=False,
               kernel_config={"linear_backend": args.get("linear_backend", "marlin")},
               attention_config={"backend": args.get("attention_backend", "TRITON_ATTN")})
     if args.get("language_model_only", True):
