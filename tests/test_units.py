@@ -277,6 +277,18 @@ def test_named_characters_merged_by_diarization_keep_own_voices(tmp_path):
     assert prof2.characters[lines2[3].character].get("voice_of") == lines2[0].character
 
 
+def test_unmarked_voice_takes_the_named_character(tmp_path):
+    from aidub import voicebank
+    prof = profiles.Profiles(tmp_path).get_or_create("Spy")
+    man = [1.0, 0.0, 0.0]
+    job = _StubJob({}, {"diarization": {"speakers": {"S1": {"embedding": man, "seconds": 30}}}})
+    lines = [L.Line(1, 1, 2.5, speaker="S1", name_hint="Edgar"), L.Line(2, 3, 3.8, name_hint="Edgar"),
+             L.Line(3, 4, 4.8, name_hint="Nobody Yet"), L.Line(4, 5, 5.8)]
+    voicebank.link_characters(job, prof, lines)
+    assert lines[1].character == lines[0].character != ""
+    assert lines[2].character == "" and lines[3].character == ""   # no new characters from one unmarked line
+
+
 def test_two_speaker_subtitles_are_split(tmp_path):
     p = tmp_path / "two.srt"
     p.write_text("1\n00:00:01,000 --> 00:00:04,000\n- Let's play dodgeball.\n- Dodgeball?\n\n"
@@ -493,7 +505,8 @@ def test_backcheck_hears_the_same_sound_spelled_differently(tmp_path):
     lex = tmp_path / "cmudict.dict"
     lex.write_text("brakes B R EY1 K S\nbreaks B R EY1 K S\nshady SH EY1 D IY0\nshoddy SH AA1 D IY0\n"
                    "toupee T UW2 P EY1\ntwo T UW1\np P IY1\nlloyd L OY1 D\nten T EH1 N\npent P EH1 N T\n"
-                   "comes K AH1 M Z\nbomb B AA1 M\nbum B AH1 M\n")
+                   "comes K AH1 M Z\nbomb B AA1 M\nbum B AH1 M\nnguyen N UW0 Y EH1 N\nno N OW1\nyen Y EH1 N\n"
+                   "new N UW1\nnew(2) N Y UW1\nyin Y IH1 N\ngwen G W EH1 N\nproud P R AW1 D\n")
     try:
         assert pronounce.load(lex)
         assert speak.missed_words("Brakes!", "Breaks.") == []
@@ -510,6 +523,13 @@ def test_backcheck_hears_the_same_sound_spelled_differently(tmp_path):
         assert speak.missed_words("But shady places.", "But shoddy places.") == ["shady"]
         assert speak.wer("Bomb! Bomb!", "Bum bum.") > 0.35
         assert speak.wer("Brakes, now!", "Breaks now.") == 0
+        # A name the voice says from its spelled-out sound, heard as two words.
+        assert pronounce.respell("Nguyen") == "noo yen" and pronounce.respell("proud") is None
+        assert speak.missed_words("Nguyen!", "No yen.") == [] and speak.missed_words("Nguyen!", "New Yin.") == []
+        assert speak.missed_words("Nguyen!", "Gwen.") == ["nguyen"]
+        assert speak.wer("Nguyen! Get the car.", "No yen, get the car.") == 0
+        ln = L.Line(1, 0, 1, en="Nguyen! Get the car.", take_scores={"t": {"missed": ["nguyen", "car"]}})
+        assert speak.respelled(ln) == "noo yen! Get the car."
         assert pronounce.only_sounds(speak._words("Mm-hmm.")) and pronounce.only_sounds(speak._words("Shh."))
         assert not pronounce.only_sounds(speak._words("Oh, no."))
     finally:

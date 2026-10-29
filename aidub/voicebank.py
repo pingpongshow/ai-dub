@@ -102,6 +102,11 @@ def link_characters(job: Job, prof: Profile, lines: list[L.Line], voices: dict[i
     for ln in lines:
         if not ln.character:
             ln.character = mapping.get(ln.speaker, "")
+        if not ln.character and not ln.speaker and ln.name_hint:
+            # A voice diarization didn't mark (a child's "Daddy!" under music): the
+            # character the subtitle names, if already known, rather than the line's
+            # own split second of audio. The voice check in assign_voices still applies.
+            ln.character = prof.by_name(ln.name_hint) or ""
     return mapping
 
 

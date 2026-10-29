@@ -85,6 +85,13 @@ def wer(ref: str, hyp: str) -> float:
         return 0.0 if not b else 1.0
     # A heard word that sounds like the script's word is that word ("breaks" for "brakes").
     b = [h if h in a else next((w for w in a if pronounce.same_sound(w, h)), h) for h in b]
+    # Two short heard words that are pieces of one ("No yen" for "Nguyen") are that word.
+    i = 0
+    while i + 1 < len(b):
+        w = next((w for w in a if w not in b and pronounce.heard_split(w, b[i], b[i + 1])), None)
+        if w:
+            b[i:i + 2] = [w]
+        i += 1
     if len(a) <= 2:
         ca, cb = "".join(a), "".join(b)
         sm = difflib.SequenceMatcher(None, ca, cb, autojunk=False)
@@ -133,6 +140,18 @@ def missed_words(text: str, heard: str) -> list[str]:
     return out
 
 
+def respelled(ln: L.Line) -> str:
+    """The line with the words its takes missed spelled as they sound, where their
+    spelling doesn't show it ("Nguyen!" as "noo yen!")."""
+    scores = list(ln.take_scores.values()) + list((ln.fit or {}).get("scores", {}).values())
+    text = ln.en
+    for w in sorted({w for s in scores for w in s.get("missed", [])}):
+        sound = pronounce.respell(w)
+        if sound:
+            text = re.sub(rf"(?<![\w']){re.escape(w)}(?![\w'])", sound, text, flags=re.I)
+    return text
+
+
 def _line_dir(job: Job, ln: L.Line) -> Path:
     return job.dir("lines", f"{ln.id:05d}")
 
@@ -153,11 +172,11 @@ def spoken(text: str) -> str:
 
 
 def _requests(job: Job, ln: L.Line, text: str, takes: int, tag: str, dlg, sr, factor: float | None = None,
-              seed_offset: int = 0) -> list[dict]:
+              seed_offset: int = 0, voice: str = "") -> list[dict]:
     caps = job.get("tts_caps", {})
     orig = _orig_clip(job, ln, dlg, sr)
     min_emo = float(job.cfg.get("speak.min_emotion_ref_s", 1.0))
-    req_base = {"text": spoken(text), "speaker_ref": ln.voice or str(orig)}
+    req_base = {"text": spoken(text), "speaker_ref": voice or ln.voice or str(orig)}
     if caps.get("emotion_ref", True) and ln.duration >= min_emo and not ln.overlap:
         req_base["emotion_ref"] = str(orig)
         req_base["emo_alpha"] = float(job.cfg.get("speak.emo_alpha", 0.35))
@@ -613,18 +632,29 @@ def run_condense(job: Job) -> None:
             if rejected:
                 job.log(f"meaning check rejected {rejected} shortened options")
         texts: dict[str, tuple[L.Line, str]] = {}
+        said: dict[str, tuple[str, str]] = {}  # take -> (text the voice read, voice clip) when not the line's own
+        pronounce.load(job.cfg.models / "lexicon" / "cmudict.dict")
         with _voices(job) as w:
             caps = job.get("tts_caps", {})
             reqs = []
             for ln in todo:
                 alts = [(f"cond{rnd}{k}", short.get(ln.id, {}).get(k)) for k in ("a", "b")]
-                alts = [(tag, t) for tag, t in alts if t and t != ln.en and tag[-1] in ok.get(ln.id, set())]
+                alts = [(tag, t, t, "") for tag, t in alts if t and t != ln.en and tag[-1] in ok.get(ln.id, set())]
                 # Nothing shorter that keeps the meaning: try the current line again with new seeds.
-                alts.append((f"cond{rnd}r", ln.en))
-                for tag, text in alts:
-                    for r in _requests(job, ln, text, takes, tag, dlg, sr, seed_offset=100 * (rnd + 1)):
+                alts.append((f"cond{rnd}r", ln.en, ln.en, ""))
+                # Voiced from its own short clip, it came out unclear: the character's voice bank too.
+                bank = prof.refs(ln.character) if ln.character and not ln.voice else []
+                if bank:
+                    alts.append((f"cond{rnd}v", ln.en, ln.en, str(prof.root / bank[0]["file"])))
+                # A word the voice model can't read ("Nguyen" as "Chen"): spelled as it sounds.
+                spelled = respelled(ln)
+                if spelled != ln.en:
+                    alts.append((f"cond{rnd}p", ln.en, spelled, ""))
+                for tag, text, say, voice in alts:
+                    for r in _requests(job, ln, say, takes, tag, dlg, sr, seed_offset=100 * (rnd + 1), voice=voice):
                         reqs.append(r)
                         texts[r["out"]] = (ln, text)
+                        said[r["out"]] = (say, voice)
             reqs.sort(key=lambda r: r["speaker_ref"])
             _synthesize(job, w, reqs, f"voicing shorter lines (round {rnd + 1})")
             if caps["duration_control"]:  # a speed factor for near misses (more for one- or two-word lines)
@@ -639,10 +669,12 @@ def run_condense(job: Job) -> None:
                     f = F.factor_for(m, window - rules.tolerance / 2, r_)
                     if m > window + rules.tolerance and f is not None:
                         base, k = p.stem.rsplit("_", 1)
-                        r = _requests(job, ln, text, 1, f"{base}f{k}", dlg, sr, factor=f,
-                                      seed_offset=100 * (rnd + 1) + int(k))[0]
+                        say, voice = said.get(out, (text, ""))
+                        r = _requests(job, ln, say, 1, f"{base}f{k}", dlg, sr, factor=f,
+                                      seed_offset=100 * (rnd + 1) + int(k), voice=voice)[0]
                         reqs.append(r)
                         texts[r["out"]] = (ln, text)
+                        said[r["out"]] = (say, voice)
                 _synthesize(job, w, reqs, "fitting shorter lines")
         items_to_score = []
         for out, (ln, text) in texts.items():
@@ -651,22 +683,26 @@ def run_condense(job: Job) -> None:
                 F.trim(p)
                 items_to_score.append((ln, text, out))
         scores = score_files(job, items_to_score)
-        # Shorter wording first (a, then the shortest b), then the current line retried;
-        # each option's natural takes before its speed-factor versions (cond0a_1, cond0af1_0).
+        # A line that ran long: shorter wording first (a, then the shortest b), then the
+        # current line retried (as it was, in the voice bank's voice, then spelled as it
+        # sounds). A line that had the time but came out unclear keeps its wording if a
+        # retry says it clearly. Each option's natural takes before its speed-factor
+        # versions (cond0a_1, cond0af1_0).
         prefix = f"cond{rnd}"
 
-        def rank(p: Path) -> tuple:
+        def rank(p: Path, order: str) -> tuple:
             base, k = p.stem.rsplit("_", 1)
             tag = base[len(prefix):]
-            return "abr".index(tag[0]), len(tag) > 1, int(tag[2:] or 0) if len(tag) > 1 else int(k)
+            return order.index(tag[0]), len(tag) > 1, int(tag[2:] or 0) if len(tag) > 1 else int(k)
 
         for ln in todo:
             d = _line_dir(job, ln)
             window = win.get(ln.id, ln.duration + rules.borrow)
+            order = "abrvp" if ln.fit.get("state") == "over" else "rvpab"
             mine = sorted((Path(o) for o, (l, _) in texts.items() if l is ln and Path(o).name.startswith(prefix)),
-                          key=rank)
+                          key=lambda p: rank(p, order))
             opts = [("condensed" if p.name[len(prefix)] in "ab" else "retried", p) for p in mine]
-            # Shorter wording first; looser fitting only applies to one- or two-word lines.
+            # Looser fitting only applies to one- or two-word lines.
             chosen = choose(opts, scores, window, rules, job.cfg)
             if chosen is None:
                 short_opts = [(h, p) for h, p in opts if short_text(texts[str(p)][1])]
@@ -683,6 +719,8 @@ def run_condense(job: Job) -> None:
             ln.en = texts[str(p)][1]
             ln.take = str(final)
             ln.fallback = ""
+            if said.get(str(p), ("", ""))[1]:
+                ln.voice, ln.voice_note = said[str(p)][1], "voice bank (its own clip came out unclear)"
             ln.fit.update({"window": window, "method": "condensed", "tempo": tempo, "source": p.name,
                            "final": round(media.duration(final), 3), "round": rnd + 1})
             rescued += 1
