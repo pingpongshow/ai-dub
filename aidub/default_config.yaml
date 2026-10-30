@@ -84,7 +84,9 @@ translate:
   lead: audio               # audio: translate what was said (subtitles are hints); subtitle: dub the English
                             # subtitle where it means what was said (checked line by line), else the speech;
                             # subtitle_only: the English subtitles are the script for every line they cover
-                            # (the speech checks meaning and sets timing; a doubtful track falls back to audio)
+                            # (the speech checks meaning and sets timing; a doubtful track falls back to audio);
+                            # subtitle_verbatim: the same, word for word (shared subtitles divided by their own
+                            # words; a long line is sped up or runs on first, then only trimmed)
   script_track: { content: 0.8, total: 0.75, agree: 0.75 }  # subtitle_only: what the track must score
   syllables_per_second: 4.3 # voice model's measured pace (plus ~0.25 s per line), used to size lines
 

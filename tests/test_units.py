@@ -545,6 +545,7 @@ def test_backcheck_hears_the_same_sound_spelled_differently(tmp_path):
         # A made-up word heard in two longer pieces with its consonants.
         assert speak.wer("Daikaiju in Sumida!", "Dai Kajou in Sumida.") == 0
         assert speak.wer("Brakes, now!", "Bray kess now.") > 0      # dictionary words: no such slack
+        assert speak.wer("It's useless, Kikoru-chan.", "It is useless, Kikorichan.") == 0   # hyphenated name, one word
         assert pronounce.only_sounds(speak._words("Mm-hmm.")) and pronounce.only_sounds(speak._words("Shh."))
         assert not pronounce.only_sounds(speak._words("Oh, no."))
     finally:
@@ -676,6 +677,10 @@ def test_subtitles_as_script_share_cues_and_leave_short_unsubtitled_lines():
     shares = T.script_cues(cues, [[a1, a2], [b1]])
     assert [c["text"] for c in shares[0]] == ["Hey! Sorry, can I pass through?"]   # one cue, two lines
     assert [c["text"] for c in shares[1]] == ["The Oizumi area is worsening!"]     # no cue twice, none stray
+    # A subtitle shown just after its line still belongs to it; an on-screen sign doesn't.
+    mina, later = L.Line(7, 5.375, 5.615), L.Line(8, 6.46, 8.3)
+    near = [Cue(start=5.66, end=6.09, text="Mina!"), Cue(start=6.2, end=6.4, text="KAIJU NO. 15")]
+    assert [c["text"] for c in T.script_cues(near, [[mina, later]])[0]] == ["Mina!"]
     roger = L.Line(4, 20.0, 20.6, source_text="了解!")
     speech = L.Line(5, 40.0, 43.0, source_text="こんな事になるとは思わなかった")
     assert T.covered(a2, cues) and not T.covered(roger, cues)
@@ -705,3 +710,42 @@ def test_subtitle_track_must_be_trusted_to_be_the_script():
     ok, why = T.subtitles_trusted(job(0.5, 8))       # meaning doesn't follow the speech: another cut, machine-made
     assert not ok and "content" in why
     assert not T.subtitles_trusted(job(1.0, 90))[0]  # too many lines disagree one by one
+
+
+def test_subtitles_word_for_word():
+    from aidub import translate as T
+    assert T.spoken_form("No. 12.") == "Number 12." and T.spoken_form("No. I won't.") == "No. I won't."
+    assert T.only_deletes("Twenty kilometers!", "It's twenty kilometers away!")
+    assert not T.only_deletes("Twenty klicks!", "It's twenty kilometers away!")
+    assert not T.only_deletes("Kilometers twenty", "It's twenty kilometers away!")    # reordered
+    assert T.split_words("Hey! Sorry, can I pass through?", [1.3, 0.8]) == ["Hey! Sorry,", "can I pass through?"]
+    own = L.Line(1, 10.0, 12.0)
+    a, b = L.Line(2, 20.0, 21.3), L.Line(3, 21.4, 22.2)
+    cues = [{"start": 10.0, "end": 12.0, "text": "The disaster caused by No. 9 will not end at this level."},
+            {"start": 20.0, "end": 22.2, "text": "Hey! Sorry, can I pass through?"}]
+    assert [([l.id for l in g], ks) for g, ks in T.subtitle_groups([own, a, b], cues)] == [([1], [0]), ([2, 3], [1])]
+    # The translator's rewording is replaced by the subtitle; its division of a shared one is kept
+    # when it used exactly the subtitle's words, and its shorter version only if it just leaves words out.
+    drafts = {1: {"en": "No. 9's disaster won't end this easily.", "short": "The disaster won't end at this level."},
+              2: {"en": "Hey! Sorry,", "short": ""}, 3: {"en": "can I pass through?", "short": "Can I pass?"}}
+    assert T.verbatim_lines([own, a, b], cues, drafts) == 0
+    assert drafts[1]["en"] == "The disaster caused by Number 9 will not end at this level."
+    assert drafts[1]["short"] == "The disaster won't end at this level." or drafts[1]["short"] == ""
+    assert drafts[2]["en"] == "Hey! Sorry," and drafts[3]["en"] == "can I pass through?"
+    assert drafts[3]["short"] == "Can I pass?"
+    drafts = {2: {"en": "Excuse me!"}, 3: {"en": "Can I get by?"}}      # reworded: divided by time instead
+    assert T.verbatim_lines([a, b], cues[1:], drafts) == 1
+    assert [drafts[2]["en"], drafts[3]["en"]] == ["Hey! Sorry,", "can I pass through?"]
+
+
+def test_word_for_word_numbers_names_and_splits():
+    from aidub import speak, translate as T
+    assert speak.spoken("84%!") == "84 percent!" and speak.spoken("Fortitude is 9.0!") == "Fortitude is 9 point 0!"
+    assert speak.wer("84%!", "Eighty-four percent.") == 0
+    assert speak.wer("Estimated Fortitude is 9.0!", "Estimated fortitude is nine point oh.") == 0
+    assert speak.missed_words("Fortitude is 9.0!", "Fortitude is nine point.") == ["0"]   # the voice dropped it
+    # The translator's division of a shared subtitle, mapped back onto its own words.
+    assert T.align_split("I will take care of it. Mina!", ["I'll take care of it.", "Mina!"]) == \
+        ["I will take care of it.", "Mina!"]
+    assert T.align_split("Hey! Sorry, can I pass through? You guys...", ["Sorry, can I pass?", "You guys..."]) == \
+        ["Hey! Sorry, can I pass through?", "You guys..."]

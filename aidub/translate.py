@@ -10,6 +10,7 @@ show's glossary is updated with names and terms from this episode.
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import re
@@ -183,6 +184,11 @@ LED_NOTE = ("subtitle_led marks a line written from its subtitle, which was chec
 # the speech only checks that each part says a similar thing (a line that doesn't is
 # flagged, not replaced) and sets the timing.
 SCRIPT_LEAD = "subtitle_only"
+# translate.lead: subtitle_verbatim goes further: a line says its subtitle word for word;
+# lines sharing one divide its words; a line too long is sped up or runs on before any
+# word goes, and is then only trimmed (words deleted, never replaced).
+VERBATIM_LEAD = "subtitle_verbatim"
+SCRIPT_LEADS = (SCRIPT_LEAD, VERBATIM_LEAD)
 SCRIPT = {"subtitle_script": True}
 SCRIPT_NOTE = ("subtitle_script marks a line written from the official English subtitles, which are the script: "
                "keep its meaning, and its names, titles, forms of address and honorifics exactly as written; "
@@ -229,7 +235,131 @@ def lead_used(job: Job) -> str:
 
 
 def system_for(job: Job) -> str:
-    return SCRIPT_SYSTEM if lead_used(job) == SCRIPT_LEAD else SYSTEM
+    return SCRIPT_SYSTEM if lead_used(job) in SCRIPT_LEADS else SYSTEM
+
+
+def verbatim(job: Job) -> bool:
+    return lead_used(job) == VERBATIM_LEAD
+
+
+def spoken_form(text: str) -> str:
+    """Subtitle text as the voice should read it: "No. 12" read as the word "no" is
+    another line ("Number 12")."""
+    return re.sub(r"\bNo\.\s*(?=\d)", "Number ", text)
+
+
+def _tokens(text: str) -> list[str]:
+    return re.findall(r"[a-z0-9']+", text.lower().replace("’", "'"))
+
+
+def only_deletes(short: str, full: str) -> bool:
+    """`short` is `full` with words left out and nothing added, changed or reordered."""
+    it = iter(_tokens(full))
+    want = _tokens(short)
+    return bool(want) and all(w in it for w in want)
+
+
+def split_words(text: str, weights: list[float]) -> list[str]:
+    """Divide a subtitle's words between lines in order, in proportion to their time,
+    cutting after punctuation where one is within two words."""
+    toks = text.split()
+    n = len(weights)
+    if n <= 1:
+        return [text]
+    total = sum(weights) or n
+    cuts, acc, last = [], 0.0, 0
+    for w in weights[:-1]:
+        acc += w
+        target = round(len(toks) * acc / total)
+        lo, hi = last + 1, len(toks) - (n - 1 - len(cuts))
+        if lo > hi:
+            cuts.append(last)
+            continue
+        target = min(max(target, lo), hi)
+        best = min(range(max(lo, target - 2), min(hi, target + 2) + 1),
+                   key=lambda i: (not re.search(r"[,.!?;:…]$", toks[i - 1]), abs(i - target)))
+        cuts.append(best)
+        last = best
+    bounds = [0] + cuts + [len(toks)]
+    return [" ".join(toks[a:b]) for a, b in zip(bounds, bounds[1:])]
+
+
+def align_split(whole: str, parts: list[str]) -> list[str] | None:
+    """The translator divided a shared subtitle but changed some words ("I'll take care
+    of it." / "Mina!"): cut the subtitle's own words where its division falls, matched
+    word by word, so each line still says the part meant for it. None when its
+    wording is too far from the subtitle to tell."""
+    words = whole.split()
+    norm = ["".join(_tokens(w)) for w in words]
+    mine: list[str] = []
+    bounds: list[int] = []
+    for p in parts:
+        mine += ["".join(_tokens(w)) for w in p.split()]
+        bounds.append(len(mine))
+    sm = difflib.SequenceMatcher(None, mine, norm, autojunk=False)
+    if not mine or sm.ratio() < 0.5:
+        return None
+    ops = sm.get_opcodes()
+
+    def to_sub(i: int) -> int:
+        for tag, i1, i2, j1, j2 in ops:
+            if i1 <= i <= i2:
+                return j1 + (i - i1) if tag == "equal" else j1 + round((i - i1) * (j2 - j1) / max(1, i2 - i1))
+        return len(norm)
+    cuts, last = [], 0
+    for b in bounds[:-1]:
+        c = max(last, min(to_sub(b), len(words)))
+        # A cut next to a sentence or comma break moves onto it ("can I pass | through?").
+        near = [i for i in range(max(last + 1, c - 2), min(len(words), c + 2) + 1) if re.search(r"[,.!?;:…]$", words[i - 1])]
+        last = min(near, key=lambda i: abs(i - c)) if near and not re.search(r"[,.!?;:…]$", words[c - 1] if c else "") else c
+        cuts.append(last)
+    out = [" ".join(words[a:b]) for a, b in zip([0] + cuts, cuts + [len(words)])]
+    return None if any(p.strip() and not o for p, o in zip(parts, out)) else out
+
+
+def subtitle_groups(batch: list[L.Line], cues: list[dict]) -> list[tuple[list[L.Line], list[int]]]:
+    """Lines that share cues, with those cues in time order: a line with a subtitle of
+    its own is a group of one."""
+    under = line_subtitles(batch, cues)
+    groups: list[tuple[list[L.Line], list[int]]] = []
+    for ln in batch:
+        if not under[ln.id] or ln.check_note == NO_SUBTITLE:
+            continue
+        mine = set(under[ln.id])
+        hit = [g for g in groups if mine & set(g[1])]
+        lines_, ks = [ln], set(mine)
+        for g in hit:
+            groups.remove(g)
+            lines_ = g[0] + lines_
+            ks |= set(g[1])
+        groups.append((sorted(lines_, key=lambda l: l.start), sorted(ks)))
+    return groups
+
+
+def verbatim_lines(batch: list[L.Line], cues: list[dict], drafts: dict[int, dict]) -> int:
+    """The subtitles' own words as each line's dub: a line's own subtitle as it is;
+    a shared one divided as the translator divided it if that used exactly its words
+    in order, else by time. A shorter alternative must only leave words out. Returns
+    how many shared subtitles were divided by time."""
+    by_time = 0
+    for group, ks in subtitle_groups(batch, cues):
+        whole = spoken_form(" ".join(cues[k]["text"] for k in ks))
+        parts = [spoken_form(drafts.get(ln.id, {}).get("en", "")) for ln in group]
+        if len(group) > 1 and _tokens(" ".join(parts)) != _tokens(whole):
+            aligned = align_split(whole, parts)
+            if aligned is None:
+                aligned = split_words(whole, [ln.duration for ln in group])
+                by_time += 1
+            parts = aligned
+        elif len(group) == 1:
+            parts = [whole]
+        for ln, part in zip(group, parts):
+            d = drafts.setdefault(ln.id, {})
+            d.update(en=part.strip(), from_subtitle=True)
+            short = spoken_form(d.get("short", ""))
+            d["short"] = short if short and only_deletes(short, part) and _tokens(short) != _tokens(part) else ""
+    return by_time
+
 
 
 def subtitles_trusted(job: Job) -> tuple[bool, str]:
@@ -263,9 +393,22 @@ def short_reaction(ln: L.Line) -> bool:
     return ln.duration < 1.2 or len(re.sub(r"[\W_]+", "", ln.source_text)) <= 4
 
 
+NEAR_CUE_S = 0.3  # a subtitle shown just after its line ("Mina!" 0.04 s after it) still belongs to it
+
+
+def _sign(text: str) -> bool:
+    """On-screen text the subtitles translate ("KAIJU NO. 15"), never spoken."""
+    letters = re.sub(r"[^A-Za-z]", "", text)
+    return len(letters) >= 4 and letters.isupper()
+
+
+def _gap(q, ln) -> float:
+    return max(ln.start - q.end, q.start - ln.end, 0.0)
+
+
 def script_cues(cues: list, batches: list[list[L.Line]]) -> list[list[dict]]:
-    """Each subtitle cue goes to the scene whose lines it overlaps most, so no cue is
-    voiced in two scenes."""
+    """Each subtitle cue goes to the scene whose lines it overlaps most (or holds a
+    line just next to it), so no cue is voiced in two scenes."""
     out: list[list[dict]] = [[] for _ in batches]
     for q in cues:
         best, most = None, 0.15
@@ -273,6 +416,10 @@ def script_cues(cues: list, batches: list[list[L.Line]]) -> list[list[dict]]:
             o = sum(max(0.0, min(q.end, ln.end) - max(q.start, ln.start)) for ln in b)
             if o > most:
                 best, most = bi, o
+        if best is None and not _sign(q.text):
+            near = [(min(_gap(q, ln) for ln in b), bi) for bi, b in enumerate(batches) if b]
+            gap, bi = min(near, default=(9.0, None))
+            best = bi if gap <= NEAR_CUE_S else None
         if best is not None:
             out[best].append({"start": round(q.start, 2), "end": round(q.end, 2), "text": q.text})
     return out
@@ -287,17 +434,32 @@ def line_subtitles(batch: list[L.Line], cues: list[dict]) -> dict[int, list[int]
     for k, q in enumerate(cues):
         hits = [ln for ln in batch if min(q["end"], ln.end) - max(q["start"], ln.start)
                 >= min(0.15, 0.3 * min(ln.duration, q["end"] - q["start"]))]
-        if not hits:
+        if not hits and not _sign(q["text"]):
             near = min(batch, key=lambda ln: max(ln.start - q["end"], q["start"] - ln.end, 0.0), default=None)
-            if near is not None and max(near.start - q["end"], q["start"] - near.end) <= 1.0:
+            if near is not None and max(near.start - q["end"], q["start"] - near.end) <= NEAR_CUE_S:
                 hits = [near]
         for ln in hits:
             out[ln.id].append(k)
     return out
 
 
+VERBATIM_TASK = (
+    "The official English subtitles are the script for this scene, word for word. Each line below is one "
+    "character speaking, with what they said in the original language (text; it may contain recognition "
+    "errors) and subtitle: the official English shown while they speak. Each line's en is its subtitle exactly "
+    "as written. Where lines share a subtitle (shared_with: the other lines under the same subtitle), divide "
+    "its words between them in order, at the point where the speaker or the thought changes: every word used "
+    "once, none added, changed or reordered. short: the same line with some words left out to fit "
+    "target_syllables (only leave words out; keep the rest exactly), or the same as en if nothing can go "
+    "without losing meaning. Names, titles and numbers are never left out. These lines get "
+    "\"from_subtitle\": true. Then compare each with its text: \"matches\": true when its subtitle part "
+    "expresses a similar idea (the gist, not word for word), false when it clearly says something else. A "
+    "line marked no_subtitle: translate its text into natural spoken English of about target_syllables, with "
+    "\"from_subtitle\": false.\n")
+
+
 def script_prompt(batch: list[L.Line], cues: list[dict], prev: list[L.Line], ctx: str, rate: float,
-                  names: dict) -> list[dict]:
+                  names: dict, word_for_word: bool = False) -> list[dict]:
     under = line_subtitles(batch, cues)
     owners: dict[int, list[int]] = {}
     for lid, ks in under.items():
@@ -316,6 +478,12 @@ def script_prompt(batch: list[L.Line], cues: list[dict], prev: list[L.Line], ctx
                 d["shared_with"] = shared
         items.append(d)
     before = [{"speaker": names.get(l.character, l.character), "text": l.source_text} for l in prev]
+    if word_for_word:
+        user = (f"{ctx}\n\nEarlier in the scene:\n{json.dumps(before, ensure_ascii=False)}\n\n" + VERBATIM_TASK +
+                f"Lines:\n{json.dumps(items, ensure_ascii=False, indent=0)}\n\n"
+                'Return {"lines": [{"id": <id>, "en": "<dub line>", "short": "<shorter version>", '
+                '"from_subtitle": <true|false>, "matches": <true|false>}]} with one entry per id.')
+        return [{"role": "system", "content": SCRIPT_SYSTEM}, {"role": "user", "content": user}]
     user = (f"{ctx}\n\nEarlier in the scene:\n{json.dumps(before, ensure_ascii=False)}\n\n"
             "The official English subtitles are the script for this scene. Each line below is one character "
             "speaking, with what they said in the original language (text; it may contain recognition errors) "
@@ -403,6 +571,12 @@ def rewrite_prompt(batch: list[L.Line], ctx: str, rate: float, names: dict, draf
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
+TRIM_NOTE = ("trim_only marks a line that is the official subtitle word for word: shorten it only by leaving "
+             "words out of current, keeping every other word exactly as written and in order; never add, replace "
+             "or reorder words, and never leave out a name, title or number (this overrides the rewording asked "
+             "for above). ")
+
+
 def condense_prompt(items: list[dict], ctx: str, system: str = SYSTEM) -> list[dict]:
     """Ask for shorter dub lines that keep the meaning.
 
@@ -421,7 +595,7 @@ def condense_prompt(items: list[dict], ctx: str, system: str = SYSTEM) -> list[d
             "words from current (never the same words again), plain everyday ones the voice can say clearly; "
             "voice_could_not_say lists the words it garbled. No abbreviations, slang clippings or nonsense "
             "words: a counting rhyme becomes what it means, such as \"Which one, which one...\". Names stay. "
-            + source_notes(items) + "\n"
+            + source_notes(items) + (TRIM_NOTE if any(it.get("trim_only") for it in items) else "") + "\n"
             f"{json.dumps(items, ensure_ascii=False, indent=0)}\n\n"
             'Return {"lines": [{"id": <id>, "en": "<line within max_syllables>", "shortest": "<an even '
             'shorter version, about two thirds as long, same meaning>"}]}.')
@@ -530,7 +704,7 @@ def run(job: Job) -> None:
     by_id = {ln.id: ln for ln in lines}
     lead_by = lead(job)
     cues: list = []
-    if lead_by == SCRIPT_LEAD:
+    if lead_by in SCRIPT_LEADS:
         from .subtitles.model import DIALOGUE
         from .subtitles.step import load_chosen
         trusted, why = subtitles_trusted(job)
@@ -550,13 +724,15 @@ def run(job: Job) -> None:
                 else:
                     ln.check_note = NO_SUBTITLE
     job.set("translate_lead", lead_by)
-    script = lead_by == SCRIPT_LEAD
+    script = lead_by in SCRIPT_LEADS
+    word_for_word = lead_by == VERBATIM_LEAD
     batches = [b for b in ([l for l in b if not l.fallback] for b in _batches(lines, windows)) if b]
     shares = script_cues(cues, batches) if script else [[] for _ in batches]
     system = SCRIPT_SYSTEM if script else SYSTEM
 
     def prompt(b, p, c, share):
-        return script_prompt(b, share, p, c, rate, names) if script else translate_prompt(b, p, c, rate, names, lead_by)
+        return (script_prompt(b, share, p, c, rate, names, word_for_word) if script
+                else translate_prompt(b, p, c, rate, names, lead_by))
 
     with LLM(job) as llm:
         # Pass 1: every scene at once (the engine batches them); each scene sees
@@ -582,6 +758,13 @@ def run(job: Job) -> None:
                 pass
         job.check()
         job.status(f"translated {len(batches)} scenes", progress=0.5 if reflect else 1.0)
+        if word_for_word:
+            by_time = sum(verbatim_lines(b, sh, drafts) for b, sh in zip(batches, shares))
+            job.qc["shared_subtitles_divided_by_time"] = by_time
+            for ln in (l for b in batches for l in b):
+                if ln.check_note != NO_SUBTITLE and not drafts.get(ln.id, {}).get("en"):
+                    # A shared subtitle's words all went to the neighbouring line(s).
+                    ln.fallback = ln.check_note = "its shared subtitle is said by the neighbouring line"
         if lead_by == "subtitle":
             offered = [ln for b in batches for ln in b if ln.english_ref and not source_unsure(ln)]
             for ln in offered:
@@ -591,7 +774,7 @@ def run(job: Job) -> None:
             job.log(f"subtitle-led: {took} lines from the subtitle, {len(offered) - took} didn't match the speech")
         if script:
             counts = {"from_subtitles": 0, "differ_from_speech": 0, "from_speech": 0}
-            for ln in (l for b in batches for l in b):
+            for ln in (l for b in batches for l in b if not l.fallback):
                 got = drafts.get(ln.id, {})
                 if got.get("from_subtitle") and ln.check_note != NO_SUBTITLE:
                     ln.en_from = "script"

@@ -65,9 +65,18 @@ IS_CONTRACTED = {"who", "what", "where", "when", "why", "how", "that", "there", 
 SUFFIXES = (("n't", " not"), ("'re", " are"), ("'ll", " will"), ("'ve", " have"), ("'m", " am"))
 
 
+def said_as(text: str) -> str:
+    """Symbols and numbers as words, the way the voice should read them and the
+    back-check should compare them: "84%" is "84 percent" (the voice read a bare "84%"
+    in Chinese), "9.0" is "9 point 0" (it said "nine point"), "No. 12" is "Number 12"."""
+    text = re.sub(r"(?<=\d)\.(?=\d)", " point ", text)
+    text = re.sub(r"\s*%", " percent", text)
+    return re.sub(r"\bNo\.\s*(?=\d)", "Number ", text)
+
+
 def _words(text: str) -> list[str]:
     out = []
-    for w in re.findall(r"[a-z0-9']+", text.lower().replace("’", "'")):
+    for w in re.findall(r"[a-z0-9']+", said_as(text).lower().replace("’", "'")):
         if w not in CONTRACTIONS:
             if w.endswith("'s") and w[:-2] in IS_CONTRACTED:  # "who's" = "who is" (not a possessive)
                 w = w[:-2] + " is"
@@ -112,6 +121,16 @@ def wer(ref: str, hyp: str) -> float:
     A number counts read either way ("212": "two hundred and twelve", "two one two")."""
     a, b = _words(ref), _words(hyp)
     b = [w for i, w in enumerate(b) if not (w == "and" and i and b[i - 1] in ("hundred", "thousand"))]
+    b = ["zero" if w == "oh" and i and b[i - 1] == "point" else w for i, w in enumerate(b)]  # "nine point oh"
+    # A hyphenated name heard as one word ("Kikoru-chan" as "Kikorichan") is that name.
+    for name in re.findall(r"[A-Za-z']+(?:-[A-Za-z']+)+", ref):
+        parts = name.lower().split("-")
+        joined = "".join(parts)
+        if joined in pronounce.LEXICON:
+            continue
+        k = next((i for i, h in enumerate(b) if pronounce.same_sound(joined, h) or pronounce.near(joined, h)), None)
+        if k is not None:
+            b[k:k + 1] = parts
     if any(w.isdigit() for w in a):
         return min(_wer(_numbers(a, d), _numbers(b, d)) for d in (False, True))
     return _wer(a, b)
@@ -175,6 +194,7 @@ def missed_words(text: str, heard: str) -> list[str]:
         base = re.sub(r"'s$", "", w)  # "West's" heard as "West", "how's" as "how is"
         if w.isdigit():  # a number must be heard whole, as a number or digit by digit
             said = [x for i, x in enumerate(heard_words) if not (x == "and" and i and heard_words[i - 1] in ("hundred", "thousand"))]
+            said = ["zero" if x == "oh" and i and said[i - 1] == "point" else x for i, x in enumerate(said)]
             joined = f" {' '.join(said)} "
             if not any(f" {' '.join(_numbers([w], d))} " in joined for d in (False, True)) and w not in heard_set:
                 out.append(w)
@@ -226,7 +246,7 @@ def spoken(text: str) -> str:
     """The line as the voice model should read it: it garbles hyphenated words
     ("self-esteem" came out as "self in Spain" in 4 of 4 takes, right in 4 of 4 as
     "self esteem"), so hyphens between letters become spaces."""
-    return re.sub(r"(?<=[A-Za-z])-(?=[A-Za-z])", " ", text)
+    return said_as(re.sub(r"(?<=[A-Za-z])-(?=[A-Za-z])", " ", text))
 
 
 def _requests(job: Job, ln: L.Line, text: str, takes: int, tag: str, dlg, sr, factor: float | None = None,
@@ -554,8 +574,12 @@ def _qc_fallbacks(job: Job, lines: list[L.Line]) -> None:
 
 
 def run_finalize(job: Job) -> None:
+    from . import translate as T
     lines = L.load(job.path("lines.json"))
     rules = F.FitRules.from_config(job.cfg)
+    word_for_word = T.verbatim(job)
+    stretch = float(job.cfg.get("fit.force_stretch_max", 1.3))
+    over = float(job.cfg.get("fit.force_overrun_s", 0.8))
     roomy = F.windows([l for l in lines if l.kind == L.SPEECH], job["scenes"]["cuts"],
                       replace(rules, borrow=rules.short_borrow), job["ingest"]["duration"])
     counts = {"fits": 0, "speed_factor": 0, "shorter": 0, "stretched": 0, "fallback": 0, "padded": 0}
@@ -574,9 +598,28 @@ def run_finalize(job: Job) -> None:
         natural = [("fits", Path(ln.take))] + [("fits", Path(p)) for p in others]
         # An underrun prefers the slower regenerated take; otherwise the natural take comes first.
         options: list[tuple[str, Path]] = factor + natural if ln.fit.get("state") == "under" else natural + factor
+        whole = list(options)
         options += [("shorter", d / "shortfit_0.wav"), ("shorter", d / "short_0.wav")]
         all_scores = {**ln.take_scores, **ln.fit.get("scores", {})}
-        chosen = choose(options, all_scores, window, rules, job.cfg)
+        chosen = None
+        if word_for_word and ln.en_from == "script":
+            # Word for word first: faster or running on into the silence after the line
+            # (as a last resort does), before any word of the subtitle is left out.
+            chosen = choose(whole, all_scores, window, rules, job.cfg)
+            if chosen is None:
+                room = max(window, roomy.get(ln.id, window))
+                fast = replace(rules, stretch_max=stretch)
+                # Faster within the line's time and the silence after it, or running on a little.
+                chosen = (choose(whole, all_scores, room, fast, job.cfg)
+                          or choose(whole, all_scores, room + over, fast, job.cfg))
+                if chosen is not None:
+                    late = media.duration(chosen[1]) / chosen[2] - room
+                    if late > rules.tolerance:
+                        ln.check_note = ln.check_note or f"runs {late:.1f} s past the original line's time"
+                    window = room
+                    ln.fit["window"] = window
+        if chosen is None:
+            chosen = choose(options, all_scores, window, rules, job.cfg)
         if chosen is None and short_text(ln.en):  # one- or two-word lines may go a little faster
             chosen = choose(options, all_scores, window, rules.for_short_text(), job.cfg)
         if chosen is None and roomy.get(ln.id, 0) > window:
@@ -680,7 +723,8 @@ def run_condense(job: Job) -> None:
     names = {cid: ch["name"] for cid, ch in prof.characters.items()}
     lang = job["subtitles"].get("source_language", "")
     overhead = float(job.cfg.get("condense.line_overhead_s", 0.25))
-    script = T.lead_used(job) == T.SCRIPT_LEAD
+    script = T.lead_used(job) in T.SCRIPT_LEADS
+    word_for_word = T.verbatim(job)
     rescued = 0
     seen_texts: dict[str, tuple[L.Line, str]] = {}
     seen_scores: dict[str, dict] = {}
@@ -705,6 +749,8 @@ def run_condense(job: Job) -> None:
             if heard and "back-check" in ln.fallback:
                 item["voice_heard_as"] = heard[:3]
             item.update(T.flags(ln))
+            if word_for_word and ln.en_from == "script":
+                item["trim_only"] = True
             items.append(item)
         job.status(f"round {rnd + 1}: shortening {len(todo)} lines")
         by_id = {ln.id: ln for ln in todo}
@@ -720,6 +766,12 @@ def run_condense(job: Job) -> None:
                     for it in T.parse_json(reply).get("lines", []):
                         short[int(it["id"])] = {"a": str(it.get("en", "")).strip(),
                                                 "b": str(it.get("shortest", "")).strip()}
+                    if word_for_word:  # a subtitle line may only lose words
+                        for i, opts in short.items():
+                            if i in by_id and by_id[i].en_from == "script":
+                                for k in ("a", "b"):
+                                    if opts[k] and not T.only_deletes(opts[k], by_id[i].en):
+                                        opts[k] = ""
                 except Exception as exc:
                     job.log(f"condense reply unusable: {exc}")
             # Meaning check: a shortened line is used only if it still says the same thing.
