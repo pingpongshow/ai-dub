@@ -58,6 +58,27 @@ def free_timing(job) -> bool:
     return timing == "start"
 
 
+def pace(lines: list[tuple[float, float]], gap: float, max_late: float, max_tempo: float) -> list[tuple[float, float]]:
+    """Free timing: where each English line starts, and how much faster the one before
+    it is played. `lines` are (original start, natural length) in time order. A line
+    starts with its original, or after the English line before it (plus `gap`). When
+    that would make it more than `max_late` late, the line before is sped up (at most
+    `max_tempo`) to end in time, so one long line doesn't push every later line back."""
+    out: list[list[float]] = []
+    busy = float("-inf")
+    for i, (orig, length) in enumerate(lines):
+        start = max(orig, busy + gap)
+        if out and start - orig > max_late:
+            prev_start, prev_len = out[-1][0], lines[i - 1][1]
+            room = orig + max_late - gap - prev_start
+            if room > 0:
+                out[-1][1] = min(max_tempo, max(out[-1][1], prev_len / room))
+                start = max(orig, prev_start + prev_len / out[-1][1] + gap)
+        out.append([start, 1.0])
+        busy = start + length
+    return [(round(s, 3), round(t, 4)) for s, t in out]
+
+
 def windows(lines: list[L.Line], cuts: list[float], rules: FitRules, duration: float) -> dict[int, float]:
     """Seconds available to each dubbed line: its own span plus up to `borrow` of
     following silence (`short_borrow` for very short lines), never past the same

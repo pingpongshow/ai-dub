@@ -11,13 +11,15 @@ normalised to the original track's integrated loudness (EBU R128) and, for
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import numpy as np
 import pyloudnorm as pyln
 
+from . import fit as F
 from . import lines as L
 from . import media
-from .fit import free_timing
+from .fit import free_timing, pace
 from .job import Job
 
 SR = 48000
@@ -139,24 +141,36 @@ def run(job: Job) -> None:
     dubbed = sorted((ln for ln in lines if ln.take and ln.kind == L.SPEECH and not ln.fallback), key=lambda l: l.start)
     free = free_timing(job)
     gap = float(cfg.get("fit.free_gap_ms", 120)) / 1000
-    spans, waited, busy_until = [], [], 0.0
+    takes = []
+    for ln in dubbed:
+        take, tsr = media.read_wav(ln.take, mono=True)
+        takes.append(media.resample(take, tsr, SR)[:, 0].copy())
+    plan = pace([(ln.start, len(x) / SR) for ln, x in zip(dubbed, takes)], gap,
+                float(cfg.get("fit.free_max_late_ms", 500)) / 1000, float(cfg.get("fit.force_stretch_max", 1.3))) \
+        if free else []
+    spans, waited, sped = [], [], 0
     # Lines left in the original (short reactions, songs, lines with no usable take) stay
     # audible even where a dub runs on over them; only the dubbed lines' own speech is muted.
     dub_ids = {l.id for l in dubbed}
     kept = [(l.start, l.end) for l in lines if l.id not in dub_ids]
     own = [(l.start, l.end) for l in dubbed]
     over_kept = placed = 0
-    for ln in dubbed:
-        take, tsr = media.read_wav(ln.take, mono=True)
-        x = media.resample(take, tsr, SR)[:, 0].copy()
+    for i, ln in enumerate(dubbed):
+        x = takes[i]
         start = ln.start
         if free:
             # Natural length: the line starts with the original, unless the English line
-            # before it is still speaking; then it follows that one (never two at once).
-            start = max(ln.start, busy_until + gap)
+            # before it is still speaking; then it follows that one (never two at once),
+            # and that one was sped up if it would have made this one late.
+            start, tempo = plan[i]
+            if tempo > 1.001:
+                fast = F.time_stretch(Path(ln.take), job.path("mix", "paced", f"{ln.id}.wav"), tempo)
+                y, ysr = media.read_wav(fast, mono=True)
+                x = media.resample(y, ysr, SR)[:, 0].copy()
+                ln.fit["paced_tempo"] = tempo
+                sped += 1
             if start > ln.start + 1e-3:
                 waited.append(start - ln.start)
-            busy_until = start + len(x) / SR
             ln.fit["placed"] = round(start, 3)
         a = min(int(start * SR), total)  # free timing can push a line past the end
         b = min(total, a + len(x))
@@ -234,7 +248,7 @@ def run(job: Job) -> None:
     job.qc["dubbed_lines"] = placed
     if free:
         job.qc["free_timing"] = {"lines_waited": len(waited), "max_wait_s": round(max(waited, default=0.0), 2),
-                                 "ran_over_kept_lines": over_kept,
+                                 "sped_up": sped, "ran_over_kept_lines": over_kept,
                                  "mean_wait_s": round(sum(waited) / len(waited), 2) if waited else 0.0}
         L.save(lines, job.path("lines.json"))
     job.status(f"mixed {placed} dubbed lines")

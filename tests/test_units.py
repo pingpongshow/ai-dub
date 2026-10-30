@@ -916,3 +916,48 @@ def test_delivery_swap_resumes_after_a_crash(tmp_path):
     job.set("deliver_swap", {"tmp": str(tmp_path / "none"), "final": str(tmp_path / "Y.mkv"),
                              "set_aside": str(tmp_path / "Y.mkv.aidub-original"), "delivered": {}})
     assert not deliver._finish_swap(job) and job.get("deliver_swap") is None
+
+
+def test_plain_subtitle_songs_credits_and_signs(tmp_path):
+    # An SRT has no styles: an opening song's lyrics in romaji (with the translation under
+    # them), its title, the credits shown over it, sign text and title cards are not dialogue.
+    p = tmp_path / "op.en.srt"
+    p.write_text("1\n00:00:02,000 --> 00:00:05,000\n<i>Opening Song\nOmohide (Memories) by Suzuki</i>\n\n"
+                 "2\n00:00:06,000 --> 00:00:10,000\n<i>STARRING\nKobayashi Kaoru</i>\n\n"
+                 "3\n00:00:12,000 --> 00:00:16,000\n<i>Ayata Toshiki</i>\n\n"
+                 "4\n00:00:26,000 --> 00:00:28,000\n<i>kimi ga hai ta shiroi iki ga\nThe white breath you exhale</i>\n\n"
+                 "5\n00:00:31,000 --> 00:00:34,000\n<i>ima, yukkuri kaze notte\nIs slowly riding in the wind</i>\n\n"
+                 "6\n00:00:40,000 --> 00:00:42,000\n<i>Directed by Matsuoka Joji</i>\n\n"
+                 "7\n00:01:46,000 --> 00:01:48,000\n<i>As the day comes to an end,</i>\n\n"
+                 "8\n00:01:54,000 --> 00:01:56,000\n~ Beer ~ 600 yen\n\n"
+                 "9\n00:02:27,000 --> 00:02:32,000\nEpisode 1\nRed Wiener & Tamagoyaki\n\n"
+                 "10\n00:02:44,000 --> 00:02:47,000\n<i>(*Pork soup with veggies and miso)</i>\n"
+                 "Can you make something\nelse other than traditional Tonjiru*?\n\n"
+                 "11\n00:03:00,000 --> 00:03:02,000\n(lit. kettle, pejorative slang for gay men, originated in the "
+                 "Edo period) I don't like okama myself.\n\n"
+                 "12\n00:03:10,000 --> 00:03:12,000\nKenji Tanaka\n", encoding="utf-8")
+    cues = clean.load(p)
+    assert [c.kind for c in cues] == [SONG, SIGN, SIGN, SONG, SONG, SIGN, DIALOGUE, SIGN, SIGN, DIALOGUE, DIALOGUE,
+                                      DIALOGUE]
+    assert cues[9].text == "Can you make something else other than traditional Tonjiru?"
+    assert cues[10].text == "I don't like okama myself."
+    assert cues[11].text == "Kenji Tanaka"  # a bare name far from any credit is someone calling out
+    for said in ["Hi... You're back home?", "I do so", "Oh no, I know.", "Mama, I'm home", "Go ahead.",
+                 "Sake, please, Master", "Make them scramble over the frying pan,"]:
+        assert clean.text_kind(said) == DIALOGUE, said
+    assert clean.is_romaji("zutto mukashi no koto no you da ne") and clean.is_romaji("pokkari to ukan de iru")
+
+
+def test_free_timing_late_lines_do_not_pile_up():
+    # Ten back-to-back lines, each English take 0.4 s longer than the gap to the next
+    # original line: unpaced, the tenth would start ~4.7 s late.
+    lines = [(i * 2.0, 2.4) for i in range(10)]
+    plan = fit.pace(lines, gap=0.12, max_late=0.5, max_tempo=1.3)
+    late = [s - o for (o, _), (s, _) in zip(lines, plan)]
+    assert max(late) <= 0.5 + 1e-6
+    assert all(1.0 < t <= 1.3 for _, t in plan[:-1]) and plan[-1][1] == 1.0
+    # A line far too long for the speed-up limit makes the next one later, but the line after recovers.
+    plan = fit.pace([(0.0, 6.0), (2.0, 1.0), (10.0, 1.0)], gap=0.12, max_late=0.5, max_tempo=1.3)
+    assert plan[0][1] == 1.3 and plan[1][0] == pytest.approx(6.0 / 1.3 + 0.12, abs=1e-3) and plan[2] == (10.0, 1.0)
+    # Lines with room keep their natural speed and start with the original.
+    assert fit.pace([(0.0, 1.0), (3.0, 1.0)], 0.12, 0.5, 1.3) == [(0.0, 1.0), (3.0, 1.0)]

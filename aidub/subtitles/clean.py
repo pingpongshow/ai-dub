@@ -16,7 +16,7 @@ import pysubs2
 from .model import DIALOGUE, HI, SIGN, SONG, Cue
 
 ASS_TAG = re.compile(r"\{[^}]*\}")
-HI_BRACKETS = re.compile(r"[\[\(（【][^\]\)）】]{0,60}[\]\)）】]")
+HI_BRACKETS = re.compile(r"[\[\(（【][^\]\)）】]{0,150}[\]\)）】]")  # sound tags and translator's notes
 SPEAKER_LABEL = re.compile(r"^\s*-?\s*([A-Z][A-Z0-9 .'\-]{0,24})\s*:\s+|^\s*([^\s:：a-z]{1,8})[：]\s*")
 JP_SPEAKER = re.compile(r"^\s*[（(]([^）)]{1,12})[）)]\s*")
 MUSIC = re.compile(r"[♪♫♬]")
@@ -25,6 +25,19 @@ SONG_STYLES = re.compile(r"(?<![a-z])(op|ed)(?![a-z])|^(op|ed)\d|song|karaoke|kf
                          re.I)
 POSITIONED = re.compile(r"\\pos\(|\\move\(|\\an[789]")
 KARAOKE = re.compile(r"\\k[fo]?\d", re.I)
+# Plain-text subtitles (SRT, VTT) carry no styles, so songs and on-screen text are told by
+# what they say: a lyric written in romaji (often with its translation under it), a title
+# naming the song, credits, "~ sign text ~" and episode title cards.
+_SYL = r"(?:([kgsztdhbpmcj])(?=\1))?(?:[kgsztdnhbpmrwyfjv]?y?|ch|sh|ts)[aiueo]|n(?![aiueoy])"
+ROMAJI_WORD = re.compile(rf"(?:{_SYL})+", re.I)
+SONG_TITLE = re.compile(r"^\s*(?:(?:opening|ending|closing|theme|insert|image)\s+(?:song|theme)|(?:op|ed)\s*[:：])", re.I)
+CREDIT = re.compile(r"^\s*(?:starring|(?:directed|written|produced|composed|performed|sung)\s+by|music\s+by|"
+                    r"screenplay|original\s+(?:story|work)|executive\s+producer|lyrics\s+by|"
+                    r"(?:main\s+)?cast\s*:|(?:series\s+)?director\s*:)", re.I)
+TILDE_SIGN = re.compile(r"^\s*~[^~]+~")
+NAME_ONLY = re.compile(r"(?:[A-Z][a-z'’\-]+\s+){0,3}[A-Z][a-z'’\-]+")  # "Ando Tamae": a credit, next to other credits
+CREDIT_REACH_S = 8.0
+TITLE_CARD = re.compile(r"^\s*(?:episode|ep\.?|chapter|part)\s*\d+\b|^\s*to\s+be\s+continued\b", re.I)
 
 
 def decode(data: bytes) -> str:
@@ -87,6 +100,14 @@ def load(path: str | Path, fmt: str | None = None) -> list[Cue]:
         out.append(Cue(start=start, end=end, text=text if kind == DIALOGUE else "",
                        raw=shown, name=(ev.name or name or "").strip(), style=ev.style or "", kind=kind))
     out.sort(key=lambda c: (c.start, c.end))
+    # A bare name shown among credits or over a song (opening titles) is a credit too.
+    last = None
+    for c in out:
+        if c.kind in (SONG, SIGN):
+            last = c.end
+        elif (c.kind == DIALOGUE and last is not None and c.start - last <= CREDIT_REACH_S
+              and NAME_ONLY.fullmatch(re.sub(r"<[^>]+>", "", c.raw).strip())):
+            c.kind, c.text, last = SIGN, "", c.end
     return out
 
 
@@ -117,8 +138,32 @@ def speaker_turns(shown: str) -> list[str]:
 INVISIBLE = re.compile("[\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]")
 
 
+def is_romaji(row: str) -> bool:
+    """A row of romanized Japanese ("kimi ga haita shiroi iki ga"), as karaoke-style
+    subtitles write song lyrics: three or more words, every one made of Japanese
+    syllables, most of them not English words."""
+    words = re.findall(r"[^\W\d_]+", row.lower())
+    if len(words) < 3 or not all(ROMAJI_WORD.fullmatch(w) for w in words):
+        return False
+    return sum(w not in ENGLISH_COMMON for w in words) / len(words) >= 0.6
+
+
+def text_kind(raw: str) -> str:
+    """SONG or SIGN when a plain-text subtitle's words say so, else DIALOGUE."""
+    rows = [r for r in re.split(r"\\[Nn]|\n", re.sub(r"<[^>]+>", "", ASS_TAG.sub("", INVISIBLE.sub("", raw))))
+            if r.strip()]
+    if any(is_romaji(r) for r in rows) or (rows and SONG_TITLE.match(rows[0])):
+        return SONG
+    if rows and (CREDIT.match(rows[0]) or TILDE_SIGN.match(rows[0]) or TITLE_CARD.match(rows[0])):
+        return SIGN
+    return DIALOGUE
+
+
 def clean_text(raw: str) -> tuple[str, str, str]:
     """Return (spoken text, speaker name if labelled, kind)."""
+    kind = text_kind(raw)
+    if kind != DIALOGUE:
+        return "", "", kind
     t = ASS_TAG.sub("", INVISIBLE.sub("", raw)).replace("\\N", " ").replace("\\n", " ").replace("\\h", " ")
     t = re.sub(r"<[^>]+>", "", t)  # srt/vtt markup
     if MUSIC.search(t):
@@ -128,6 +173,7 @@ def clean_text(raw: str) -> tuple[str, str, str]:
     if m and re.search(r"[^\x00-\x7f]", m.group(1)):  # "（健太）"; "(SIGHS)" is a hearing-impaired tag
         name, t = m.group(1), t[m.end():]
     t = HI_BRACKETS.sub(" ", t)
+    t = re.sub(r"(?<=\w)\*+|\*+(?=\w)", "", t)  # footnote marks ("Tonjiru*"); the note itself is in brackets
     m = SPEAKER_LABEL.match(t)
     if m:
         label = m.group(1) or m.group(2)
@@ -170,6 +216,7 @@ def script_language(texts: list[str]) -> str:
 
 ENGLISH_WORDS = set("the you and is it that what this we my your are was have do i i'm it's don't not with "
                     "for of to be he she they me him her".split())
+ENGLISH_COMMON = ENGLISH_WORDS | set("a an no so go do to on in at oh hey yes yeah okay ok mom dad".split())
 
 
 def looks_english(texts: list[str]) -> bool:
