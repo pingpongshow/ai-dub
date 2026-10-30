@@ -83,6 +83,7 @@ def main():
             "script": " / ".join(ln.en for ln in mine if ln.dubbed),
             "lines": [{"id": ln.id, "start": round(ln.start, 2), "end": round(ln.end, 2), "kind": ln.kind,
                        "ja": ln.source_text, "en": ln.en, "fallback": ln.fallback, "ref": ln.english_ref,
+                       "en_from": ln.en_from, "check_note": ln.check_note,
                        "take_s": round(media.duration(ln.take), 2) if ln.dubbed and ln.take else None}
                       for ln in mine],
             "heard": b["heard"],

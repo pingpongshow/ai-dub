@@ -539,6 +539,12 @@ def test_backcheck_hears_the_same_sound_spelled_differently(tmp_path):
         assert speak.wer("Nguyen! Get the car.", "No yen, get the car.") == 0
         ln = L.Line(1, 0, 1, en="Nguyen! Get the car.", take_scores={"t": {"missed": ["nguyen", "car"]}})
         assert speak.respelled(ln) == "noo yen! Get the car."
+        # Japanese names are respelled on a failed line even though names aren't "missed".
+        ln = L.Line(2, 0, 1, en="Useless, Kikoru-chan.", take_scores={"t": {"missed": ["useless"]}})
+        assert speak.respelled(ln) == "Useless, kee koh roo-chahn."
+        # A made-up word heard in two longer pieces with its consonants.
+        assert speak.wer("Daikaiju in Sumida!", "Dai Kajou in Sumida.") == 0
+        assert speak.wer("Brakes, now!", "Bray kess now.") > 0      # dictionary words: no such slack
         assert pronounce.only_sounds(speak._words("Mm-hmm.")) and pronounce.only_sounds(speak._words("Shh."))
         assert not pronounce.only_sounds(speak._words("Oh, no."))
     finally:
@@ -651,3 +657,51 @@ def test_subtitle_led_prompt_offers_checked_subtitles_only():
     plain.en_from = "subtitle"
     assert T.flags(plain) == {"subtitle_led": True, "subtitle_hint": "Everyone, retreat!"}
     assert T.flags(none) == {}
+
+
+def test_japanese_names_spelled_as_they_sound():
+    from aidub import pronounce as P
+    assert P.respell("Kikoru") == "kee koh roo" and P.respell("chan") == "chahn"
+    assert P.respell("Kaiju") == "kye joo" and P.respell("Shinomiya") == "shee noh mee yah"
+    assert P.respell("Kafka") is None and P.respell("klicks") is None      # not romanised Japanese
+
+
+def test_subtitles_as_script_share_cues_and_leave_short_unsubtitled_lines():
+    from aidub import translate as T
+    from aidub.subtitles.model import Cue
+    a1, a2 = L.Line(1, 10.0, 11.5, source_text="ちょっと通ります"), L.Line(2, 11.6, 12.4, source_text="すいません")
+    b1 = L.Line(3, 30.0, 32.0, source_text="大泉エリア戦況悪化")
+    cues = [Cue(start=10.0, end=12.4, text="Hey! Sorry, can I pass through?"),
+            Cue(start=30.1, end=32.0, text="The Oizumi area is worsening!"), Cue(start=50, end=51, text="Nobody")]
+    shares = T.script_cues(cues, [[a1, a2], [b1]])
+    assert [c["text"] for c in shares[0]] == ["Hey! Sorry, can I pass through?"]   # one cue, two lines
+    assert [c["text"] for c in shares[1]] == ["The Oizumi area is worsening!"]     # no cue twice, none stray
+    roger = L.Line(4, 20.0, 20.6, source_text="了解!")
+    speech = L.Line(5, 40.0, 43.0, source_text="こんな事になるとは思わなかった")
+    assert T.covered(a2, cues) and not T.covered(roger, cues)
+    assert T.short_reaction(roger) and not T.short_reaction(speech)
+    user = T.script_prompt([a1, a2], shares[0], [], "", 4.3, {})[1]["content"]
+    assert "Hey! Sorry, can I pass through?" in user and '"from_subtitle"' in user and '"matches"' in user
+    # Each line gets the subtitles shown while it is spoken, by time; a shared one is marked.
+    c1, c2, c3 = (L.Line(i, a, b) for i, a, b in ((11, 853.9, 855.9), (12, 858.8, 859.5), (13, 860.4, 862.1)))
+    cs = [{"start": 853.5, "end": 856.4, "text": "Right, Kafka?"},
+          {"start": 858.8, "end": 862.5, "text": "Please watch your step. It's okay. Please don't rush."}]
+    assert T.line_subtitles([c1, c2, c3], cs) == {11: [0], 12: [1], 13: [1]}
+    user = T.script_prompt([c1, c2, c3], cs, [], "", 4.3, {})[1]["content"]
+    assert '"subtitle": "Right, Kafka?"' in user and '"shared_with": [\n13\n]' in user
+    a1.en_from = "script"
+    assert T.flags(a1) == {"subtitle_script": True} and T.led(a1)
+    assert "subtitle_script" in T.source_notes([T.flags(a1)])
+
+
+def test_subtitle_track_must_be_trusted_to_be_the_script():
+    from aidub import translate as T
+    def job(content, disagree):
+        j = _StubJob({}, {"subtitles": {"english": "e", "candidates": [
+            {"id": "e", "score": {"content": content, "total": 0.85}}]}})
+        j.qc = {"subtitle_lines_checked": 200, "subtitle_lines_disagreeing_with_speech": disagree}
+        return j
+    assert T.subtitles_trusted(job(1.0, 8))[0]
+    ok, why = T.subtitles_trusted(job(0.5, 8))       # meaning doesn't follow the speech: another cut, machine-made
+    assert not ok and "content" in why
+    assert not T.subtitles_trusted(job(1.0, 90))[0]  # too many lines disagree one by one

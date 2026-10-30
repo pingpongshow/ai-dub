@@ -50,7 +50,9 @@ class Line:
     pan: float = 0.0                  # -1 left .. +1 right
     en: str = ""                      # dubbed English line
     en_short: str = ""                # shorter alternative for overruns
-    en_from: str = ""                 # "subtitle": written from the English subtitle (checked against the speech)
+    en_from: str = ""                 # "subtitle": written from the English subtitle (checked against the speech);
+                                      # "script": from the subtitles as the script (translate.lead: subtitle_only)
+    check_note: str = ""              # why a reviewer should listen to this line (subtitle differs from the speech...)
     voice: str = ""                   # reference clip used
     voice_note: str = ""              # minor-speaker substitution, if any
     take: str = ""                    # chosen fitted audio file

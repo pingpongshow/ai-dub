@@ -197,9 +197,13 @@ def missed_by_voice(ln: L.Line) -> list[str]:
 
 def respelled(ln: L.Line) -> str:
     """The line with the words its takes missed spelled as they sound, where their
-    spelling doesn't show it ("Nguyen!" as "noo yen!")."""
+    spelling doesn't show it ("Nguyen!" as "noo yen!"), and its romanised Japanese
+    names ("Kikoru-chan" as "kee koh roo chahn"; the back-check doesn't list names
+    as missed, as recognition spells them its own way)."""
     text = ln.en
-    for w in missed_by_voice(ln):
+    names = [w for w in re.findall(r"[A-Za-z]+", text) if pronounce.romaji_respell(w)
+             and (w[0].isupper() or w.lower() in ("chan", "kun", "san", "sama", "senpai"))]
+    for w in list(dict.fromkeys(missed_by_voice(ln) + names)):
         sound = pronounce.respell(w)
         if sound:
             text = re.sub(rf"(?<![\w']){re.escape(w)}(?![\w'])", sound, text, flags=re.I)
@@ -605,6 +609,46 @@ def run_finalize(job: Job) -> None:
     job.status(", ".join(f"{k} {v}" for k, v in counts.items() if v))
 
 
+def _force_fit(job: Job, lines: list[L.Line], texts: dict[str, tuple[L.Line, str]], scores: dict[str, dict],
+               rules: F.FitRules) -> int:
+    """Subtitles as the script: a subtitled line isn't left in the original only for
+    being long. Its shortest take the back-check passed is sped up (at most
+    `fit.force_stretch_max`) and may run on past its window, into the silence after it
+    or the next line, by up to `fit.force_overrun_s`: saying the line matters more than
+    exact timing. A line needing more than that stays in the original."""
+    roomy = F.windows([l for l in lines if l.kind == L.SPEECH], job["scenes"]["cuts"],
+                      replace(rules, borrow=rules.short_borrow), job["ingest"]["duration"])
+    stretch = float(job.cfg.get("fit.force_stretch_max", 1.3))
+    over = float(job.cfg.get("fit.force_overrun_s", 0.8))
+    forced = 0
+    for ln in lines:
+        if not (ln.kind == L.SPEECH and ln.fallback.startswith("too long") and ln.en_from == "script"):
+            continue
+        cands = [(Path(p), ln.fit.get("long_en", ln.en)) for p, sc in ln.take_scores.items() if _passes(sc, job.cfg)]
+        cands += [(Path(p), t) for p, (l, t) in texts.items() if l is ln and _passes(scores.get(p, {}), job.cfg)]
+        cands = [(p, t) for p, t in cands if p.exists()]
+        if not cands:
+            continue
+        p, text = min(cands, key=lambda c: media.duration(c[0]))
+        window = max(roomy.get(ln.id, ln.duration), float(ln.fit.get("window", 0)))
+        m = media.duration(p)
+        tempo = min(stretch, max(1.0, m / window))
+        late = m / tempo - window
+        if late > over + rules.tolerance:
+            continue
+        final = _line_dir(job, ln) / "final.wav"
+        F.time_stretch(p, final, tempo)
+        ln.en, ln.take, ln.fallback = text, str(final), ""
+        ln.fit.update({"window": window, "method": "forced", "tempo": round(tempo, 4), "source": p.name,
+                       "final": round(media.duration(final), 3), "timing_error": round(max(0.0, late), 3)})
+        if late > rules.tolerance:
+            ln.check_note = ln.check_note or f"runs {late:.1f} s past the original line's time"
+        forced += 1
+    if forced:
+        job.log(f"{forced} long subtitled lines sped up or run on instead of kept in the original")
+    return forced
+
+
 # condense ---------------------------------------------------------------------------------------
 def _pace(job: Job, ln: L.Line) -> float:
     """This voice's speaking pace (syllables a second) from the line's own takes,
@@ -636,7 +680,10 @@ def run_condense(job: Job) -> None:
     names = {cid: ch["name"] for cid, ch in prof.characters.items()}
     lang = job["subtitles"].get("source_language", "")
     overhead = float(job.cfg.get("condense.line_overhead_s", 0.25))
+    script = T.lead_used(job) == T.SCRIPT_LEAD
     rescued = 0
+    seen_texts: dict[str, tuple[L.Line, str]] = {}
+    seen_scores: dict[str, dict] = {}
     for rnd in range(rounds):
         todo = [ln for ln in lines if ln.kind == L.SPEECH and ln.fallback and ln.en]
         if not todo:
@@ -665,8 +712,8 @@ def run_condense(job: Job) -> None:
             convs = []
             for i in range(0, len(items), 30):
                 part = items[i:i + 30]
-                ctx = T._context_block(prof, {by_id[it["id"]].character for it in part}, lang)
-                convs.append(T.condense_prompt(part, ctx))
+                ctx = T._context_block(prof, {by_id[it["id"]].character for it in part}, lang, script)
+                convs.append(T.condense_prompt(part, ctx, T.system_for(job)))
             short: dict[int, dict] = {}
             for reply in llm.chat_many(convs, max_tokens=2048):
                 try:
@@ -685,9 +732,9 @@ def run_condense(job: Job) -> None:
             ok: dict[int, set] = {}
             for i in range(0, len(checks), 30):
                 part = checks[i:i + 30]
-                ctx = T._context_block(prof, {by_id[c["id"]].character for c in part}, lang)
+                ctx = T._context_block(prof, {by_id[c["id"]].character for c in part}, lang, script)
                 try:
-                    reply = llm.chat_many([T.meaning_check_prompt(part, ctx)], max_tokens=1024)[0]
+                    reply = llm.chat_many([T.meaning_check_prompt(part, ctx, T.system_for(job))], max_tokens=1024)[0]
                     for it in T.parse_json(reply).get("lines", []):
                         ok[int(it["id"])] = {str(x) for x in it.get("ok", [])}
                 except Exception as exc:
@@ -747,6 +794,8 @@ def run_condense(job: Job) -> None:
                 F.trim(p)
                 items_to_score.append((ln, text, out))
         scores = score_files(job, items_to_score)
+        seen_texts.update(texts)
+        seen_scores.update(scores)
         # A line that ran long: shorter wording first (a, then the shortest b), then the
         # current line retried (as it was, in the voice bank's voice, then spelled as it
         # sounds). A line that had the time but came out unclear keeps its wording if a
@@ -791,6 +840,8 @@ def run_condense(job: Job) -> None:
         L.save(lines, job.path("lines.json"))
     counts = job.qc.setdefault("fit", {})
     counts["condensed"] = rescued
+    if script:
+        counts["forced"] = _force_fit(job, lines, seen_texts, seen_scores, rules)
     _qc_fallbacks(job, lines)
     L.save(lines, job.path("lines.json"))
     job.status(f"shortened {rescued} lines; {counts['fallback']} still in the original language")

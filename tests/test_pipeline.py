@@ -195,3 +195,13 @@ def test_subtitle_over_no_speech_keeps_original(cfg, media_root):
     assert job["status"] == J.DONE, job["message"]
     lines = job["record"]["qc"]["lines"]
     assert lines.get("wordless", 0) >= 1 and lines.get("speech") == len(synth.LINES)
+
+
+def test_subtitles_as_script(cfg, media_root):
+    cfg.data.setdefault("translate", {})["lead"] = "subtitle_only"
+    ep = synth.episode(media_root / "Script (2020).mkv")
+    synth.srt(media_root / "Script (2020).en.srt", offset=1.5)
+    svc = Service(cfg)
+    job = run_service_job(svc, ep)
+    assert job["status"] == J.DONE, job["message"]
+    assert "subtitle_track" in job["record"]["qc"]

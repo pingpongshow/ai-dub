@@ -752,6 +752,7 @@ def check_english_refs(job: Job, lines: list[L.Line]) -> None:
             ln.english_context, ln.english_ref = ln.english_ref, ""
             moved += 1
     job.qc["subtitle_lines_disagreeing_with_speech"] = moved
+    job.qc["subtitle_lines_checked"] = len(cands)
     if moved:
         job.log(f"{moved} English subtitle lines didn't match the speech; used only as hints")
 

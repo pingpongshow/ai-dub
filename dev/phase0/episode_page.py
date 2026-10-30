@@ -42,6 +42,11 @@ def main():
     if not video.exists():
         subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(dubbed), "-map", "0:v:0",
                         "-map", "0:a:m:language:eng", "-c", "copy", "-movflags", "+faststart", str(video)], check=True)
+    # Clips come from the dub track itself: the file's first audio track is the original.
+    track = out / "dub.m4a"
+    if not track.exists():
+        subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(dubbed), "-map", "0:a:m:language:eng",
+                        "-c", "copy", str(track)], check=True)
     subs = vtt([tuple(c) for b in blocks for c in b["cues"]], out / "official.vtt")
     script = vtt([(ln["start"], ln["end"], ln["en"]) for b in blocks for ln in b["lines"]
                   if ln["kind"] == "speech" and not ln["fallback"]], out / "dub-script.vtt")
@@ -62,7 +67,7 @@ def main():
         item = f"blk-{i:03d}"
         a, z = b["start"] - 0.4, b["end"] + 0.6
         orig = enc(src, out / f"{item}-orig.m4a", a, z - a)
-        dub = enc(dubbed, out / f"{item}-dub.m4a", a, z - a) if b["script"] else ""
+        dub = enc(track, out / f"{item}-dub.m4a", a, z - a) if b["script"] else ""
         kept = [f"{ln['ja']} ({'left in Japanese' if ln['fallback'] else ln['kind']})" for ln in b["lines"]
                 if (ln["kind"] != "speech" or ln["fallback"]) and ln["kind"] not in ("wordless", "song")]
         note = notes.get(f"{b['start']:.1f}", "")

@@ -97,8 +97,11 @@ def split_sound(word: str, x: str, y: str) -> bool:
 
 
 def heard_split(word: str, x: str, y: str) -> bool:
-    """Two short heard words are pieces of `word` ("toupee" heard as "two P")."""
-    return len(x) <= 3 and len(y) <= 3 and (same_sound(word, x + y) or split_sound(word, x, y))
+    """Two short heard words are pieces of `word` ("toupee" heard as "two P"); a made-up
+    word may come back in longer pieces with its consonants ("Daikaiju" as "Dai Kajou")."""
+    if len(x) <= 3 and len(y) <= 3 and (same_sound(word, x + y) or split_sound(word, x, y)):
+        return True
+    return bool(LEXICON) and word not in LEXICON and len(skeleton(word)) >= 3 and same_sound(word, x + y)
 
 
 def _one_apart(x: str, y: str) -> bool:
@@ -136,12 +139,60 @@ SPELL = {"AA": "ah", "AE": "a", "AH": "uh", "AO": "aw", "AW": "ow", "AY": "eye",
          "ZH": "zh"}
 
 
+# Romanised Japanese ("Kikoru", "Shinomiya-kun", "Kaiju"): an English voice reads it as
+# English ("Kikoru-chan" heard as "kick or a chan"), so it is spelled out a syllable at a
+# time with English vowel spellings ("kee koh roo chahn").
+ROMAJI = re.compile(r"(?:(?:[kgsztdnhbpmr]y|sh|ch|ts|j|f|w|y|[kgsztdnhbpmr])?[aiueo]|n(?![aiueoy])|([kstp])(?=\1))")
+ROMAJI_VOWEL = {"a": "ah", "i": "ee", "u": "oo", "e": "eh", "o": "oh"}
+
+
+def romaji_syllables(word: str) -> list[str] | None:
+    """The word's syllables if it is spelled entirely as romanised Japanese."""
+    w = word.lower()
+    out, i = [], 0
+    while i < len(w):
+        m = ROMAJI.match(w, i)
+        if not m:
+            return None
+        out.append(m.group(0))
+        i = m.end()
+    return out
+
+
+def romaji_respell(word: str) -> str | None:
+    w = word.lower()
+    sy = romaji_syllables(w)
+    if not sy or len(w) < 3 or w in LEXICON:
+        return None
+    parts: list[str] = []
+    for k, x in enumerate(sy):
+        if x in "kstp" and len(x) == 1 and k + 1 < len(sy):     # a doubled consonant: a short stop
+            continue
+        if x == "n":
+            parts[-1:] = [(parts[-1] if parts else "") + "n"]
+            continue
+        head, v = x[:-1], x[-1]
+        # Long vowels and the diphthongs English spells its own way.
+        if parts and head == "" and parts[-1].endswith("ah") and v == "i":   # "kai": "kye"
+            stem = parts[-1][:-2]
+            parts[-1] = stem + "ye" if stem else "eye"
+            continue
+        if parts and head == "" and ((parts[-1].endswith("oh") and v in "ou") or (parts[-1].endswith("oo") and v == "u")
+                                     or (parts[-1].endswith("ee") and v == "i")):
+            continue
+        if parts and head == "" and parts[-1].endswith("eh") and v == "i":
+            parts[-1] = parts[-1][:-2] + "ay"
+            continue
+        parts.append(head + ROMAJI_VOWEL[v])
+    return " ".join(parts)
+
+
 def respell(word: str) -> str | None:
     """The word spelled as it sounds, a syllable at a time ("nguyen": "noo yen"), when
     its own spelling doesn't show its sound; None when it does or it isn't known."""
     prons = LEXICON.get(word.lower())
     if not prons:
-        return None
+        return romaji_respell(word)
     ps = prons[0].split()
     chunks: list[list[str]] = [[]]
     for i, p in enumerate(ps):
