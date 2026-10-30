@@ -17,8 +17,6 @@ server:
   host: 0.0.0.0
   port: 8790
 
-target_language: en
-
 # Which worker runs each stage. A worker that is missing or fails to start is
 # an error for the job; there is no silent switch to another model.
 stages:
@@ -64,18 +62,12 @@ ingest:
   song_chapters: [opening, op, ending, ed, preview, insert song, song, credits]
 
 subtitles:
-  prefer: [english, source_language, asr]
   min_score: 0.65          # a subtitle for another episode scores under ~0.5
   providers:
     embedded:      { enabled: true }
     sidecar:       { enabled: true }
     bazarr:        { enabled: false, url: "${BAZARR_URL}", api_key: "${BAZARR_API_KEY}",
                      search_missing: true, path_map: [] }
-    opensubtitles: { enabled: false, api_key: "${OPENSUBTITLES_API_KEY}",
-                     username: "${OPENSUBTITLES_USER}", password: "${OPENSUBTITLES_PASS}" }
-    subdl:         { enabled: false, api_key: "${SUBDL_API_KEY}" }
-    podnapisi:     { enabled: false }
-    jimaku:        { enabled: false, api_key: "${JIMAKU_API_KEY}" }
 
 translate:
   style: natural            # natural | close
@@ -134,7 +126,6 @@ condense:                   # lines that still don't fit get shorter English wit
   line_overhead_s: 0.25
 
 mix:
-  sample_rate: 48000
   eq_match: true
   eq_max_db: 6.0
   extra_duck_db: 0.0

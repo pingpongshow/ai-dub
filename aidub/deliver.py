@@ -27,7 +27,6 @@ from .job import Job
 from .subtitles.model import Cue
 from .subtitles.sources import write_srt
 
-STEP = "deliver"
 LANG_TITLE = {"ja": "Japanese", "ko": "Korean", "zh": "Chinese", "yue": "Cantonese", "en": "English",
               "es": "Spanish", "fr": "French", "de": "German"}
 AI_TITLES = ("(AI dub)", "(AI transcript)", "(AI translation)")

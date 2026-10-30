@@ -12,8 +12,6 @@ from __future__ import annotations
 
 from .job import Job
 
-STEP = "events"
-
 
 def run(job: Job) -> None:
     segs = job["diarization"]["segments"]

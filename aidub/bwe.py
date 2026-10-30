@@ -19,8 +19,6 @@ from . import lines as L
 from . import media
 from .job import Job
 
-STEP = "bwe"
-
 
 def high_band_share(x: np.ndarray, sr: int, cutoff: float = 8000.0) -> float:
     """Share of spectral energy above `cutoff` (mono signal)."""

@@ -27,8 +27,6 @@ from .service import Service
 mimetypes.add_type("audio/mp4", ".m4a")  # missing from some system tables; Safari needs it
 
 WEB_DIR = Path(os.environ.get("AIDUB_WEB", Path(__file__).resolve().parent.parent / "web"))
-# Keys for features that exist. Direct subtitle providers (OpenSubtitles, Subdl,
-# Jimaku) get theirs when those providers are built.
 SECRET_NAMES = ["BAZARR_API_KEY", "HF_TOKEN"]
 LOCKED_SETTINGS = ("paths", "media")
 REDACTED = "••••"

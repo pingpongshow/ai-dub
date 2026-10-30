@@ -23,7 +23,6 @@ from .subtitles.clean import norm_chars as clean_norm
 from .subtitles.score import cer
 from .subtitles.step import load_chosen
 
-STEP = "align"
 CJK = {"ja", "zh", "yue", "ko"}
 INTERJECTION_CHARS = set("あいうえおぁぃぅぇぉっーんアイウエオァィゥェォッーンはひふへほハヒフヘホやゃゎわワ"
                          "きゃキャくっちっ・…!?！？、。~〜 ")

@@ -17,8 +17,6 @@ from . import media, speakers
 from .job import Job
 from .profiles import Profile
 
-STEP = "voicebank"
-
 
 def _bleed_db(dlg: np.ndarray, mne: np.ndarray) -> float:
     d = float(np.sqrt(np.mean(dlg ** 2) + 1e-12))

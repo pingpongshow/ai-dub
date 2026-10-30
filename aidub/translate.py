@@ -23,7 +23,6 @@ from . import media
 from .job import Job
 from .profiles import Profile
 
-STEP = "translate"
 BATCH = 36
 LANG_NAMES = {"ja": "Japanese", "ko": "Korean", "zh": "Mandarin Chinese", "yue": "Cantonese", "es": "Spanish",
               "fr": "French", "de": "German", "en": "English", "ar": "Arabic"}
@@ -392,7 +391,6 @@ def verbatim_lines(batch: list[L.Line], cues: list[dict], drafts: dict[int, dict
             short = spoken_form(d.get("short", ""))
             d["short"] = short if short and only_deletes(short, part) and _tokens(short) != _tokens(part) else ""
     return by_time
-
 
 
 def subtitles_trusted(job: Job) -> tuple[bool, str]:

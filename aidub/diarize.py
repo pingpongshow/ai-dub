@@ -15,7 +15,6 @@ from collections import defaultdict
 from . import media, speakers
 from .job import Job
 
-STEP = "diarize"
 MIN_EMBED_S = 0.8
 
 

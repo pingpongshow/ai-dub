@@ -7,8 +7,6 @@ import glob
 from . import media, originals
 from .job import Job, Skipped
 
-STEP = "ingest"
-
 
 def english_dialogue_tracks(pr: media.Probe) -> list[media.Stream]:
     return [s for s in pr.audio if s.language == "en" and media.is_dialogue_audio(s)]

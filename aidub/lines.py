@@ -13,7 +13,6 @@ from pathlib import Path
 SPEECH, ENGLISH, WORDLESS, SONG, CROWD, BACKGROUND = "speech", "english", "wordless", "song", "crowd", "background"
 # crowd: several people talking at once; background: speech that is part of the background
 # sound (a station announcement, a TV across the room), so it stays in the music & effects.
-KEPT_KINDS = {ENGLISH, WORDLESS, SONG, CROWD, BACKGROUND}
 
 
 @dataclass

@@ -11,7 +11,6 @@ import hashlib
 import json
 import os
 import subprocess
-import sys
 import threading
 from pathlib import Path
 from typing import Any, Callable
@@ -242,6 +241,3 @@ def prefetch(cfg: Config, name: str, args: dict, log: Callable[[str], None] = pr
     (env_dir(cfg, name) / ".aidub-weights").write_text(json.dumps({"model": args.get("model", "")}))
     return result
 
-
-def python_exe() -> str:
-    return sys.executable

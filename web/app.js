@@ -49,7 +49,6 @@ async function pageQueue() {
       <div class="browser" id="browser"></div>
       <div class="row" style="margin-top:10px">
         <span class="grow small muted" id="selcount">Nothing selected</span>
-        <button id="inspect" disabled>Check selected</button>
         <button class="primary" id="add" disabled>Add to queue</button>
       </div>
       <div id="addform" hidden></div>
@@ -57,7 +56,6 @@ async function pageQueue() {
     <h2>Queue</h2>
     <div id="jobs"></div>`;
   $("#add").onclick = () => showAddForm();
-  $("#inspect").onclick = () => showAddForm();
   await loadBrowser(browsePath);
   await loadQueue();
   timer = setInterval(loadQueue, 2500);
@@ -91,7 +89,7 @@ async function loadBrowser(path) {
 function toggle(path, on) {
   on ? selected.add(path) : selected.delete(path);
   $("#selcount").textContent = selected.size ? `${selected.size} file(s) selected` : "Nothing selected";
-  $("#add").disabled = $("#inspect").disabled = !selected.size;
+  $("#add").disabled = !selected.size;
 }
 
 async function showAddForm() {
@@ -218,6 +216,8 @@ async function pageProfile(slug) {
       <label>Honorifics <select id="hon"><option value="keep">keep (-san, -kun…)</option><option value="drop">drop</option></select></label>
       <label>Style <select id="style"><option value="natural">natural</option><option value="close">close</option></select></label>
       <span class="grow"></span><button class="danger" id="delprof">Delete profile</button>
+      <p class="small muted" style="width:100%;margin:0">Honorifics and style apply to lines translated from the speech. Lines dubbed from
+        English subtitles keep the subtitles' own wording.</p>
     </div>
     <h2>Voice bank</h2>
     <div class="chars">${p.characters.map((c) => `

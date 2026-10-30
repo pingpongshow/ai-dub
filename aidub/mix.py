@@ -20,7 +20,6 @@ from . import media
 from .fit import free_timing
 from .job import Job
 
-STEP = "mix"
 SR = 48000
 BANDS = [(0, 300), (300, 3000), (3000, 24000)]
 

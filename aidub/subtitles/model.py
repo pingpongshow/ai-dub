@@ -23,7 +23,7 @@ class Cue:
 class Candidate:
     id: str
     label: str
-    origin: str               # embedded | sidecar | bazarr | ocr | provider:<name>
+    origin: str               # embedded | sidecar | bazarr | ocr
     language: str
     format: str               # srt | ass | vtt
     path: str                 # copy in the job's working folder

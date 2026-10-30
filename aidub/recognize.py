@@ -14,7 +14,6 @@ from pathlib import Path
 from . import media
 from .job import Job
 
-STEP = "recognize"
 CHUNK_MAX_S = 25.0
 PAD_S = 0.15
 

@@ -18,8 +18,6 @@ import numpy as np
 from . import media
 from .job import Job
 
-STEP = "separate"
-
 
 def channel_groups(n: int) -> list[tuple[str, list[int]]]:
     if n >= 6:

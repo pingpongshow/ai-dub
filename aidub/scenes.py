@@ -11,7 +11,6 @@ import numpy as np
 from . import media
 from .job import Job
 
-STEP = "scenes"
 _PTS = re.compile(r"pts_time:([0-9.]+)")
 
 

@@ -55,10 +55,6 @@ class Stream:
         return self.type == "subtitle" and self.codec in {"subrip", "ass", "ssa", "webvtt", "mov_text", "text"}
 
     @property
-    def is_bitmap_sub(self) -> bool:
-        return self.type == "subtitle" and self.codec in {"hdmv_pgs_subtitle", "dvd_subtitle", "dvb_subtitle"}
-
-    @property
     def is_aidub(self) -> bool:
         """A track Ai Dub added: version-stamp tags (MKV) or its title (MP4 has no custom tags)."""
         return any(k.upper().startswith("AIDUB_") for k in self.tags) or \

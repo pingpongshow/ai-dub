@@ -15,8 +15,6 @@ from . import score, sources
 from .bazarr import Bazarr
 from .model import DIALOGUE, Candidate, Cue
 
-STEP = "subtitles"
-
 
 def _speech_mask(job: Job) -> tuple:
     dur = job["ingest"]["duration"]
