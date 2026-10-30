@@ -81,7 +81,7 @@ translate:
   style: natural            # natural | close
   honorifics: keep          # keep | drop (per-show setting overrides)
   reflect: true             # translate -> reflect -> rewrite
-  lead: audio               # audio: translate what was said (subtitles are hints); subtitle: dub the English
+  lead: subtitle_verbatim   # audio: translate what was said (subtitles are hints); subtitle: dub the English
                             # subtitle where it means what was said (checked line by line), else the speech;
                             # subtitle_only: the English subtitles are the script for every line they cover
                             # (the speech checks meaning and sets timing; a doubtful track falls back to audio);
@@ -120,8 +120,9 @@ fit:
   short_stretch_max: 1.25   # ... and be time-stretched this much
   stretch_min: 0.92
   tolerance_ms: 80
-  timing: window            # window: each line fits the time the character speaks (lip movement);
-                            # start: starts with the original line at its natural length (lip movement ignored)
+  timing: auto              # window: each line fits the time the character speaks (lip movement);
+                            # start: starts with the original line at its natural length (lip movement ignored);
+                            # auto: start when the dub is the subtitles word for word, window otherwise
   free_gap_ms: 120          # timing start: a line due while the previous English line still speaks follows it
   force_stretch_max: 1.3    # subtitle_only: a long subtitled line may be sped up this much ...
   force_overrun_s: 0.8      # ... and run on this long past its window rather than stay in the original

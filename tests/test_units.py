@@ -761,3 +761,14 @@ def test_free_timing_prompts_have_no_length_target():
     assert "target syllable" not in free[0]["content"]
     assert "target_syllables" not in T.reflect_prompt([ln], "", None, {}, {1: {"en": "Retreat!"}})[1]["content"]
     assert "target_syllables" not in T.rewrite_prompt([ln], "", None, {}, {1: {"en": "Retreat!"}}, {})[1]["content"]
+
+
+def test_auto_timing_frees_only_the_word_for_word_dub():
+    from aidub import fit
+    def job(timing, lead_used):
+        cfg = {"fit.timing": timing} if timing else {}
+        return _StubJob(cfg, {"translate_lead": lead_used})
+    assert fit.free_timing(job(None, "subtitle_verbatim"))         # default: auto
+    assert not fit.free_timing(job(None, "audio"))                 # untrusted subtitles: fitted audio-led dub
+    assert not fit.free_timing(job("auto", "subtitle"))
+    assert fit.free_timing(job("start", "audio")) and not fit.free_timing(job("window", "subtitle_verbatim"))

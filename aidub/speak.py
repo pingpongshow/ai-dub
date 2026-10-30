@@ -363,7 +363,7 @@ def run_speak(job: Job) -> None:
         reqs.sort(key=lambda r: r["speaker_ref"])
         _synthesize(job, w, reqs, "takes")
         plan = _plan_fit(job, lines, rules)
-        if F.free_timing(job.cfg):  # natural length: nothing to refit
+        if F.free_timing(job):  # natural length: nothing to refit
             for ln in plan:
                 ln.fit["state"] = "fits"
             plan = []
@@ -587,7 +587,7 @@ def run_finalize(job: Job) -> None:
     roomy = F.windows([l for l in lines if l.kind == L.SPEECH], job["scenes"]["cuts"],
                       replace(rules, borrow=rules.short_borrow), job["ingest"]["duration"])
     counts = {"fits": 0, "speed_factor": 0, "shorter": 0, "stretched": 0, "fallback": 0, "padded": 0}
-    free = F.free_timing(job.cfg)
+    free = F.free_timing(job)
     for ln in lines:
         if not ln.take:
             if ln.kind == L.SPEECH and ln.fallback:
@@ -730,7 +730,7 @@ def run_condense(job: Job) -> None:
     if not job.cfg.get("condense.enabled", True) or rounds <= 0:
         return
     win = F.windows([l for l in lines if l.kind == L.SPEECH], job["scenes"]["cuts"], rules, job["ingest"]["duration"])
-    if F.free_timing(job.cfg):  # only lines the voice garbled come here; any length will do
+    if F.free_timing(job):  # only lines the voice garbled come here; any length will do
         win = {k: 1e6 for k in win}
     dlg, sr = media.read_wav(job.path("audio", "dialogue.wav"), mono=True)
     prof = job.profile

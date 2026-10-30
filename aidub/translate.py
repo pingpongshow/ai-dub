@@ -238,12 +238,12 @@ def source_notes(items: list[dict]) -> str:
 def lead(job: Job) -> str:
     """"audio" (translate what was said; subtitles are hints), "subtitle" (a line's
     subtitle where it means what was said) or "subtitle_only" (the subtitles are the script)."""
-    return str(job.profile.settings.get("lead", job.cfg.get("translate.lead", "audio")))
+    return str(job.profile.settings.get("lead", job.cfg.get("translate.lead", VERBATIM_LEAD)))
 
 
 def free_timing(job: Job) -> bool:
     from .fit import free_timing as free
-    return free(job.cfg)
+    return free(job)
 
 
 def lead_used(job: Job) -> str:
@@ -727,7 +727,6 @@ def run(job: Job) -> None:
     windows = job.get("line_windows") or [0] * len(lines)
     lang = job["subtitles"].get("source_language", "")
     rate = float(job.cfg.get("translate.syllables_per_second", 4.3))
-    free = free_timing(job)
     reflect = bool(prof.settings.get("reflect", job.cfg.get("translate.reflect", True)))
     names = {cid: ch["name"] for cid, ch in prof.characters.items()}
     by_id = {ln.id: ln for ln in lines}
@@ -753,6 +752,7 @@ def run(job: Job) -> None:
                 else:
                     ln.check_note = NO_SUBTITLE
     job.set("translate_lead", lead_by)
+    free = free_timing(job)  # (auto timing follows the lead actually used)
     script = lead_by in SCRIPT_LEADS
     word_for_word = lead_by == VERBATIM_LEAD
     batches = [b for b in ([l for l in b if not l.fallback] for b in _batches(lines, windows)) if b]

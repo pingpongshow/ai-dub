@@ -126,7 +126,7 @@ def run(job: Job) -> None:
         groups[name] = {"dlg": d, "mne": m, "dub": np.zeros_like(d)}
 
     dubbed = sorted((ln for ln in lines if ln.take and ln.kind == L.SPEECH and not ln.fallback), key=lambda l: l.start)
-    free = free_timing(cfg)
+    free = free_timing(job)
     gap = float(cfg.get("fit.free_gap_ms", 120)) / 1000
     spans, waited, busy_until = [], [], 0.0
     for ln in dubbed:

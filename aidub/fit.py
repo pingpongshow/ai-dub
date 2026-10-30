@@ -46,10 +46,16 @@ class FitRules:
                        stretch_max=max(self.stretch_max, self.short_stretch_max))
 
 
-def free_timing(cfg) -> bool:
+def free_timing(job) -> bool:
     """fit.timing: start: each English line starts with the original line and runs its
-    natural length (lip movement ignored); nothing is shortened, sped up or cut to fit."""
-    return str(cfg.get("fit.timing", "window")) == "start"
+    natural length (lip movement ignored); nothing is shortened, sped up or cut to fit.
+    window: each line fits the time the character speaks. auto (the default): start
+    when the dub is the subtitles word for word (translate.lead: subtitle_verbatim, the
+    track trusted), window otherwise (a translation of the speech is fitted)."""
+    timing = str(job.cfg.get("fit.timing", "auto"))
+    if timing == "auto":
+        return job.get("translate_lead") == "subtitle_verbatim"
+    return timing == "start"
 
 
 def windows(lines: list[L.Line], cuts: list[float], rules: FitRules, duration: float) -> dict[int, float]:
