@@ -10,7 +10,7 @@
   <Overview>Local, voice-cloned dubbing of foreign-language video into English. Adds an "English (AI dub)" audio track to your own media files. Needs an NVIDIA GPU (32 GB recommended). Models are downloaded on first use from the Models page.</Overview>
   <Category>MediaApp:Video</Category>
   <WebUI>http://[IP]:[PORT:8790]/</WebUI>
-  <Icon/>
+  <Icon>https://raw.githubusercontent.com/pingpongshow/ai-dub/main/docker/unraid/icon.png</Icon>
   <ExtraParams>--runtime=nvidia</ExtraParams>
   <Config Name="Web UI" Target="8790" Default="8790" Mode="tcp" Type="Port" Display="always" Required="true"/>
   <Config Name="App data" Target="/config" Default="/mnt/user/appdata/ai-dub/appdata" Mode="rw" Type="Path" Display="always" Required="true" Description="Settings, keys, job database, show profiles"/>

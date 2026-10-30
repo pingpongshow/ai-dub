@@ -1,2 +1,0 @@
-{"python": "3.12", "index_urls": ["https://download.pytorch.org/whl/cu128"], "index_strategy": "unsafe-best-match",
- "title": "Voice cloning: Qwen3-TTS (comparison)", "models": "Qwen3-TTS 12Hz 1.7B Base", "licence": "Apache-2.0", "download": "~4.5 GB"}

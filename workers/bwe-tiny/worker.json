@@ -1,2 +1,0 @@
-{"python": "3.12", "index_urls": ["https://download.pytorch.org/whl/cu128"], "index_strategy": "unsafe-best-match",
- "title": "Bandwidth extension: tiny FlashSR (comparison)", "models": "YatharthS FlashSR (16 kHz in)", "licence": "Apache-2.0", "download": "~2 MB"}

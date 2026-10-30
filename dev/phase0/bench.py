@@ -198,16 +198,14 @@ def cmd_separation() -> None:
         done = json.loads((RESULTS / "separation.json").read_text()) if (RESULTS / "separation.json").exists() else {}
         out.update(done)
         rows = {k: v for k, v in done.get(clip["name"], {}).items() if "error" not in v}
-        models = SEPARATORS + (["bandit-v2"] if (Path(c.models) / "envs" / "separate-bandit").exists() else [])
-        for model in models:
+        for model in SEPARATORS:
             if model in rows:
                 continue
             d = ROOT / "sep" / clip["name"] / model.split(".")[0]
-            worker = "separate-bandit" if model == "bandit-v2" else "separate"
             log(clip["name"], "separating with", model)
             try:
-                with Worker(c, worker, log=lambda l: None) as w:
-                    w.call("load", {"model": None if model == "bandit-v2" else model})
+                with Worker(c, "separate", log=lambda l: None) as w:
+                    w.call("load", {"model": model})
                     t0 = time.time()
                     res = w.call("separate", {"input": str(inp), "out_dir": str(d)})
                     took = time.time() - t0
@@ -244,13 +242,7 @@ def cmd_separation() -> None:
 
 # Recognition ----------------------------------------------------------------------------------------
 def recognizers(lang: str) -> list[tuple[str, str, str | None]]:
-    out = [("Qwen3-ASR 1.7B", "asr", None)]
-    if (Path(cfg().models) / "envs" / "asr-whisper").exists():
-        out.append(("Whisper large-v3", "asr-whisper", "openai/whisper-large-v3"))
-        if lang == "ja":
-            out.append(("anime-whisper", "asr-whisper", "litagin/anime-whisper"))
-            out.append(("kotoba-whisper v2.2", "asr-whisper", "kotoba-tech/kotoba-whisper-v2.2"))
-    return out
+    return [("Qwen3-ASR 1.7B", "asr", None)]
 
 
 def cmd_recognition() -> None:
@@ -340,10 +332,8 @@ def cmd_translation() -> None:
 
 
 # Voice ---------------------------------------------------------------------------------------------
-# Higgs Audio v3 is left out: it runs only as a separate server and needs ~40 GB of VRAM.
 VOICES = [("IndexTTS-2.5", "tts-indextts", {}), ("IndexTTS-2.5 emo 0.4", "tts-indextts", {"emo_alpha": 0.4}),
-          ("IndexTTS-2.5 emo 0.9", "tts-indextts", {"emo_alpha": 0.9}), ("Qwen3-TTS", "tts-qwen3", {}),
-          ("Chatterbox", "tts-chatterbox", {}), ("Ming-3.0", "tts-ming", {})]
+          ("IndexTTS-2.5 emo 0.9", "tts-indextts", {"emo_alpha": 0.9})]
 
 
 def voice_lines(job: Job, n: int = 14) -> list[L.Line]:
@@ -413,28 +403,20 @@ def cmd_voice() -> None:
         with Worker(c, "speaker", log=lambda l: None) as w:
             w.call("load", {})
             embs = w.call("embed_files", {"paths": [p for _, _, p in allf]})["embeddings"]
-        mos = [None] * len(allf)
-        if (Path(c.models) / "envs" / "mos").exists():
-            with Worker(c, "mos", log=lambda l: None) as w:
-                w.call("load", {})
-                mos = w.call("score", {"paths": [p for _, _, p in allf]})["mos"]
         from aidub.speakers import cosine
         rows: dict[str, dict] = {}
-        for (label, ln, p), h, e, m in zip(allf, heard, embs, mos):
+        for (label, ln, p), h, e in zip(allf, heard, embs):
             ch = prof.characters.get(prof.voice_source(ln.character), {})
-            r = rows.setdefault(label, {"wer": [], "sim": [], "mos": [], "len_ratio": []})
+            r = rows.setdefault(label, {"wer": [], "sim": [], "len_ratio": []})
             r["wer"].append(wer(ln.en, h.get("text", "")))
             if ch.get("embedding") and e:
                 r["sim"].append(cosine(e, ch["embedding"]))
-            if m is not None:
-                r["mos"].append(m)
             r["len_ratio"].append(media.duration(p) / max(0.3, ln.duration + 0.25))
         summary = {}
         for label, r in rows.items():
             n = len(r["wer"])
             summary[label] = {"lines": n, "wer": round(float(np.mean(r["wer"])), 3),
                               "similarity": round(float(np.mean(r["sim"])), 3) if r["sim"] else None,
-                              "mos": round(float(np.mean(r["mos"])), 2) if r["mos"] else None,
                               "fits_window": round(float(np.mean([x <= 1.12 for x in r["len_ratio"]])), 3),
                               "sec_per_line": round(timing.get(label, 0) / max(1, n), 2)}
         out[clip["name"]] = summary
@@ -468,7 +450,7 @@ def cmd_bandwidth() -> None:
         for p in takes:
             x, sr = media.read_wav(p, mono=True)
             variants["plain resample"].append(str(media.write_wav(base / "bwe-plain" / p.name, media.resample(x, sr, 48000), 48000)))
-        for label, worker in (("FlashSR", "bwe-flashsr"), ("FlashSR tiny", "bwe-tiny")):
+        for label, worker in (("FlashSR", "bwe-flashsr"),):
             if not (Path(c.models) / "envs" / worker).exists():
                 continue
             outs = [str(base / f"bwe-{worker}" / p.name) for p in takes]
@@ -478,16 +460,9 @@ def cmd_bandwidth() -> None:
                 w.call("load", {})
                 w.call("upsample", {"items": [{"input": str(p), "output": o} for p, o in zip(takes, outs)]})
             variants[label] = outs
-        mos = {}
-        if (Path(c.models) / "envs" / "mos").exists():
-            with Worker(c, "mos", log=lambda l: None) as w:
-                w.call("load", {})
-                for k, v in variants.items():
-                    mos[k] = w.call("score", {"paths": v})["mos"]
         orig_hb = float(np.mean([high_band(str(o)) for o in origs if o.exists()]))
         out[clip["name"]] = {"original_high_band": round(orig_hb, 4), **{
-            k: {"high_band": round(float(np.mean([high_band(p) for p in v])), 4),
-                "mos": round(float(np.mean(mos[k])), 2) if k in mos else None} for k, v in variants.items()}}
+            k: {"high_band": round(float(np.mean([high_band(p) for p in v])), 4)} for k, v in variants.items()}}
         log(clip["name"], out[clip["name"]])
         save("bandwidth", out)
         for i, p in enumerate(takes):
@@ -505,16 +480,6 @@ def cmd_diarization() -> None:
         d = job["diarization"]
         res = {"Nemotron 3": {"speakers": len(d["speakers"]), "turns": len(d["segments"]),
                               "overlap_share": round(sum(1 for s in d["segments"] if s.get("overlap")) / max(1, len(d["segments"])), 3)}}
-        if (Path(c.models) / "envs" / "diarize-diarizen").exists():
-            try:
-                with Worker(c, "diarize-diarizen", log=lambda l: None) as w:
-                    w.call("load", {})
-                    t0 = time.time()
-                    segs = w.call("diarize", {"input": str(job.path("audio", "dialogue16k.wav"))})["segments"]
-                res["DiariZen"] = {"speakers": len({s["speaker"] for s in segs}), "turns": len(segs),
-                                   "seconds": round(time.time() - t0, 1)}
-            except Exception as exc:
-                res["DiariZen"] = {"error": str(exc)[:300]}
         out[clip["name"]] = res
         log(clip["name"], res)
     save("diarization", out)
