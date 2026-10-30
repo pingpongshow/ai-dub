@@ -59,7 +59,7 @@ ingest:
   skip_english_audio: true
   scene_threshold: 0.35     # ffmpeg scene score for a shot change
   scene_min_pause_s: 1.5    # a pause in speech this long also splits scenes
-  song_chapters: [opening, op, ending, ed, preview, insert song, song, credits]
+  song_chapters: [opening, op, intro, ending, ed, outro, preview, insert song, song, credits]  # kept in the original
 
 subtitles:
   min_score: 0.65          # a subtitle for another episode scores under ~0.5

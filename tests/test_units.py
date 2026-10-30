@@ -961,3 +961,31 @@ def test_free_timing_late_lines_do_not_pile_up():
     assert plan[0][1] == 1.3 and plan[1][0] == pytest.approx(6.0 / 1.3 + 0.12, abs=1e-3) and plan[2] == (10.0, 1.0)
     # Lines with room keep their natural speed and start with the original.
     assert fit.pace([(0.0, 1.0), (3.0, 1.0)], 0.12, 0.5, 1.3) == [(0.0, 1.0), (3.0, 1.0)]
+
+
+def test_intro_and_end_credits_keep_the_original(tmp_path, monkeypatch):
+    from aidub import align
+    # Opening song and credits (0:02-1:27), dialogue 1:46-23:06, then an unsubtitled closing song to 24:37.
+    p = tmp_path / "ep.en.srt"
+    p.write_text("1\n00:00:02,300 --> 00:00:05,400\nOpening Song\nOmohide by Suzuki\n\n"
+                 "2\n00:00:06,600 --> 00:00:10,200\nSTARRING\nKobayashi Kaoru\n\n"
+                 "3\n00:00:12,600 --> 00:00:16,200\nAyata Toshiki\n\n"
+                 "4\n00:00:18,700 --> 00:00:22,100\nAndo Tamae\n\n"
+                 "5\n00:00:26,500 --> 00:00:28,200\nkimi ga hai ta shiroi iki ga\nThe white breath you exhale\n\n"
+                 "5\n00:00:36,500 --> 00:00:41,500\nsora ni ukabu kumo no naka ni\nAnd little by little vanishing\n\n"
+                 "6\n00:01:46,200 --> 00:01:48,100\nAs the day comes to an end,\n\n"
+                 "7\n00:12:00,000 --> 00:12:02,000\nTwo red wieners, please.\n\n"
+                 "8\n00:23:04,300 --> 00:23:06,000\nGood night!\n", encoding="utf-8")
+    cues = clean.load(p)
+    monkeypatch.setattr(align, "load_chosen", lambda job, which: cues if which == "english" else [])
+    job = {"ingest": {"duration": 1477.0, "song_ranges": [[600.0, 690.0]]}}
+    ranges = align.intro_credits(job)
+    assert [600.0, 690.0] in ranges                                   # a chapter named Opening/Ending/Credits
+    assert [2.3, 41.5] in [[round(a, 1), round(b, 1)] for a, b in ranges]  # the opening song and its credits
+    assert any(a == 0.0 and 100 < b < 106.2 for a, b in ranges)       # nothing before the first dialogue
+    assert any(1386 < a < 1392 and b == 1477.0 for a, b in ranges)    # the unsubtitled closing song
+    assert not align._in_ranges(106.2, 108.1, ranges)                  # the narration after the song is dubbed
+    assert not align._in_ranges(1384.3, 1386.0, ranges)                # ... and the last line before the credits
+    # Without English subtitles only chapters and song/credit runs count.
+    monkeypatch.setattr(align, "load_chosen", lambda job, which: [])
+    assert align.intro_credits({"ingest": {"duration": 1477.0}}) == []

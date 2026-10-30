@@ -18,7 +18,7 @@ import numpy as np
 from . import lines as L
 from . import media, scenes
 from .job import Job
-from .subtitles.model import DIALOGUE, SONG
+from .subtitles.model import DIALOGUE, SIGN, SONG
 from .subtitles.clean import norm_chars as clean_norm
 from .subtitles.score import cer
 from .subtitles.step import load_chosen
@@ -649,10 +649,47 @@ def extend_songs(lines: list[L.Line], lang: str) -> int:
     return total
 
 
+CREDITS_GAP_S = 10.0     # song and credit subtitles this close together are one titles sequence
+CREDITS_MIN_S = 20.0     # ... and one this long (with a song in it) is an intro or end credits
+EDGE_SLACK_S = 3.0
+EDGE_MAX_S = 240.0       # unsubtitled time before the first / after the last dialogue subtitle, at most this long
+
+
+def intro_credits(job: Job) -> list[list[float]]:
+    """Opening titles and end credits, which keep the original audio whole (songs and
+    all): chapters named so (ingest), a run of song and credit subtitles, and, when an
+    English subtitle track was chosen, the stretch before its first and after its last
+    dialogue subtitle (an unsubtitled closing song would otherwise be translated)."""
+    out = [list(r) for r in job["ingest"].get("song_ranges", [])]
+    for which in ("source", "english"):
+        cues = sorted((q for q in load_chosen(job, which) if q.kind in (SONG, SIGN)), key=lambda q: q.start)
+        run: list = []
+        for q in cues + [None]:
+            if q is not None and (not run or q.start - max(r.end for r in run) <= CREDITS_GAP_S):
+                run.append(q)
+                continue
+            if run and any(r.kind == SONG for r in run) and max(r.end for r in run) - run[0].start >= CREDITS_MIN_S:
+                out.append([run[0].start, max(r.end for r in run)])
+            run = [q] if q is not None else []
+    talk = [q for q in load_chosen(job, "english") if q.kind == DIALOGUE and q.text.strip()]
+    duration = job["ingest"].get("duration")
+    if talk and duration:
+        first, last = min(q.start for q in talk) - EDGE_SLACK_S, max(q.end for q in talk) + EDGE_SLACK_S
+        if 0 < first <= EDGE_MAX_S:
+            out.append([0.0, first])
+        if 0 < duration - last <= EDGE_MAX_S:
+            out.append([last, duration])
+    return sorted(out)
+
+
 def classify(job: Job, lines: list[L.Line]) -> None:
     turns = job["diarization"]["segments"]
     ev = job.get("events") or []
-    songs = list(job["ingest"].get("song_ranges", []))
+    titles = intro_credits(job)
+    if titles:
+        job.qc["intro_credits"] = [[round(a, 1), round(b, 1)] for a, b in titles]
+        job.log("intro / credits kept in the original: " + ", ".join(f"{a:.0f}-{b:.0f} s" for a, b in titles))
+    songs = list(titles)
     # Any chosen subtitle (source-language or English) that marks a moment as a song.
     for which in ("source", "english"):
         songs += [[q.start, q.end] for q in load_chosen(job, which) if q.kind == SONG]
