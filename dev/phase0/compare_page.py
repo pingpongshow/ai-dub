@@ -70,6 +70,11 @@ def main():
             continue  # a sign or credit with no speech
         item = f"blk-{i:03d}"
         s, z = a["start"] - 0.4, a["end"] + 0.6
+        # A version with free timing can say a block's lines later: its clip runs until they end.
+        for b in bs:
+            for ln in b["lines"]:
+                if ln.get("placed") is not None and ln.get("final_s"):
+                    z = max(z, ln["placed"] + ln["final_s"] + 0.2)
         orig = enc(src, out / f"{item}-orig.m4a", s, z - s)
         dubs = [enc(tr, out / f"{item}-{t.lower()}.m4a", s, z - s) for t, tr in zip(tags, tracks)]
         g = list(grades.get(str(i)) or [])

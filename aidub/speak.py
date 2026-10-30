@@ -363,6 +363,10 @@ def run_speak(job: Job) -> None:
         reqs.sort(key=lambda r: r["speaker_ref"])
         _synthesize(job, w, reqs, "takes")
         plan = _plan_fit(job, lines, rules)
+        if F.free_timing(job.cfg):  # natural length: nothing to refit
+            for ln in plan:
+                ln.fit["state"] = "fits"
+            plan = []
         if plan:
             _fit(job, w, caps, plan, dlg, sr, rules)
     L.save(lines, job.path("lines.json"))
@@ -583,12 +587,20 @@ def run_finalize(job: Job) -> None:
     roomy = F.windows([l for l in lines if l.kind == L.SPEECH], job["scenes"]["cuts"],
                       replace(rules, borrow=rules.short_borrow), job["ingest"]["duration"])
     counts = {"fits": 0, "speed_factor": 0, "shorter": 0, "stretched": 0, "fallback": 0, "padded": 0}
+    free = F.free_timing(job.cfg)
     for ln in lines:
         if not ln.take:
             if ln.kind == L.SPEECH and ln.fallback:
                 counts["fallback"] += 1
             continue
         d = _line_dir(job, ln)
+        if free:  # the best take as it came out; the mix starts it with the original line
+            final = d / "final.wav"
+            F.time_stretch(Path(ln.take), final, 1.0)
+            ln.take = str(final)
+            ln.fit.update({"method": "natural", "tempo": 1.0, "final": round(media.duration(final), 3)})
+            counts["fits"] += 1
+            continue
         window = ln.fit.get("window", ln.duration + rules.borrow)
         # Candidates in order of quality cost.
         factor = [("speed_factor", d / name) for name in ("fit1_0.wav", "fit0_0.wav")]
@@ -718,6 +730,8 @@ def run_condense(job: Job) -> None:
     if not job.cfg.get("condense.enabled", True) or rounds <= 0:
         return
     win = F.windows([l for l in lines if l.kind == L.SPEECH], job["scenes"]["cuts"], rules, job["ingest"]["duration"])
+    if F.free_timing(job.cfg):  # only lines the voice garbled come here; any length will do
+        win = {k: 1e6 for k in win}
     dlg, sr = media.read_wav(job.path("audio", "dialogue.wav"), mono=True)
     prof = job.profile
     names = {cid: ch["name"] for cid, ch in prof.characters.items()}

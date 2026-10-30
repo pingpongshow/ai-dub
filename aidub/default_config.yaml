@@ -120,6 +120,9 @@ fit:
   short_stretch_max: 1.25   # ... and be time-stretched this much
   stretch_min: 0.92
   tolerance_ms: 80
+  timing: window            # window: each line fits the time the character speaks (lip movement);
+                            # start: starts with the original line at its natural length (lip movement ignored)
+  free_gap_ms: 120          # timing start: a line due while the previous English line still speaks follows it
   force_stretch_max: 1.3    # subtitle_only: a long subtitled line may be sped up this much ...
   force_overrun_s: 0.8      # ... and run on this long past its window rather than stay in the original
 

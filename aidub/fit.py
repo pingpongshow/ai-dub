@@ -46,6 +46,12 @@ class FitRules:
                        stretch_max=max(self.stretch_max, self.short_stretch_max))
 
 
+def free_timing(cfg) -> bool:
+    """fit.timing: start: each English line starts with the original line and runs its
+    natural length (lip movement ignored); nothing is shortened, sped up or cut to fit."""
+    return str(cfg.get("fit.timing", "window")) == "start"
+
+
 def windows(lines: list[L.Line], cuts: list[float], rules: FitRules, duration: float) -> dict[int, float]:
     """Seconds available to each dubbed line: its own span plus up to `borrow` of
     following silence (`short_borrow` for very short lines), never past the same

@@ -54,8 +54,15 @@ def main():
             blocks[-1]["end"] = max(blocks[-1]["end"], c.end)
         else:
             blocks.append({"start": c.start, "end": c.end, "cues": [c]})
+    # With free timing (fit.timing: start) an English line can run past its block: read
+    # the block back until its last line ends where the mix placed it.
+    placed = [(ln.start, ln.end, ln.fit.get("placed"), ln.fit.get("final")) for ln in L.load(jobdir / "lines.json")
+              if ln.dubbed and ln.fit.get("placed") is not None]
     for i, b in enumerate(blocks):
         a, z = max(0.0, b["start"] - MARGIN_BEFORE), b["end"] + MARGIN_AFTER
+        for s0, e0, at, dur in placed:
+            if e0 > b["start"] and s0 < b["end"] and dur:
+                z = max(z, at + dur + 0.2)
         p = work / f"b{i:03d}.wav"
         media.write_wav(p, audio[int(a * sr): int(z * sr)], sr)
         b.update(a=a, z=z, path=str(p))
@@ -82,6 +89,7 @@ def main():
             "cues": [[round(c.start, 2), round(c.end, 2), c.text] for c in b["cues"]],
             "script": " / ".join(ln.en for ln in mine if ln.dubbed),
             "lines": [{"id": ln.id, "start": round(ln.start, 2), "end": round(ln.end, 2), "kind": ln.kind,
+                       "placed": ln.fit.get("placed"), "final_s": ln.fit.get("final"),
                        "ja": ln.source_text, "en": ln.en, "fallback": ln.fallback, "ref": ln.english_ref,
                        "en_from": ln.en_from, "check_note": ln.check_note,
                        "take_s": round(media.duration(ln.take), 2) if ln.dubbed and ln.take else None}

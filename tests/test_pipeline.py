@@ -205,3 +205,12 @@ def test_subtitles_as_script(cfg, media_root):
     job = run_service_job(svc, ep)
     assert job["status"] == J.DONE, job["message"]
     assert "subtitle_track" in job["record"]["qc"]
+
+
+def test_free_timing_starts_with_the_original(cfg, media_root):
+    cfg.data.setdefault("fit", {})["timing"] = "start"
+    ep = synth.episode(media_root / "Free (2020).mkv")
+    svc = Service(cfg)
+    job = run_service_job(svc, ep)
+    assert job["status"] == J.DONE, job["message"]
+    assert "free_timing" in job["record"]["qc"]

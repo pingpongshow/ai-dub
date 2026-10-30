@@ -17,6 +17,7 @@ import pyloudnorm as pyln
 
 from . import lines as L
 from . import media
+from .fit import free_timing
 from .job import Job
 
 STEP = "mix"
@@ -124,12 +125,23 @@ def run(job: Job) -> None:
             d, m = d.mean(axis=1, keepdims=True), m.mean(axis=1, keepdims=True)
         groups[name] = {"dlg": d, "mne": m, "dub": np.zeros_like(d)}
 
-    dubbed = [ln for ln in lines if ln.take and ln.kind == L.SPEECH and not ln.fallback]
-    spans = []
+    dubbed = sorted((ln for ln in lines if ln.take and ln.kind == L.SPEECH and not ln.fallback), key=lambda l: l.start)
+    free = free_timing(cfg)
+    gap = float(cfg.get("fit.free_gap_ms", 120)) / 1000
+    spans, waited, busy_until = [], [], 0.0
     for ln in dubbed:
         take, tsr = media.read_wav(ln.take, mono=True)
         x = media.resample(take, tsr, SR)[:, 0].copy()
-        a = int(ln.start * SR)
+        start = ln.start
+        if free:
+            # Natural length: the line starts with the original, unless the English line
+            # before it is still speaking; then it follows that one (never two at once).
+            start = max(ln.start, busy_until + gap)
+            if start > ln.start + 1e-3:
+                waited.append(start - ln.start)
+            busy_until = start + len(x) / SR
+            ln.fit["placed"] = round(start, 3)
+        a = int(start * SR)
         b = min(total, a + len(x))
         x = x[: b - a]
         if len(x) == 0:
@@ -157,7 +169,7 @@ def run(job: Job) -> None:
                 v["dub"][a:b, 1] += x * share * np.sin(theta) * np.sqrt(2)
             else:
                 v["dub"][a:b, 0] += x * share
-        spans.append((ln.start - 0.04, max(ln.end, ln.start + len(x) / SR) + 0.04))
+        spans.append((min(ln.start, start) - 0.04, max(ln.end, start + len(x) / SR) + 0.04))
 
     g = keep_gain(total, spans, ramp_s=0.03)[:, None]
     duck = 10 ** (-abs(float(cfg.get("mix.extra_duck_db", 0.0))) / 20)
@@ -197,4 +209,8 @@ def run(job: Job) -> None:
     out = soft_limit(out.astype(np.float32))
     media.write_wav(job.path("mix", "dub.wav"), out, SR)
     job.qc["dubbed_lines"] = len(spans)
+    if free:
+        job.qc["free_timing"] = {"lines_waited": len(waited), "max_wait_s": round(max(waited, default=0.0), 2),
+                                 "mean_wait_s": round(sum(waited) / len(waited), 2) if waited else 0.0}
+        L.save(lines, job.path("lines.json"))
     job.status(f"mixed {len(spans)} dubbed lines")

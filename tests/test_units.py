@@ -749,3 +749,15 @@ def test_word_for_word_numbers_names_and_splits():
         ["I will take care of it.", "Mina!"]
     assert T.align_split("Hey! Sorry, can I pass through? You guys...", ["Sorry, can I pass?", "You guys..."]) == \
         ["Hey! Sorry, can I pass through?", "You guys..."]
+
+
+def test_free_timing_prompts_have_no_length_target():
+    from aidub import translate as T
+    ln = L.Line(1, 0, 2, source_text="総員退避!", english_ref="Everyone, retreat!")
+    timed = T.translate_prompt([ln], [], "", 4.3, {}, "subtitle")
+    free = T.translate_prompt([ln], [], "", None, {}, "subtitle")
+    assert "target_syllables" in timed[1]["content"] and "target syllable" in timed[0]["content"]
+    assert "target_syllables" not in free[1]["content"] and "Length is free" in free[1]["content"]
+    assert "target syllable" not in free[0]["content"]
+    assert "target_syllables" not in T.reflect_prompt([ln], "", None, {}, {1: {"en": "Retreat!"}})[1]["content"]
+    assert "target_syllables" not in T.rewrite_prompt([ln], "", None, {}, {1: {"en": "Retreat!"}}, {})[1]["content"]

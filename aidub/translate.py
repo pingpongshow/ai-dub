@@ -44,6 +44,16 @@ def syllables(text: str) -> int:
     return n
 
 
+def _length(ln: L.Line, rate: float | None) -> dict:
+    """The time a line has and the syllables that fit it; nothing with free timing."""
+    return {} if rate is None else {"seconds": round(ln.duration, 2),
+                                    "target_syllables": target_syllables(ln.duration, rate)}
+
+
+FREE_NOTE = ("Length is free: each English line starts with the original and may run longer, so say the line's "
+             "full meaning naturally, without squeezing it into the original's time and without padding. ")
+
+
 def target_syllables(seconds: float, rate: float, overhead: float = 0.25, borrow: float = 0.25) -> int:
     """Syllables that fit a line: the voice model speaks at about `rate`
     syllables a second plus a fixed `overhead` per line, and a line may borrow
@@ -145,6 +155,7 @@ def _context_block(prof: Profile, chars_in_batch: set[str], lang: str, script: b
     return "\n\n".join(parts)
 
 
+SYSTEM_FREE_NOTE = "Lines start with the original but may run longer, so keep each line's full meaning. "
 PLAIN = ("Keep numbers and units as said (kilometers stay kilometers), and use no slang, jargon, abbreviations "
          "or clipped words the original doesn't (\"klicks\", \"calc\"). ")
 SYSTEM = (
@@ -158,6 +169,8 @@ SYSTEM = (
     "(he, she, they) where the source leaves the person unsaid. " + PLAIN +
     "Reply with JSON only."
 )
+SYSTEM_FREE = SYSTEM.replace("Each line must be speakable in the given time, so aim for the target syllable count. ",
+                             SYSTEM_FREE_NOTE)
 
 
 def source_unsure(ln: L.Line) -> bool:
@@ -226,6 +239,11 @@ def lead(job: Job) -> str:
     """"audio" (translate what was said; subtitles are hints), "subtitle" (a line's
     subtitle where it means what was said) or "subtitle_only" (the subtitles are the script)."""
     return str(job.profile.settings.get("lead", job.cfg.get("translate.lead", "audio")))
+
+
+def free_timing(job: Job) -> bool:
+    from .fit import free_timing as free
+    return free(job.cfg)
 
 
 def lead_used(job: Job) -> str:
@@ -516,12 +534,13 @@ LEAD_NOTE = ("Lines with \"subtitle\" are subtitle-led: it is the human English 
              "source text instead. ")
 
 
-def translate_prompt(batch: list[L.Line], prev: list[L.Line], ctx: str, rate: float, names: dict,
+def translate_prompt(batch: list[L.Line], prev: list[L.Line], ctx: str, rate: float | None, names: dict,
                      lead_by: str = "audio") -> list[dict]:
+    """rate None: free timing (no length to fit)."""
     items = []
     for ln in batch:
         d = {"id": ln.id, "speaker": names.get(ln.character, ln.character), "text": ln.source_text,
-             "seconds": round(ln.duration, 2), "target_syllables": target_syllables(ln.duration, rate)}
+             **_length(ln, rate)}
         if ln.english_ref and lead_by == "subtitle" and not source_unsure(ln):
             d["subtitle"] = ln.english_ref
         elif ln.english_ref:
@@ -536,35 +555,44 @@ def translate_prompt(batch: list[L.Line], prev: list[L.Line], ctx: str, rate: fl
             "Lines to dub, in order. Translate what the source text says. subtitle_hint (a human English "
             "subtitle for the line) helps with names and nuance but loses to the source text when they "
             "disagree; take he/she from it when the source doesn't say who; nearby_subtitle may cover this and a neighbouring line, so use only the part that "
-            "matches. " + UNSURE_NOTE + (LEAD_NOTE if any("subtitle" in d for d in items) else "") + "Lines:\n"
+            "matches. " + UNSURE_NOTE
+            + ((LEAD_NOTE if rate is not None else LEAD_NOTE.replace(" of about target_syllables", ""))
+               if any("subtitle" in d for d in items) else "")
+            + (FREE_NOTE if rate is None else "") + "Lines:\n"
             f"{json.dumps(items, ensure_ascii=False, indent=0)}\n\n"
             'Return {"lines": [{"id": <id>, "en": "<dub line>", "short": "<shorter alternative, about 75% '
             'of the syllables>"' + (', "subtitle_ok": <true|false, for lines with subtitle>'
                                      if any("subtitle" in d for d in items) else "") +
             '}]} with one entry per id.')
-    return [{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}]
+    return [{"role": "system", "content": SYSTEM if rate is not None else SYSTEM_FREE},
+            {"role": "user", "content": user}]
 
 
-def reflect_prompt(batch: list[L.Line], ctx: str, rate: float, names: dict, draft: dict,
+def reflect_prompt(batch: list[L.Line], ctx: str, rate: float | None, names: dict, draft: dict,
                    system: str = SYSTEM) -> list[dict]:
+    lengths = (lambda ln: {}) if rate is None else (lambda ln: {
+        "target_syllables": target_syllables(ln.duration, rate),
+        "draft_syllables": syllables(draft.get(ln.id, {}).get("en", ""))})
     items = [{"id": ln.id, "speaker": names.get(ln.character, ln.character), "text": ln.source_text,
-              "draft": draft.get(ln.id, {}).get("en", ""), "target_syllables": target_syllables(ln.duration, rate),
-              "draft_syllables": syllables(draft.get(ln.id, {}).get("en", "")), **flags(ln)} for ln in batch]
+              "draft": draft.get(ln.id, {}).get("en", ""), **lengths(ln), **flags(ln)} for ln in batch]
     user = (f"{ctx}\n\nReview this draft English dub. For each line, note concrete problems: wrong meaning, "
-            "unnatural or stiff English, wrong pronoun, inconsistent names, or a length far from "
-            "target_syllables. Say 'ok' when a line is fine. " + source_notes(items) + "\n"
+            "unnatural or stiff English, wrong pronoun, inconsistent names"
+            + (" (length is free)" if rate is None else ", or a length far from target_syllables")
+            + ". Say 'ok' when a line is fine. " + source_notes(items) + "\n"
             f"{json.dumps(items, ensure_ascii=False, indent=0)}\n\n"
             'Return {"notes": [{"id": <id>, "note": "..."}]}.')
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-def rewrite_prompt(batch: list[L.Line], ctx: str, rate: float, names: dict, draft: dict, notes: dict,
+def rewrite_prompt(batch: list[L.Line], ctx: str, rate: float | None, names: dict, draft: dict, notes: dict,
                    system: str = SYSTEM) -> list[dict]:
     items = [{"id": ln.id, "speaker": names.get(ln.character, ln.character), "text": ln.source_text,
               "draft": draft.get(ln.id, {}).get("en", ""), "note": notes.get(ln.id, "ok"),
-              "target_syllables": target_syllables(ln.duration, rate), **flags(ln)} for ln in batch]
-    user = (f"{ctx}\n\nRewrite the dub lines, fixing what each note says, so they sound natural when spoken "
-            "and fit target_syllables. Keep lines that are already good. " + source_notes(items) + "\n"
+              **({} if rate is None else {"target_syllables": target_syllables(ln.duration, rate)}),
+              **flags(ln)} for ln in batch]
+    user = (f"{ctx}\n\nRewrite the dub lines, fixing what each note says, so they sound natural when spoken"
+            + (" (length is free)" if rate is None else " and fit target_syllables")
+            + ". Keep lines that are already good. " + source_notes(items) + "\n"
             f"{json.dumps(items, ensure_ascii=False, indent=0)}\n\n"
             'Return {"lines": [{"id": <id>, "en": "<final line>", "short": "<shorter alternative, about 75% '
             'of the syllables>"}]}.')
@@ -699,6 +727,7 @@ def run(job: Job) -> None:
     windows = job.get("line_windows") or [0] * len(lines)
     lang = job["subtitles"].get("source_language", "")
     rate = float(job.cfg.get("translate.syllables_per_second", 4.3))
+    free = free_timing(job)
     reflect = bool(prof.settings.get("reflect", job.cfg.get("translate.reflect", True)))
     names = {cid: ch["name"] for cid, ch in prof.characters.items()}
     by_id = {ln.id: ln for ln in lines}
@@ -732,7 +761,7 @@ def run(job: Job) -> None:
 
     def prompt(b, p, c, share):
         return (script_prompt(b, share, p, c, rate, names, word_for_word) if script
-                else translate_prompt(b, p, c, rate, names, lead_by))
+                else translate_prompt(b, p, c, None if free else rate, names, lead_by))
 
     with LLM(job) as llm:
         # Pass 1: every scene at once (the engine batches them); each scene sees
@@ -797,7 +826,8 @@ def run(job: Job) -> None:
         reviewed = [b for b in ([l for l in b if not (script and l.en_from == "script")] for b in batches) if b]
         if reflect and reviewed:
             ctxs = [_context_block(prof, {l.character for l in b}, lang, script) for b in reviewed]
-            notes_replies = llm.chat_many([reflect_prompt(b, c, rate, names, drafts, system)
+            notes_replies = llm.chat_many([reflect_prompt(b, c, None if free else rate, names, drafts,
+                                                          SYSTEM_FREE if free and not script else system)
                                            for b, c in zip(reviewed, ctxs)])
             job.status("reviewed the draft", progress=0.75)
             rewrite_convs = []
@@ -806,7 +836,8 @@ def run(job: Job) -> None:
                     notes = {int(n["id"]): str(n.get("note", "ok")) for n in parse_json(nr).get("notes", [])}
                 except Exception:
                     notes = {}
-                rewrite_convs.append(rewrite_prompt(b, c, rate, names, drafts, notes, system))
+                rewrite_convs.append(rewrite_prompt(b, c, None if free else rate, names, drafts, notes,
+                                                    SYSTEM_FREE if free and not script else system))
             for reply in llm.chat_many(rewrite_convs):
                 try:
                     for k, v in _collect(reply).items():
