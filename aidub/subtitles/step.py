@@ -108,6 +108,8 @@ def _align_source(job: Job, c: Candidate, asr_worker, lang: str) -> None:
         if q.kind != DIALOGUE or not q.text:
             continue
         a, b = max(0.0, q.start - 0.5), q.end + 0.5
+        if b - a < 0.3:  # a cue moved before the start by the sync offset
+            continue
         p = media.write_wav(tmp / f"{i:05d}.wav", data[int(a * sr): int(b * sr)], sr)
         items.append({"path": str(p), "text": q.text, "offset": a})
         idx.append(i)

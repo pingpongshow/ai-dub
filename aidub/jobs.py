@@ -105,6 +105,13 @@ class Store:
                 (QUEUED, WAITING)).fetchone()
         return self._row(r)
 
+    def claim(self, job_id: int) -> bool:
+        """Mark a queued job running; False if it was cancelled or removed meanwhile."""
+        with self._tx() as c:
+            cur = c.execute("UPDATE jobs SET status=? WHERE id=? AND status IN (?, ?)",
+                            (RUNNING, job_id, QUEUED, WAITING))
+            return cur.rowcount == 1
+
     def update(self, job_id: int, **fields: Any) -> None:
         if not fields:
             return

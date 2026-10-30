@@ -162,8 +162,8 @@ def romaji_syllables(word: str) -> list[str] | None:
 def romaji_respell(word: str) -> str | None:
     w = word.lower()
     sy = romaji_syllables(w)
-    if not sy or len(w) < 3 or w in LEXICON:
-        return None
+    if not sy or len(w) < 3 or not LEXICON or w in LEXICON:
+        return None  # without the dictionary "home" and "made" would pass for romaji
     parts: list[str] = []
     for k, x in enumerate(sy):
         if x in "kstp" and len(x) == 1 and k + 1 < len(sy):     # a doubled consonant: a short stop

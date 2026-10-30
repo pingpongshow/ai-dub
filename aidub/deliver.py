@@ -238,7 +238,26 @@ def _copy_owner(src_stat: os.stat_result, dst: Path, owner: dict | None) -> None
                 pass
 
 
+def _finish_swap(job: Job) -> bool:
+    """Finish a swap a restart cut short. True when the file is delivered."""
+    pending = job.get("deliver_swap")
+    if not pending:
+        return False
+    tmp, final, aside = Path(pending["tmp"]), Path(pending["final"]), Path(pending["set_aside"])
+    if aside.exists() and tmp.exists() and not final.exists():
+        os.rename(tmp, final)  # stopped between the two renames
+    elif not (aside.exists() and final.exists() and not tmp.exists()):
+        job.set("deliver_swap", None)  # stopped before the swap began; deliver again
+        return False
+    job.log(f"resumed the swap: {final.name} is in place, original set aside as {aside.name}")
+    job.set("delivered", pending["delivered"])
+    job.set("deliver_swap", None)
+    return True
+
+
 def run(job: Job) -> None:
+    if _finish_swap(job):
+        return
     ing = job["ingest"]
     lines = L.load(job.path("lines.json"))
     live = job.src
@@ -291,24 +310,31 @@ def run(job: Job) -> None:
         tmp.unlink(missing_ok=True)
         raise
 
-    # Swap: set the original aside, then give the new file its name.
-    aside = originals.aside_name(live, "dubbed" if redo_from_aside else "original")
+    # Swap: set the original aside, then give the new file its name. A file that already
+    # carries our dub (a redo with no set-aside original) is set aside as a dub, not an original.
+    aside_kind = "dubbed" if redo_from_aside or any(s.is_aidub for s in pr.streams) else "original"
+    aside = originals.aside_name(live, aside_kind)
     if aside.exists():
         tmp.unlink(missing_ok=True)
         raise DeliveryError(f"{aside.name} already exists; restore or delete it first")
+    delivered = {
+        "file": str(final),
+        "set_aside": str(aside),
+        "set_aside_kind": aside_kind,
+        "subtitle_tracks": [{k: s[k] for k in ("language", "title", "source")} for s in subs],
+        "stamp": stamp(job, "dub", text_source(job)),
+    }
+    job.set("deliver_swap", {"tmp": str(tmp), "final": str(final), "set_aside": str(aside),
+                             "delivered": delivered})
     os.rename(live, aside)
     try:
         os.rename(tmp, final)
     except Exception:
         os.rename(aside, live)
         tmp.unlink(missing_ok=True)
+        job.set("deliver_swap", None)
         raise
     _copy_owner(st, final, job.cfg.get("deliver.owner"))
-    job.set("delivered", {
-        "file": str(final),
-        "set_aside": str(aside),
-        "set_aside_kind": "dubbed" if redo_from_aside else "original",
-        "subtitle_tracks": [{k: s[k] for k in ("language", "title", "source")} for s in subs],
-        "stamp": stamp(job, "dub", text_source(job)),
-    })
+    job.set("delivered", delivered)
+    job.set("deliver_swap", None)
     job.status(f"done: {final.name}; original set aside as {aside.name}")

@@ -114,8 +114,13 @@ class Worker:
         )
         self._stderr_thread = threading.Thread(target=self._pump_stderr, daemon=True)
         self._stderr_thread.start()
-        hello = self._read()
+        try:
+            hello = self._read()
+        except BaseException:
+            self.kill()
+            raise
         if not hello.get("ok"):
+            self.kill()
             raise WorkerError(f"worker '{self.name}' failed to start: {hello.get('error')}")
 
     def _pump_stderr(self) -> None:

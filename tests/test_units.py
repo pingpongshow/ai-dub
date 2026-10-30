@@ -660,11 +660,21 @@ def test_subtitle_led_prompt_offers_checked_subtitles_only():
     assert T.flags(none) == {}
 
 
-def test_japanese_names_spelled_as_they_sound():
+def test_japanese_names_spelled_as_they_sound(tmp_path):
     from aidub import pronounce as P
-    assert P.respell("Kikoru") == "kee koh roo" and P.respell("chan") == "chahn"
-    assert P.respell("Kaiju") == "kye joo" and P.respell("Shinomiya") == "shee noh mee yah"
-    assert P.respell("Kafka") is None and P.respell("klicks") is None      # not romanised Japanese
+    # Without the dictionary nothing is respelled: "home" and "made" spell like romaji too.
+    P.load(tmp_path / "none.dict")
+    assert P.respell("Kikoru") is None and P.respell("home") is None
+    lex = tmp_path / "cmudict.dict"
+    lex.write_text("home HH OW1 M\nmade M EY1 D\nname N EY1 M\n")
+    try:
+        assert P.load(lex)
+        assert P.respell("Kikoru") == "kee koh roo" and P.respell("chan") == "chahn"
+        assert P.respell("Kaiju") == "kye joo" and P.respell("Shinomiya") == "shee noh mee yah"
+        assert P.respell("Kafka") is None and P.respell("klicks") is None      # not romanised Japanese
+        assert P.respell("home") is None and P.respell("made") is None         # English words
+    finally:
+        P.load(tmp_path / "none.dict")
 
 
 def test_subtitles_as_script_share_cues_and_leave_short_unsubtitled_lines():
@@ -683,7 +693,10 @@ def test_subtitles_as_script_share_cues_and_leave_short_unsubtitled_lines():
     assert [c["text"] for c in T.script_cues(near, [[mina, later]])[0]] == ["Mina!"]
     roger = L.Line(4, 20.0, 20.6, source_text="了解!")
     speech = L.Line(5, 40.0, 43.0, source_text="こんな事になるとは思わなかった")
-    assert T.covered(a2, cues) and not T.covered(roger, cues)
+    assert T.covered_ids([a2, roger], cues) == {2}
+    # A short line just before its own cue is covered, so its neighbour never voices it.
+    six, seven = L.Line(6, 3.0, 5.4, source_text="任せて"), L.Line(7, 5.45, 5.65, source_text="ミナ")
+    assert T.covered_ids([six, seven], [Cue(start=5.66, end=6.0, text="Mina!")]) == {7}
     assert T.short_reaction(roger) and not T.short_reaction(speech)
     user = T.script_prompt([a1, a2], shares[0], [], "", 4.3, {})[1]["content"]
     assert "Hey! Sorry, can I pass through?" in user and '"from_subtitle"' in user and '"matches"' in user
@@ -772,3 +785,134 @@ def test_auto_timing_frees_only_the_word_for_word_dub():
     assert not fit.free_timing(job(None, "audio"))                 # untrusted subtitles: fitted audio-led dub
     assert not fit.free_timing(job("auto", "subtitle"))
     assert fit.free_timing(job("start", "audio")) and not fit.free_timing(job("window", "subtitle_verbatim"))
+
+
+def test_queue_claim_is_atomic(tmp_path):
+    from aidub import jobs as J
+    st = J.Store(tmp_path / "db.sqlite")
+    a, b = st.add("/m/a.mkv", "p"), st.add("/m/b.mkv", "p")
+    st.update(a, status=J.CANCELLED)     # cancelled after the runner picked it
+    st.remove(b)                         # removed after the runner picked it
+    assert not st.claim(a) and not st.claim(b)
+    c = st.add("/m/c.mkv", "p")
+    assert st.claim(c) and st.get(c)["status"] == J.RUNNING and not st.claim(c)
+
+
+def test_model_replies_read_safely():
+    T = translate
+    got = T._collect('{"lines": ["junk", {"id": 1, "en": "Run!", "short": null}, {"id": 2, "en": null},'
+                     ' {"id": 9, "en": "Not asked for"}]}', {1, 2})
+    assert got[1]["en"] == "Run!" and got[1]["short"] == "" and got[2]["en"] == "" and 9 not in got
+    assert T.parse_json('Notes [1]: {"lines": [{"id": 1}]}') == {"lines": [{"id": 1}]}
+    assert T.parse_json('```json\n[{"id": 2}]\n```') == {"lines": [{"id": 2}]}
+    assert "target_syllables" not in T.VERBATIM_TASK_FREE and "target syllable" not in T.SCRIPT_SYSTEM_FREE
+
+
+def test_subtitle_track_trust_without_line_checks():
+    from aidub.subtitles import step as S
+    job = _StubJob({}, {"subtitles": {"english": "e"}})
+    job.qc = {}
+    orig = S.candidate
+    S.candidate = lambda j, cid: {"score": {"content": 0.9, "total": 0.8}}
+    try:
+        ok, why = translate.subtitles_trusted(job)          # too few lines to check one by one
+        assert ok and "no lines checked" in why
+        job.qc = {"subtitle_lines_checked": 8, "subtitle_lines_disagreeing_with_speech": 4}
+        assert not translate.subtitles_trusted(job)[0]
+    finally:
+        S.candidate = orig
+
+
+def test_numbers_read_and_checked_as_said():
+    from aidub import speak as S
+    assert S.said_as("It costs 1,000 yen.") == "It costs 1000 yen."
+    assert S.said_as("12.75 seconds, $4.99, $5") == "12 point 7 5 seconds, 4 dollars 99, 5 dollars"
+    assert S.said_as("1,2,3") == "1,2,3"
+    assert S.missed_words("It costs 1,000 yen.", "it costs one thousand yen") == []
+    assert S.missed_words("The 1st squad.", "the first squad") == []
+    assert S.wer("The 21st squad moves.", "the twenty first squad moves") == 0
+    # The first word of every sentence is checked, not taken for a name.
+    assert S.missed_words("Wait. Brakes failed on the truck.", "wait cakes failed on the truck") == ["brakes"]
+    assert S.missed_words("Wait, Kafka is here.", "wait, Kafuka is here") == []
+
+
+def test_dub_run_on_keeps_original_lines_audible():
+    from aidub.mix import outside, outside_all
+    # A dub running on from 1.5 to 3.0 s over a kept line at 2.0-2.5 s mutes only around it.
+    assert outside((1.5, 3.0), [(2.0, 2.5)]) == [(1.5, 2.0), (2.5, 3.0)]
+    assert outside((1.5, 3.0), [(0.0, 9.0)]) == []
+    # ... but never un-mutes the dubbed lines' own original speech.
+    assert outside_all([(2.0, 2.5)], [(2.2, 2.3)]) == [(2.0, 2.2), (2.3, 2.5)]
+
+
+def test_subtitle_languages_and_files(tmp_path):
+    from aidub import media
+    from aidub.subtitles import pgs, sources
+    assert [sources._lang_from_name(t) for t in (["it"], ["pt", "br"], ["en", "hi"], ["spanish"], ["ita"])] == \
+        ["it", "pt", "en", "es", "it"]
+    assert media.lang_code("ita") == "it" and media.iso3("it") == "ita" and media.iso3("yue") == "chi"
+    assert clean.script_language(["Non lo so. Andiamo a casa, per favore.", "Che cosa fai?"]) == ""
+    assert clean.script_language(["I don't know. Let's go home.", "What are you doing?"]) == "en"
+    # Hearing-impaired tags are not speaker names; a Japanese speaker label is.
+    assert clean.clean_text("(SIGHS) I don't know.") == ("I don't know.", "", DIALOGUE)
+    assert clean.clean_text("(健太)行くぞ")[:2] == ("行くぞ", "健太")
+    for style, song in (("Lyrics", True), ("Song_EN", True), ("OP", True), ("Editor", False), ("Default", False)):
+        assert bool(clean.SONG_STYLES.search(style)) is song, style
+    # Subtitle files in legacy encodings are read, not dropped.
+    srt = "1\n00:00:01,000 --> 00:00:02,000\n{}\n"
+    for text, enc in (("こんにちは、元気ですか", "shift_jis"), ("你好，你好吗", "gbk"), ("Café déjà vu", "cp1252")):
+        p = tmp_path / f"{enc}.srt"
+        p.write_bytes(srt.format(text).encode(enc))
+        assert [q.text for q in clean.load(p)] == [text], enc
+    # Sidecar copies are named by file, so a rescan never overwrites an earlier copy.
+    video = tmp_path / "Ep.mkv"
+    video.touch()
+    (tmp_path / "Ep.en.srt").write_text(srt.format("English"))
+    (tmp_path / "Ep.ja.srt").write_text(srt.format("日本語"))
+    work = tmp_path / "work"
+    work.mkdir()
+    first = {c.id: c.path for c in sources.from_sidecars(work, video)}
+    (tmp_path / "Ep.en.hi.srt").write_text(srt.format("HI"))
+    second = {c.id: c.path for c in sources.from_sidecars(work, video)}
+    assert all(second[k] == v for k, v in first.items())
+    assert open(first["sidecar:Ep.ja.srt"], encoding="utf-8").read().count("日本語") == 1
+    # Truncated bitmap data keeps what was decoded.
+    assert pgs._rle_decode(bytes([5, 5, 0, 0x80]), 4, 2)[0].tolist() == [5, 5, 0, 0]
+
+
+def test_last_window_long_enough_to_diarize():
+    from aidub import scenes
+    assert scenes.windows(120.9, [], [], 120) == [[0.0, 100.9], [100.9, 120.9]]
+
+
+def test_delivery_swap_resumes_after_a_crash(tmp_path):
+    from aidub import deliver
+
+    class J:
+        def __init__(self):
+            self.data = {}
+
+        def get(self, k, d=None):
+            return self.data.get(k, d)
+
+        def set(self, k, v):
+            self.data[k] = v
+
+        def log(self, m):
+            pass
+
+    live, aside, tmp = tmp_path / "X.mkv", tmp_path / "X.mkv.aidub-original", tmp_path / ".X.aidub-partial"
+    job = J()
+    assert not deliver._finish_swap(job)                     # nothing pending
+    # Stopped between the two renames: the original is aside, the dub still has its temporary name.
+    aside.write_text("original")
+    tmp.write_text("dub")
+    job.set("deliver_swap", {"tmp": str(tmp), "final": str(live), "set_aside": str(aside),
+                             "delivered": {"file": str(live)}})
+    assert deliver._finish_swap(job)
+    assert live.read_text() == "dub" and aside.read_text() == "original" and not tmp.exists()
+    assert job.get("delivered") == {"file": str(live)} and job.get("deliver_swap") is None
+    # Stopped before the swap began: deliver again from the start.
+    job.set("deliver_swap", {"tmp": str(tmp_path / "none"), "final": str(tmp_path / "Y.mkv"),
+                             "set_aside": str(tmp_path / "Y.mkv.aidub-original"), "delivered": {}})
+    assert not deliver._finish_swap(job) and job.get("deliver_swap") is None

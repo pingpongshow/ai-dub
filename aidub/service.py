@@ -53,6 +53,8 @@ class Service:
         p = self.check_path(path)
         if not p.is_file():
             raise FileNotFoundError(path)
+        if p.suffix.lower() not in media.VIDEO_EXT:
+            raise ValueError("not a video file")
         if self.store.active_for(str(p)):
             raise ValueError("already in the queue")
         name = profile or guess_name(p, self.media_roots())
@@ -92,7 +94,7 @@ class Service:
 
     def retry(self, jid: int) -> None:
         j = self.store.get(jid)
-        if j and j["status"] in (J.FAILED, J.CANCELLED):
+        if j and j["status"] in (J.FAILED, J.CANCELLED) and not self.store.active_for(j["path"]):
             self.store.update(jid, status=J.QUEUED, message="retrying", progress=0)
             self._wake.set()
 
@@ -102,7 +104,7 @@ class Service:
             return
         if j["status"] in J.ACTIVE:
             self.cancel(jid)
-            if j["status"] in (J.RUNNING, J.WAITING) and jid in self._cancel:
+            if jid in self._cancel:
                 self._remove_after.add(jid)  # the runner removes it when it stops
                 return
         shutil.rmtree(self.cfg.work / f"job-{jid}", ignore_errors=True)
@@ -124,6 +126,7 @@ class Service:
         self._stop.set()
         self._wake.set()
         if self._current:
+            self._current.halt_event.set()
             self._current.kill_worker()
 
     def _scan_originals(self) -> None:
@@ -143,9 +146,12 @@ class Service:
 
     def run_one(self, j: dict) -> None:
         jid = j["id"]
-        prof = self.profiles.get(j["profile"]) or self.profiles.get_or_create(j["profile"])
         cancel = threading.Event()
         self._cancel[jid] = cancel
+        if not self.store.claim(jid):  # cancelled or removed after it was picked
+            self._cancel.pop(jid, None)
+            return
+        prof = self.profiles.get(j["profile"]) or self.profiles.get_or_create(j["profile"])
 
         def on_status(d: dict) -> None:
             self.live[jid] = {**self.live.get(jid, {}), **d, "t": time.time()}
@@ -169,7 +175,7 @@ class Service:
             delivered = rec.get("delivered") or {}
             if delivered.get("set_aside"):
                 aside = Path(delivered["set_aside"])
-                self.store.add_original(jid, str(aside), delivered["file"], delivered["set_aside_kind"],
+                self.store.add_original(jid, str(aside), str(originals.live_name(aside)), delivered["set_aside_kind"],
                                         aside.stat().st_size if aside.exists() else 0)
             job.remove_work()
             self.store.update(jid, status=J.DONE, finished=time.time(), progress=1.0,
@@ -179,6 +185,9 @@ class Service:
             self.store.update(jid, status=J.SKIPPED, finished=time.time(), message=f"skipped: {exc}",
                               record=pipeline.record(job))
         except Cancelled:
+            if self._stop.is_set():
+                job.log("stopped by shutdown; will resume")
+                return
             job.remove_work()
             self.store.update(jid, status=J.CANCELLED, finished=time.time(), message="cancelled")
         except Exception as exc:

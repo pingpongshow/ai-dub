@@ -8,6 +8,7 @@ import json
 import mimetypes
 from contextlib import asynccontextmanager
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -16,20 +17,26 @@ from fastapi import Body, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import __version__, gpu, originals, workers
+from . import __version__, gpu, media, originals, workers
 from . import jobs as J
-from .config import Config
+from .config import Config, check_shape
 from .models import Installer
 from .pipeline import STEP_NAMES, TITLES
 from .service import Service
 
 mimetypes.add_type("audio/mp4", ".m4a")  # missing from some system tables; Safari needs it
 
-VIDEO_EXT = {".mkv", ".mp4", ".m4v", ".avi", ".ts", ".m2ts", ".mov", ".wmv", ".webm"}
 WEB_DIR = Path(os.environ.get("AIDUB_WEB", Path(__file__).resolve().parent.parent / "web"))
 # Keys for features that exist. Direct subtitle providers (OpenSubtitles, Subdl,
 # Jimaku) get theirs when those providers are built.
 SECRET_NAMES = ["BAZARR_API_KEY", "HF_TOKEN"]
+LOCKED_SETTINGS = ("paths", "media")
+REDACTED = "••••"
+
+
+def _is_var(v) -> bool:
+    """A "${NAME}" reference to a stored key is not itself a secret."""
+    return isinstance(v, str) and bool(re.fullmatch(r"\$\{[A-Z0-9_]+\}", v))
 
 
 def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
@@ -86,8 +93,12 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
                 continue
             if e.is_dir():
                 entries.append({"name": e.name, "path": str(e), "dir": True})
-            elif e.suffix.lower() in VIDEO_EXT:
-                entries.append({"name": e.name, "path": str(e), "dir": False, "size": e.stat().st_size,
+            elif e.suffix.lower() in media.VIDEO_EXT:
+                try:
+                    size = e.stat().st_size
+                except OSError:
+                    continue  # a broken link or a file that vanished
+                entries.append({"name": e.name, "path": str(e), "dir": False, "size": size,
                                 "queued": str(e) in queued,
                                 "set_aside": originals.aside_name(e).exists()})
         roots = [str(r.resolve()) for r in svc.media_roots()]
@@ -308,11 +319,22 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
     # Settings --------------------------------------------------------------------------------
     @app.get("/api/settings")
     def settings():
-        return {"overrides": cfg.user_overrides(), "effective": _redact(cfg.data),
+        return {"overrides": _redact(cfg.user_overrides()), "effective": _redact(cfg.data),
                 "secrets": {n: n in cfg.secret_names() for n in SECRET_NAMES}}
 
     @app.post("/api/settings")
     def save_settings(overrides: dict = Body(..., embed=True)):
+        current = cfg.user_overrides()
+        overrides = _unredact(overrides, current)
+        # Media folders and paths are set in config.yaml by hand, never through the page:
+        # they decide what the app may read and write.
+        for k in LOCKED_SETTINGS:
+            overrides.pop(k, None)
+            if k in current:
+                overrides[k] = current[k]
+        problem = check_shape(overrides)
+        if problem:
+            bad(400, problem)
         cfg.save_overrides(overrides)
         return {"ok": True, "note": "saved; restart the container to apply"}
 
@@ -405,9 +427,25 @@ def _safe(fn, *args, **kwargs):
             log(f"FAILED: {exc}")
 
 
+def _secret_key(k) -> bool:
+    return any(s in str(k).lower() for s in ("key", "password", "token", "secret"))
+
+
+def _unredact(new, old):
+    """Put back stored values the page only saw as the redaction mark."""
+    if isinstance(new, dict):
+        old = old if isinstance(old, dict) else {}
+        return {k: (old.get(k) if v == REDACTED and _secret_key(k) else _unredact(v, old.get(k)))
+                for k, v in new.items()}
+    if isinstance(new, list):
+        old = old if isinstance(old, list) else []
+        return [_unredact(v, old[i] if i < len(old) else None) for i, v in enumerate(new)]
+    return new
+
+
 def _redact(d):
     if isinstance(d, dict):
-        return {k: ("••••" if any(s in k.lower() for s in ("key", "password", "token", "secret")) and v else _redact(v))
+        return {k: (REDACTED if _secret_key(k) and v and not _is_var(v) else _redact(v))
                 for k, v in d.items()}
     if isinstance(d, list):
         return [_redact(v) for v in d]

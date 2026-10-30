@@ -62,7 +62,8 @@ def windows(duration: float, cuts: list[float], pauses: list[tuple[float, float]
         candidates.append((in_pause[0], 0) if in_pause else ((a + b) / 2, 1))
     out, start = [], 0.0
     while duration - start > max_len:
-        lo, hi = start + min_len, start + max_len
+        # (never leaving a last window too short to diarize)
+        lo, hi = start + min_len, min(start + max_len, duration - min_len)
         inside = [(rank, -t, t) for t, rank in candidates if lo <= t <= hi]
         cut = min(inside)[2] if inside else hi
         out.append([round(start, 3), round(cut, 3)])

@@ -21,13 +21,39 @@ SPEAKER_LABEL = re.compile(r"^\s*-?\s*([A-Z][A-Z0-9 .'\-]{0,24})\s*:\s+|^\s*([^\
 JP_SPEAKER = re.compile(r"^\s*[（(]([^）)]{1,12})[）)]\s*")
 MUSIC = re.compile(r"[♪♫♬]")
 SIGN_STYLES = re.compile(r"sign|title|note|screen|caption|text|card|eyecatch|logo", re.I)
-SONG_STYLES = re.compile(r"\b(op|ed|song|karaoke|kfx|lyric|insert|opening|ending)\b|^(op|ed)\d*|romaji|kanji", re.I)
+SONG_STYLES = re.compile(r"(?<![a-z])(op|ed)(?![a-z])|^(op|ed)\d|song|karaoke|kfx|lyric|insert|opening|ending|romaji|kanji",
+                         re.I)
 POSITIONED = re.compile(r"\\pos\(|\\move\(|\\an[789]")
 KARAOKE = re.compile(r"\\k[fo]?\d", re.I)
 
 
+def decode(data: bytes) -> str:
+    """Subtitle file text in whatever encoding it was saved in: UTF-8/16 (by BOM),
+    else UTF-8, else the legacy encoding that reads cleanest (Shift-JIS, GBK, Big5,
+    Korean, Windows Latin): a wrong guess shows up as half-width katakana, private-use
+    or control characters."""
+    for bom, enc in ((b"\xef\xbb\xbf", "utf-8-sig"), (b"\xff\xfe", "utf-16"), (b"\xfe\xff", "utf-16")):
+        if data.startswith(bom):
+            return data.decode(enc, errors="replace")
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    best, fewest = None, None
+    for enc in ("cp932", "gb18030", "big5", "cp949", "cp1252"):
+        try:
+            text = data.decode(enc)
+        except UnicodeDecodeError:
+            continue
+        odd = sum(1 for ch in text if "\uff61" <= ch <= "\uff9f" or "\ue000" <= ch <= "\uf8ff"
+                  or (unicodedata.category(ch) == "Cc" and ch not in "\r\n\t"))
+        if fewest is None or odd < fewest:
+            best, fewest = text, odd
+    return best if best is not None else data.decode("utf-8", errors="replace")
+
+
 def load(path: str | Path, fmt: str | None = None) -> list[Cue]:
-    subs = pysubs2.load(str(path), encoding=None, format_=fmt) if fmt else pysubs2.load(str(path))
+    subs = pysubs2.SSAFile.from_string(decode(Path(path).read_bytes()), format_=fmt)
     is_ass = subs.format in ("ass", "ssa") or str(path).lower().endswith((".ass", ".ssa"))
     out = []
     for ev in subs.events:
@@ -99,7 +125,7 @@ def clean_text(raw: str) -> tuple[str, str, str]:
         return "", "", SONG
     name = ""
     m = JP_SPEAKER.match(t)
-    if m:
+    if m and re.search(r"[^\x00-\x7f]", m.group(1)):  # "（健太）"; "(SIGHS)" is a hearing-impaired tag
         name, t = m.group(1), t[m.end():]
     t = HI_BRACKETS.sub(" ", t)
     m = SPEAKER_LABEL.match(t)
@@ -137,9 +163,18 @@ def script_language(texts: list[str]) -> str:
         return "ko"
     if counts["han"] / total > 0.3:
         return "zh"
-    if counts["latin"] / total > 0.6:
-        return "en"
+    if counts["latin"] / total > 0.6 and looks_english(texts):
+        return "en"  # (Italian or Indonesian is Latin script too: only English words make it English)
     return ""
+
+
+ENGLISH_WORDS = set("the you and is it that what this we my your are was have do i i'm it's don't not with "
+                    "for of to be he she they me him her".split())
+
+
+def looks_english(texts: list[str]) -> bool:
+    words = re.findall(r"[a-z']+", " ".join(texts)[:20000].lower().replace("’", "'"))
+    return bool(words) and sum(w in ENGLISH_WORDS for w in words) / len(words) >= 0.15
 
 
 def norm_chars(text: str) -> str:

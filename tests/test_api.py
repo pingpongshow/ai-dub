@@ -104,3 +104,42 @@ def test_listening_feedback(client, cfg):
     assert c.post("/api/listen/feedback", json={"page": "", "item": "x", "verdict": "poor"}).status_code == 404
     assert c.post("/api/listen/feedback", json={"page": "nope", "item": "x", "verdict": "poor"}).status_code == 404
     assert c.get("/listen-feedback.js").status_code == 200
+
+
+def test_paths_and_settings_stay_safe(client, cfg, media_root, tmp_path):
+    c, svc = client
+    ep = synth.episode(media_root / "Show - 03.mkv")
+    # A reference-clip removal can't name a file outside the profile (it used to delete it).
+    prof = svc.profiles.get_or_create("Show")
+    prof.characters["c1"] = {"name": "A", "refs": [{"file": "refs/c1/a.flac"}]}
+    (prof.root / "refs" / "c1").mkdir(parents=True)
+    (prof.root / "refs" / "c1" / "a.flac").write_bytes(b"x")
+    prof.save()
+    for bad in (str(ep), "../../../media/Anime/Show - 03.mkv"):
+        assert c.post("/api/profiles/show/characters/c1", json={"action": "remove_ref", "ref": bad}).status_code == 200
+    assert ep.exists()
+    c.post("/api/profiles/show/characters/c1", json={"action": "remove_ref", "ref": "refs/c1/a.flac"})
+    assert not (prof.root / "refs" / "c1" / "a.flac").exists()
+    assert svc.profiles.get("../appdata") is None
+    # A broken link doesn't break the folder listing; set-aside files can't be queued.
+    (media_root / "Gone - 01.mkv").symlink_to(tmp_path / "nowhere.mkv")
+    names = [e["name"] for e in c.get("/api/browse", params={"path": str(media_root)}).json()["entries"]]
+    assert names == ["Show - 03.mkv"]
+    aside = media_root / "Show - 03.mkv.aidub-original"
+    shutil.copy(ep, aside)
+    assert c.post("/api/jobs", json={"paths": [str(aside)]}).json()["errors"][0]["error"] == "not a video file"
+    # Settings: stored keys are never shown back and survive a save of the page's copy;
+    # the media folders can't be changed from the page; a broken shape is refused.
+    conf = cfg.user_overrides()
+    conf["llm_endpoint"] = {"api_key": "sk-secret-123"}
+    cfg.save_overrides(conf)
+    s = c.get("/api/settings").json()
+    assert "sk-secret-123" not in str(s)
+    o = s["overrides"]
+    o["media"] = [{"name": "All", "path": "/"}]
+    o["fit"] = {"timing": "window"}
+    assert c.post("/api/settings", json={"overrides": o}).status_code == 200
+    saved = cfg.user_overrides()
+    assert saved["llm_endpoint"]["api_key"] == "sk-secret-123" and saved["media"] == conf["media"]
+    assert saved["fit"] == {"timing": "window"}
+    assert c.post("/api/settings", json={"overrides": {"paths": None, "fit": 3}}).status_code == 400

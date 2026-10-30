@@ -16,30 +16,33 @@ def _rle_decode(data: bytes, width: int, height: int) -> np.ndarray:
     x = y = 0
     i = 0
     n = len(data)
-    while i < n and y < height:
-        b = data[i]; i += 1
-        if b != 0:
+    try:
+        while i < n and y < height:
+            b = data[i]; i += 1
+            if b != 0:
+                if x < width:
+                    out[y, x] = b
+                x += 1
+                continue
+            b2 = data[i]; i += 1
+            if b2 == 0:
+                x, y = 0, y + 1
+                continue
+            flag = b2 >> 6
+            if flag == 0:
+                run, color = b2 & 0x3F, 0
+            elif flag == 1:
+                run, color = ((b2 & 0x3F) << 8) | data[i], 0; i += 1
+            elif flag == 2:
+                run, color = b2 & 0x3F, data[i]; i += 1
+            else:
+                run, color = ((b2 & 0x3F) << 8) | data[i], data[i + 1]; i += 2
+            end = min(width, x + run)
             if x < width:
-                out[y, x] = b
-            x += 1
-            continue
-        b2 = data[i]; i += 1
-        if b2 == 0:
-            x, y = 0, y + 1
-            continue
-        flag = b2 >> 6
-        if flag == 0:
-            run, color = b2 & 0x3F, 0
-        elif flag == 1:
-            run, color = ((b2 & 0x3F) << 8) | data[i], 0; i += 1
-        elif flag == 2:
-            run, color = b2 & 0x3F, data[i]; i += 1
-        else:
-            run, color = ((b2 & 0x3F) << 8) | data[i], data[i + 1]; i += 2
-        end = min(width, x + run)
-        if x < width:
-            out[y, x:end] = color
-        x += run
+                out[y, x:end] = color
+            x += run
+    except IndexError:  # truncated object data: keep what was decoded
+        pass
     return out
 
 
@@ -51,6 +54,9 @@ def _ycbcr_to_rgba(palette: dict[int, tuple[int, int, int, int]]) -> np.ndarray:
         bl = yy + 1.772 * (cb - 128)
         lut[idx] = [int(np.clip(r, 0, 255)), int(np.clip(g, 0, 255)), int(np.clip(bl, 0, 255)), a]
     return lut
+
+
+LAST_CAPTION_S = 3.0
 
 
 def read(path: str | Path):
@@ -111,3 +117,5 @@ def read(path: str | Path):
                         yield shown[0], pts, shown[1]
                     shown = (pts, stacked)
                 composition = []
+    if shown is not None:  # the stream ended without clearing the last caption
+        yield shown[0], shown[0] + LAST_CAPTION_S, shown[1]

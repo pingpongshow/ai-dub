@@ -19,6 +19,7 @@ import time
 import httpx
 
 from . import lines as L
+from . import media
 from .job import Job
 from .profiles import Profile
 
@@ -26,6 +27,7 @@ STEP = "translate"
 BATCH = 36
 LANG_NAMES = {"ja": "Japanese", "ko": "Korean", "zh": "Mandarin Chinese", "yue": "Cantonese", "es": "Spanish",
               "fr": "French", "de": "German", "en": "English", "ar": "Arabic"}
+LANG_NAMES.update({c: n.title() for c, (_, n) in media.LANGUAGES.items() if c not in LANG_NAMES})
 THINK = re.compile(r"<think>.*?</think>", re.S)
 
 
@@ -113,22 +115,30 @@ class LLM:
 
 
 def parse_json(text: str) -> dict:
+    """The JSON in a model reply: the first object or list of objects (a list comes back
+    as {"lines": ...}), skipping brackets in prose before it ("Notes [1]: {...}")."""
     t = text.strip()
     m = re.search(r"```(?:json)?\s*(.*?)```", t, re.S)
     if m:
         t = m.group(1)
-    start = min([i for i in (t.find("{"), t.find("[")) if i >= 0], default=-1)
-    if start < 0:
-        raise ValueError("no JSON in reply")
-    t = t[start:]
-    for end in range(len(t), 0, -1):
-        if t[end - 1] in "}]":
-            try:
-                v = json.loads(t[:end])
-                return v if isinstance(v, dict) else {"lines": v}
-            except json.JSONDecodeError:
-                continue
-    raise ValueError("unparseable JSON in reply")
+    dec = json.JSONDecoder()
+    found_list = None
+    for i, ch in enumerate(t):
+        if ch not in "{[":
+            continue
+        try:
+            v, _ = dec.raw_decode(t, i)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(v, dict):
+            return v
+        if v and all(isinstance(x, dict) for x in v):
+            return {"lines": v}
+        if found_list is None:
+            found_list = v
+    if found_list is not None:
+        return {"lines": found_list}
+    raise ValueError("no JSON in reply")
 
 
 # Prompts ---------------------------------------------------------------------------------
@@ -148,6 +158,8 @@ def _context_block(prof: Profile, chars_in_batch: set[str], lang: str, script: b
              ("exactly as the English subtitles write them." if hon == "subtitle"
               else "keep them attached to names, as anime fans expect." if hon == "keep"
               else "drop them and express the politeness naturally in English.")]
+    if not script and settings.get("style") == "close":
+        parts.append("Style: stay close to the original wording and sentence order wherever natural English allows.")
     if cast:
         parts.append("Speakers (use the right pronouns for each):\n" + "\n".join(cast))
     if gl:
@@ -214,6 +226,9 @@ SCRIPT_SYSTEM = (
     "speech recognition or the original subtitles; use it to check meaning and who says what. " + PLAIN +
     "Reply with JSON only."
 )
+SCRIPT_SYSTEM_FREE = SCRIPT_SYSTEM.replace(
+    "that fits the time the character speaks (aim for the target syllable count)",
+    "that starts with the character but may run longer, so keep each line's full meaning")
 NO_SUBTITLE = "no subtitle: translated from the speech"
 SHORT_KEPT = "no subtitle: a short line keeps the original"
 
@@ -392,18 +407,22 @@ def subtitles_trusted(job: Job) -> tuple[bool, str]:
         return False, "no English subtitle"
     sc = (candidate(job, cid) or {}).get("score", {})
     checked = int(job.qc.get("subtitle_lines_checked", 0))
-    agree = 1 - int(job.qc.get("subtitle_lines_disagreeing_with_speech", 0)) / checked if checked else 0.0
+    agree = 1 - int(job.qc.get("subtitle_lines_disagreeing_with_speech", 0)) / checked if checked else 1.0
     need = {"content": 0.8, "total": 0.75, "agree": 0.75}
     need.update(job.cfg.get("translate.script_track") or {})
+    if not checked:  # too few lines to check one by one: the track scores decide
+        need.pop("agree", None)
     got = {"content": float(sc.get("content", 0)), "total": float(sc.get("total", 0)), "agree": agree}
     bad = [f"{k} {got[k]:.2f} below {float(v):.2f}" for k, v in need.items() if got[k] < float(v)]
-    return not bad, "; ".join(bad) or (f"meaning {got['content']:.2f}, score {got['total']:.2f}, "
-                                       f"{agree:.0%} of checked lines agree")
+    return not bad, "; ".join(bad) or (f"meaning {got['content']:.2f}, score {got['total']:.2f}, " +
+                                       (f"{agree:.0%} of checked lines agree" if checked else "no lines checked"))
 
 
-def covered(ln: L.Line, cues: list) -> bool:
-    """A subtitle is shown while the line is spoken (not just touching its edge)."""
-    return any(min(q.end, ln.end) - max(q.start, ln.start) >= min(0.2, 0.3 * ln.duration) for q in cues)
+def covered_ids(lines: list[L.Line], cues: list) -> set[int]:
+    """Lines a subtitle is shown for, matched exactly as the script prompt matches
+    them (line_subtitles), so a line left out here never gets a cue there."""
+    as_dicts = [{"start": q.start, "end": q.end, "text": q.text} for q in cues]
+    return {lid for lid, ks in line_subtitles(lines, as_dicts).items() if ks}
 
 
 def short_reaction(ln: L.Line) -> bool:
@@ -474,9 +493,12 @@ VERBATIM_TASK = (
     "expresses a similar idea (the gist, not word for word), false when it clearly says something else. A "
     "line marked no_subtitle: translate its text into natural spoken English of about target_syllables, with "
     "\"from_subtitle\": false.\n")
+VERBATIM_TASK_FREE = (VERBATIM_TASK
+                      .replace(" to fit target_syllables", "")
+                      .replace("natural spoken English of about target_syllables", "natural spoken English, keeping its full meaning"))
 
 
-def script_prompt(batch: list[L.Line], cues: list[dict], prev: list[L.Line], ctx: str, rate: float,
+def script_prompt(batch: list[L.Line], cues: list[dict], prev: list[L.Line], ctx: str, rate: float | None,
                   names: dict, word_for_word: bool = False) -> list[dict]:
     under = line_subtitles(batch, cues)
     owners: dict[int, list[int]] = {}
@@ -486,7 +508,7 @@ def script_prompt(batch: list[L.Line], cues: list[dict], prev: list[L.Line], ctx
     items = []
     for ln in batch:
         d = {"id": ln.id, "speaker": names.get(ln.character, ln.character), "seconds": round(ln.duration, 2),
-             "text": ln.source_text, "target_syllables": target_syllables(ln.duration, rate)}
+             "text": ln.source_text, **_length(ln, rate)}
         if ln.check_note == NO_SUBTITLE or not under[ln.id]:
             d["no_subtitle"] = True
         else:
@@ -497,11 +519,13 @@ def script_prompt(batch: list[L.Line], cues: list[dict], prev: list[L.Line], ctx
         items.append(d)
     before = [{"speaker": names.get(l.character, l.character), "text": l.source_text} for l in prev]
     if word_for_word:
-        user = (f"{ctx}\n\nEarlier in the scene:\n{json.dumps(before, ensure_ascii=False)}\n\n" + VERBATIM_TASK +
+        task = VERBATIM_TASK if rate is not None else VERBATIM_TASK_FREE
+        user = (f"{ctx}\n\nEarlier in the scene:\n{json.dumps(before, ensure_ascii=False)}\n\n" + task +
                 f"Lines:\n{json.dumps(items, ensure_ascii=False, indent=0)}\n\n"
                 'Return {"lines": [{"id": <id>, "en": "<dub line>", "short": "<shorter version>", '
                 '"from_subtitle": <true|false>, "matches": <true|false>}]} with one entry per id.')
-        return [{"role": "system", "content": SCRIPT_SYSTEM}, {"role": "user", "content": user}]
+        return [{"role": "system", "content": SCRIPT_SYSTEM if rate is not None else SCRIPT_SYSTEM_FREE},
+                {"role": "user", "content": user}]
     user = (f"{ctx}\n\nEarlier in the scene:\n{json.dumps(before, ensure_ascii=False)}\n\n"
             "The official English subtitles are the script for this scene. Each line below is one character "
             "speaking, with what they said in the original language (text; it may contain recognition errors) "
@@ -707,15 +731,26 @@ def _check_shorts(job: Job, llm: "LLM", lines: list[L.Line], lang: str) -> None:
         job.log(f"{dropped} shorter alternatives changed the meaning and were dropped")
 
 
-def _collect(reply: str) -> dict[int, dict]:
+def _str(v) -> str:
+    """A reply field as text; a JSON null is no text, never the word "None"."""
+    return "" if v is None else str(v).strip()
+
+
+def _collect(reply: str, ids: set[int] | None = None) -> dict[int, dict]:
+    """A reply's lines by id, keeping only the ids that were asked for."""
     data = parse_json(reply)
     out = {}
-    for item in data.get("lines", []):
+    for item in data.get("lines", []) if isinstance(data, dict) else []:
+        if not isinstance(item, dict):
+            continue
         try:
-            out[int(item["id"])] = {"en": str(item.get("en", "")).strip(), "short": str(item.get("short", "")).strip(),
-                                    "subtitle_ok": item.get("subtitle_ok") is True,
-                                    "from_subtitle": item.get("from_subtitle") is True,
-                                    "matches": item.get("matches") is not False}
+            lid = int(item["id"])
+            if ids is not None and lid not in ids:
+                continue
+            out[lid] = {"en": _str(item.get("en")), "short": _str(item.get("short")),
+                        "subtitle_ok": item.get("subtitle_ok") is True,
+                        "from_subtitle": item.get("from_subtitle") is True,
+                        "matches": item.get("matches") is not False}
         except (KeyError, ValueError, TypeError):
             continue
     return out
@@ -745,8 +780,10 @@ def run(job: Job) -> None:
             job.log(f"subtitle track not trusted as the script ({why}): translating the speech")
         # Speech the subtitles leave out: a short reaction keeps the original, a longer
         # line is translated from the speech and flagged.
-        for ln in lines:
-            if cues and ln.kind == L.SPEECH and not covered(ln, cues):
+        speech = [ln for ln in lines if ln.kind == L.SPEECH]
+        under = covered_ids(speech, cues) if cues else set()
+        for ln in speech:
+            if cues and ln.id not in under:
                 if short_reaction(ln):
                     ln.fallback = ln.check_note = SHORT_KEPT
                 else:
@@ -760,7 +797,7 @@ def run(job: Job) -> None:
     system = SCRIPT_SYSTEM if script else SYSTEM
 
     def prompt(b, p, c, share):
-        return (script_prompt(b, share, p, c, rate, names, word_for_word) if script
+        return (script_prompt(b, share, p, c, None if free else rate, names, word_for_word) if script
                 else translate_prompt(b, p, c, None if free else rate, names, lead_by))
 
     with LLM(job) as llm:
@@ -773,16 +810,19 @@ def run(job: Job) -> None:
         retry = []
         for b, p, c, sh, reply in zip(batches, prevs, ctxs, shares, replies):
             try:
-                got = _collect(reply)
+                got = _collect(reply, {l.id for l in b})
             except Exception:
                 got = {}
             drafts.update(got)
             missing = [l for l in b if l.id not in got or not got[l.id]["en"]]
             if missing:
-                retry.append(prompt(missing, p, c, sh))
-        for reply in llm.chat_many(retry) if retry else []:  # one retry for lines the model skipped
+                # With the subtitles as the script the whole scene is asked again, so a
+                # subtitle the missing line shares keeps its shared_with; only the
+                # missing lines are taken from the answer.
+                retry.append((prompt(b if script else missing, p, c, sh), {l.id for l in missing}))
+        for (_, ids), reply in zip(retry, llm.chat_many([r for r, _ in retry]) if retry else []):
             try:
-                drafts.update({k: v for k, v in _collect(reply).items() if v["en"]})
+                drafts.update({k: v for k, v in _collect(reply, ids).items() if v["en"]})
             except Exception:
                 pass
         job.check()
@@ -790,10 +830,12 @@ def run(job: Job) -> None:
         if word_for_word:
             by_time = sum(verbatim_lines(b, sh, drafts) for b, sh in zip(batches, shares))
             job.qc["shared_subtitles_divided_by_time"] = by_time
-            for ln in (l for b in batches for l in b):
-                if ln.check_note != NO_SUBTITLE and not drafts.get(ln.id, {}).get("en"):
-                    # A shared subtitle's words all went to the neighbouring line(s).
-                    ln.fallback = ln.check_note = "its shared subtitle is said by the neighbouring line"
+            for b, sh in zip(batches, shares):
+                under = line_subtitles(b, sh)
+                for ln in b:
+                    if ln.check_note != NO_SUBTITLE and not drafts.get(ln.id, {}).get("en") and under[ln.id]:
+                        # A shared subtitle's words all went to the neighbouring line(s).
+                        ln.fallback = ln.check_note = "its shared subtitle is said by the neighbouring line"
         if lead_by == "subtitle":
             offered = [ln for b in batches for ln in b if ln.english_ref and not source_unsure(ln)]
             for ln in offered:
@@ -825,9 +867,10 @@ def run(job: Job) -> None:
         # translated from the speech are reviewed.
         reviewed = [b for b in ([l for l in b if not (script and l.en_from == "script")] for b in batches) if b]
         if reflect and reviewed:
+            review_system = (SCRIPT_SYSTEM_FREE if script else SYSTEM_FREE) if free else system
             ctxs = [_context_block(prof, {l.character for l in b}, lang, script) for b in reviewed]
             notes_replies = llm.chat_many([reflect_prompt(b, c, None if free else rate, names, drafts,
-                                                          SYSTEM_FREE if free and not script else system)
+                                                          review_system)
                                            for b, c in zip(reviewed, ctxs)])
             job.status("reviewed the draft", progress=0.75)
             rewrite_convs = []
@@ -837,10 +880,10 @@ def run(job: Job) -> None:
                 except Exception:
                     notes = {}
                 rewrite_convs.append(rewrite_prompt(b, c, None if free else rate, names, drafts, notes,
-                                                    SYSTEM_FREE if free and not script else system))
-            for reply in llm.chat_many(rewrite_convs):
+                                                    review_system))
+            for b, reply in zip(reviewed, llm.chat_many(rewrite_convs)):
                 try:
-                    for k, v in _collect(reply).items():
+                    for k, v in _collect(reply, {l.id for l in b}).items():
                         if v["en"]:
                             final[k] = v
                 except Exception as exc:

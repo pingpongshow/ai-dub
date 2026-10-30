@@ -107,7 +107,15 @@ def cer(ref: str, hyp: str) -> float:
 def asr_text_between(asr_segments: list[dict], a: float, b: float) -> str:
     words = [w["text"] for s in asr_segments for w in s.get("words", [])
              if w["end"] > a and w["start"] < b and (min(w["end"], b) - max(w["start"], a)) >= 0.5 * (w["end"] - w["start"])]
-    return "".join(words) if words else ""
+    out = ""
+    for w in words:  # Japanese and Chinese run together; Latin-script words keep their spaces
+        out += ("" if not out or (_unspaced(out[-1]) and _unspaced(w[:1])) else " ") + w
+    return out
+
+
+def _unspaced(ch: str) -> bool:
+    return bool(ch) and ("\u3040" <= ch <= "\u30ff" or "\u3400" <= ch <= "\u9fff" or "\uff00" <= ch <= "\uffef"
+                         or "\u3000" <= ch <= "\u303f")
 
 
 def content_source(cues: list[Cue], asr_segments: list[dict]) -> float:

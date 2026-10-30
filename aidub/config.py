@@ -24,6 +24,22 @@ def _merge(base: dict, over: dict) -> dict:
     return out
 
 
+def check_shape(user: Any, defaults: dict | None = None, where: str = "") -> str:
+    """Why `user` can't be merged over the defaults ("" when it can): a section the
+    defaults keep as a mapping must stay a mapping, or every later read of it fails."""
+    defaults = defaults if defaults is not None else yaml.safe_load(DEFAULTS_FILE.read_text())
+    if user is None:
+        return ""
+    if not isinstance(user, dict):
+        return f"'{where}' must be a mapping" if where else "the settings must be a mapping of names to values"
+    for k, v in user.items():
+        if isinstance(defaults.get(k), dict):
+            problem = check_shape(v if v is not None else 0, defaults[k], f"{where}.{k}" if where else k)
+            if problem:
+                return problem
+    return ""
+
+
 def _substitute(value: Any, env: dict[str, str]) -> Any:
     if isinstance(value, str):
         return _VAR.sub(lambda m: env.get(m.group(1), ""), value)
@@ -111,6 +127,9 @@ def load(config_path: str | Path | None = None) -> Config:
     defaults = yaml.safe_load(DEFAULTS_FILE.read_text())
     path = Path(config_path or os.environ.get("AIDUB_CONFIG", "/config/config.yaml"))
     user = yaml.safe_load(path.read_text()) if path.exists() else {}
+    problem = check_shape(user, defaults)
+    if problem:
+        raise ValueError(f"{path}: {problem}")
     merged = _merge(defaults, user or {})
     for key in ("appdata", "models", "work"):
         env = os.environ.get(f"AIDUB_{key.upper()}")

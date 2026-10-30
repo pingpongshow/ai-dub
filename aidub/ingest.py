@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import glob
+
 from . import media, originals
 from .job import Job, Skipped
 
@@ -64,6 +66,10 @@ def run(job: Job) -> None:
         raise Skipped("already dubbed by Ai Dub (queue it again with 'redo' to rebuild)")
     if redo:
         aside = originals.aside_name(job.src)
+        if not aside.exists():  # an .avi/.ts original sits beside the .mkv it was dubbed into
+            near = sorted(f for f in job.src.parent.glob(glob.escape(job.src.stem) + ".*" + originals.ORIGINAL)
+                          if originals.live_name(f).stem == job.src.stem)
+            aside = near[0] if near else aside
         if aside.exists():
             source = aside
             job.log(f"redo: rebuilding from the set-aside original {aside.name}")
@@ -75,7 +81,10 @@ def run(job: Job) -> None:
 
     wav = job.path("audio", "source.wav")
     job.status("extracting audio")
-    media.extract_audio(source, stream.index, wav, duration=preview or None)
+    # 3.0 to 5.0 have no layout the separator or the mix handles: they are folded to stereo
+    # (5.1 and up keep their channels; the dialogue is separated from the centre).
+    fold = 2 < stream.channels < 6
+    media.extract_audio(source, stream.index, wav, duration=preview or None, channels=2 if fold else None)
 
     lang = job.options.get("language") or stream.language or ""
     job.set("ingest", {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import shutil
 from pathlib import Path
@@ -18,8 +19,10 @@ HI_WORDS = {"sdh", "hi", "cc"}
 
 def _lang_from_name(tokens: list[str]) -> str:
     for t in reversed(tokens):
+        if t in HI_WORDS or t in FORCED_WORDS:  # "hi" here is hearing-impaired, not Hindi
+            continue
         code = media.lang_code(t)
-        if code in {"en", "ja", "ko", "zh", "yue", "es", "fr", "de", "ar"}:
+        if code in media.LANGUAGES:
             return code
         if t.lower() in {"jp", "jap"}:
             return "ja"
@@ -82,8 +85,10 @@ def embedded(job_dir: Path, src: Path, pr: media.Probe) -> list[Candidate]:
 
 def from_sidecars(job_dir: Path, video: Path) -> list[Candidate]:
     out = []
-    for i, (p, fmt, lang, forced) in enumerate(sidecars(video)):
-        dst = job_dir / f"sidecar_{i}{p.suffix.lower()}"
+    for p, fmt, lang, forced in sidecars(video):
+        # Named by the file, not its place in the list: a later rescan (after a Bazarr
+        # download) must not overwrite the copies earlier candidates point to.
+        dst = job_dir / f"sidecar_{hashlib.sha1(p.name.encode()).hexdigest()[:12]}{p.suffix.lower()}"
         shutil.copyfile(p, dst)
         out.append(Candidate(id=f"sidecar:{p.name}", label=f"sidecar {p.name}", origin="sidecar" if fmt != "pgs" else "ocr",
                              language=lang, format=fmt, path=str(dst), in_file=True, forced=forced))
@@ -120,6 +125,8 @@ def ocr_cues(c: Candidate, worker, lang: str, work: Path) -> None:
         t, name, kind = clean.clean_text(text.replace("\n", " "))
         cues.append(Cue(start=start, end=end, text=t if kind == DIALOGUE else "", raw=text, name=name, kind=kind))
     shutil.rmtree(img_dir, ignore_errors=True)
+    if not c.language:  # an untagged track: tell its language from what was read
+        c.language = clean.script_language([q.text for q in cues if q.kind == DIALOGUE])
     srt = Path(c.path).with_suffix(".srt")
     write_srt([q for q in cues if q.raw.strip()], srt)
     c.path, c.format, c.human, c.cues = str(srt), "srt", True, cues

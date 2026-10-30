@@ -186,8 +186,12 @@ class Profile:
 
     def remove_ref(self, cid: str, ref_file: str) -> None:
         ch = self.characters[cid]
+        if not any(r["file"] == ref_file for r in ch.get("refs", [])):
+            return  # only a clip this character actually has
         ch["refs"] = [r for r in ch.get("refs", []) if r["file"] != ref_file]
-        (self.root / ref_file).unlink(missing_ok=True)
+        target = (self.root / ref_file).resolve()
+        if target.is_relative_to(self.root.resolve()):
+            target.unlink(missing_ok=True)
 
     def lock_ref(self, cid: str, ref_file: str, locked: bool = True) -> None:
         for r in self.characters[cid].get("refs", []):
@@ -213,7 +217,7 @@ class Profiles:
 
     def get(self, slug: str) -> Profile | None:
         p = self.root / slug
-        if not (p / "profile.json").exists():
+        if not slug or p.resolve().parent != self.root.resolve() or not (p / "profile.json").exists():
             return None
         return Profile(p, json.loads((p / "profile.json").read_text()))
 

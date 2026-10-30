@@ -68,8 +68,13 @@ SUFFIXES = (("n't", " not"), ("'re", " are"), ("'ll", " will"), ("'ve", " have")
 def said_as(text: str) -> str:
     """Symbols and numbers as words, the way the voice should read them and the
     back-check should compare them: "84%" is "84 percent" (the voice read a bare "84%"
-    in Chinese), "9.0" is "9 point 0" (it said "nine point"), "No. 12" is "Number 12"."""
-    text = re.sub(r"(?<=\d)\.(?=\d)", " point ", text)
+    in Chinese), "9.0" is "9 point 0" (it said "nine point"), "12.75" is "12 point 7 5"
+    (not "twelve point seventy-five"), "$4.99" is "4 dollars 99", "1,000" is "1000",
+    "No. 12" is "Number 12"."""
+    text = re.sub(r"(?<=\d),(?=\d{3}\b)", "", text)
+    text = re.sub(r"\$(\d+)\.(\d\d)\b", r"\1 dollars \2", text)
+    text = re.sub(r"\$(\d+)\b", lambda m: m.group(1) + (" dollar" if m.group(1) == "1" else " dollars"), text)
+    text = re.sub(r"(?<=\d)\.(\d+)", lambda m: " point " + " ".join(m.group(1)), text)
     text = re.sub(r"\s*%", " percent", text)
     return re.sub(r"\bNo\.\s*(?=\d)", "Number ", text)
 
@@ -104,11 +109,26 @@ def number_words(n: int) -> list[str]:
     return [ONES[n]]
 
 
+ORDINAL = {"one": "first", "two": "second", "three": "third", "five": "fifth", "eight": "eighth",
+           "nine": "ninth", "twelve": "twelfth"}
+ORDINAL_RE = re.compile(r"(\d{1,6})(?:st|nd|rd|th)")
+
+
+def ordinal_words(n: int) -> list[str]:
+    """21 as "twenty first", 30 as "thirtieth"."""
+    ws = number_words(n)
+    last = ws[-1]
+    ws[-1] = ORDINAL.get(last) or (last[:-1] + "ieth" if last.endswith("y") else last + "th")
+    return ws
+
+
 def _numbers(words: list[str], digitwise: bool) -> list[str]:
     """Numbers in the script as the voice may read them: as a number or digit by digit."""
     out = []
     for w in words:
-        if w.isdigit() and len(w) <= 6:
+        if ORDINAL_RE.fullmatch(w):
+            out.extend(ordinal_words(int(ORDINAL_RE.fullmatch(w).group(1))))
+        elif w.isdigit() and len(w) <= 6:
             out.extend([ONES[int(d)] for d in w] if digitwise else number_words(int(w)))
         else:
             out.append(w)
@@ -131,7 +151,7 @@ def wer(ref: str, hyp: str) -> float:
         k = next((i for i, h in enumerate(b) if pronounce.same_sound(joined, h) or pronounce.near(joined, h)), None)
         if k is not None:
             b[k:k + 1] = parts
-    if any(w.isdigit() for w in a):
+    if any(w[0].isdigit() for w in a):
         return min(_wer(_numbers(a, d), _numbers(b, d)) for d in (False, True))
     return _wer(a, b)
 
@@ -169,9 +189,18 @@ def missed_words(text: str, heard: str) -> list[str]:
     Names (capitalised mid-sentence) are left out: recognition spells them its own
     way. A word heard with another spelling that sounds the same counts as heard
     (see pronounce)."""
-    raw = re.findall(r"[A-Za-z0-9'’]+(?:-[A-Za-z0-9'’]+)*", text)
-    # Every part of a hyphenated name ("Ga-yeong", "Ok-hui") is the name.
-    names = {p.lower() for i, w in enumerate(raw) if (i or "-" in w) and w[0].isupper() for p in w.split("-")}
+    found = list(re.finditer(r"[A-Za-z0-9'’]+(?:-[A-Za-z0-9'’]+)*", text))
+    raw = [m.group(0) for m in found]
+
+    def opens_sentence(pos: int) -> bool:
+        before = text[:pos].rstrip(" \"'“‘(—–-")
+        return not before or before[-1] in ".!?…"
+
+    # Every part of a hyphenated name ("Ga-yeong", "Ok-hui") is the name. A capitalised
+    # word opening any sentence is checked like the line's first word ("Wait. Brakes
+    # failed": "Brakes" must be heard).
+    names = {p.lower() for m, w in zip(found, raw) if w[0].isupper()
+             and (not opens_sentence(m.start()) or "-" in w) for p in w.split("-")}
     heard_words = _words(heard)
     heard_set = set(heard_words)
     # Made-up words heard as one word: a hyphenated one ("ten-pent" as "tenpence"), or a
@@ -192,7 +221,7 @@ def missed_words(text: str, heard: str) -> list[str]:
     out = []
     for w in _words(text):
         base = re.sub(r"'s$", "", w)  # "West's" heard as "West", "how's" as "how is"
-        if w.isdigit():  # a number must be heard whole, as a number or digit by digit
+        if w.isdigit() or ORDINAL_RE.fullmatch(w):  # a number must be heard whole, as a number or digit by digit
             said = [x for i, x in enumerate(heard_words) if not (x == "and" and i and heard_words[i - 1] in ("hundred", "thousand"))]
             said = ["zero" if x == "oh" and i and said[i - 1] == "point" else x for i, x in enumerate(said)]
             joined = f" {' '.join(said)} "
@@ -254,7 +283,9 @@ def _requests(job: Job, ln: L.Line, text: str, takes: int, tag: str, dlg, sr, fa
     caps = job.get("tts_caps", {})
     orig = _orig_clip(job, ln, dlg, sr)
     min_emo = float(job.cfg.get("speak.min_emotion_ref_s", 1.0))
-    req_base = {"text": spoken(text), "speaker_ref": voice or ln.voice or str(orig)}
+    # A voice-bank clip can be dropped by another episode's run while this job waits.
+    ref = next((v for v in (voice, ln.voice) if v and Path(v).exists()), str(orig))
+    req_base = {"text": spoken(text), "speaker_ref": ref}
     if caps.get("emotion_ref", True) and ln.duration >= min_emo and not ln.overlap:
         req_base["emotion_ref"] = str(orig)
         req_base["emo_alpha"] = float(job.cfg.get("speak.emo_alpha", 0.35))
@@ -472,10 +503,16 @@ def run_check(job: Job) -> None:
     for ln in lines:
         mine = {p: s for (l, _, p), s in ((it, scores.get(it[2], {})) for it in items) if l.id == ln.id}
         if not mine:
+            if ln.dubbed and ln.en:  # the voice model gave nothing for it
+                ln.take, ln.fallback = "", "no take was voiced"
+                failed += 1
             continue
         ln.take_scores = mine
-        best = max(mine, key=lambda p: mine[p].get("score", 0))
-        if _passes(mine[best], job.cfg):
+        # The best take that passes, not the best-scoring take: a near-perfect take with
+        # one missed word must not hide a clean one with a weaker voice match.
+        passing = [p for p in mine if _passes(mine[p], job.cfg)]
+        best = max(passing or mine, key=lambda p: mine[p].get("score", 0))
+        if passing:
             ln.take, ln.fallback = best, ""  # (a resumed job may carry an earlier run's verdict)
         else:
             ln.take = ""
@@ -727,8 +764,8 @@ def run_condense(job: Job) -> None:
     rules = F.FitRules.from_config(job.cfg)
     rounds = int(job.cfg.get("condense.rounds", 1))
     takes = max(1, int(job.cfg.get("condense.takes", 2)))
-    if not job.cfg.get("condense.enabled", True) or rounds <= 0:
-        return
+    if not job.cfg.get("condense.enabled", True):
+        rounds = 0  # (a subtitled line that is only too long is still sped up below)
     win = F.windows([l for l in lines if l.kind == L.SPEECH], job["scenes"]["cuts"], rules, job["ingest"]["duration"])
     if F.free_timing(job):  # only lines the voice garbled come here; any length will do
         win = {k: 1e6 for k in win}

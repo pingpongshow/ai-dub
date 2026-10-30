@@ -12,6 +12,7 @@ import numpy as np
 import soundfile as sf
 
 ENGLISH = {"en", "eng", "english"}
+VIDEO_EXT = {".mkv", ".mp4", ".m4v", ".avi", ".ts", ".m2ts", ".mov", ".wmv", ".webm"}
 NOT_DIALOGUE_WORDS = ("commentary", "description", "descriptive", "audio description", "director")
 
 
@@ -98,20 +99,29 @@ class Probe:
         return names[0]
 
 
+# Two-letter code: its ISO 639-2 code as Matroska writes it, and its English name.
+LANGUAGES = {
+    "en": ("eng", "english"), "ja": ("jpn", "japanese"), "ko": ("kor", "korean"), "zh": ("chi", "chinese"),
+    "yue": ("chi", "cantonese"), "es": ("spa", "spanish"), "fr": ("fre", "french"), "de": ("ger", "german"),
+    "ar": ("ara", "arabic"), "it": ("ita", "italian"), "pt": ("por", "portuguese"), "ru": ("rus", "russian"),
+    "th": ("tha", "thai"), "vi": ("vie", "vietnamese"), "hi": ("hin", "hindi"), "id": ("ind", "indonesian"),
+    "ms": ("may", "malay"), "tl": ("tgl", "tagalog"), "tr": ("tur", "turkish"), "pl": ("pol", "polish"),
+    "nl": ("dut", "dutch"), "sv": ("swe", "swedish"), "no": ("nor", "norwegian"), "da": ("dan", "danish"),
+    "fi": ("fin", "finnish"), "uk": ("ukr", "ukrainian"), "he": ("heb", "hebrew"), "el": ("gre", "greek"),
+    "cs": ("cze", "czech"), "hu": ("hun", "hungarian"), "ro": ("rum", "romanian"),
+}
+_ALIASES = {"zho": "zh", "cmn": "zh", "yue": "yue", "fra": "fr", "deu": "de", "msa": "ms", "fil": "tl",
+            "nld": "nl", "ell": "el", "ces": "cs", "ron": "ro", "nob": "no", "und": ""}
+_TO_CODE = {**{a: c for c, (b, n) in LANGUAGES.items() for a in (b, n) if c != "yue" or a != "chi"}, **_ALIASES}
+
+
 def lang_code(value: str) -> str:
     v = (value or "").strip().lower()
-    table = {
-        "eng": "en", "english": "en", "jpn": "ja", "japanese": "ja", "kor": "ko", "korean": "ko",
-        "chi": "zh", "zho": "zh", "chinese": "zh", "cmn": "zh", "yue": "yue", "cantonese": "yue",
-        "spa": "es", "fre": "fr", "fra": "fr", "ger": "de", "deu": "de", "und": "",
-    }
-    return table.get(v, v)
+    return _TO_CODE.get(v, v)
 
 
 def iso3(code: str) -> str:
-    table = {"en": "eng", "ja": "jpn", "ko": "kor", "zh": "chi", "yue": "chi", "es": "spa",
-             "fr": "fre", "de": "ger", "ar": "ara"}
-    return table.get(code, code or "und")
+    return LANGUAGES[code][0] if code in LANGUAGES else (code or "und")
 
 
 def probe(path: str | Path) -> Probe:

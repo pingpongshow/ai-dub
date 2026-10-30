@@ -78,6 +78,18 @@ def fade(x: np.ndarray, n: int) -> np.ndarray:
     return x
 
 
+def outside(span: tuple[float, float], holes: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """The parts of `span` not covered by any of `holes`."""
+    parts = [span]
+    for h0, h1 in holes:
+        parts = [q for a, b in parts for q in ((a, min(b, h0)), (max(a, h1), b)) if q[1] - q[0] > 1e-3]
+    return parts
+
+
+def outside_all(spans: list[tuple[float, float]], holes: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    return [q for sp in spans for q in outside(sp, holes)]
+
+
 def keep_gain(n: int, spans: list[tuple[float, float]], ramp_s: float) -> np.ndarray:
     """1 where the original dialogue is kept, 0 under dubbed lines, with short ramps."""
     g = np.ones(n, dtype=np.float32)
@@ -129,6 +141,12 @@ def run(job: Job) -> None:
     free = free_timing(job)
     gap = float(cfg.get("fit.free_gap_ms", 120)) / 1000
     spans, waited, busy_until = [], [], 0.0
+    # Lines left in the original (short reactions, songs, lines with no usable take) stay
+    # audible even where a dub runs on over them; only the dubbed lines' own speech is muted.
+    dub_ids = {l.id for l in dubbed}
+    kept = [(l.start, l.end) for l in lines if l.id not in dub_ids]
+    own = [(l.start, l.end) for l in dubbed]
+    over_kept = placed = 0
     for ln in dubbed:
         take, tsr = media.read_wav(ln.take, mono=True)
         x = media.resample(take, tsr, SR)[:, 0].copy()
@@ -141,7 +159,7 @@ def run(job: Job) -> None:
                 waited.append(start - ln.start)
             busy_until = start + len(x) / SR
             ln.fit["placed"] = round(start, 3)
-        a = int(start * SR)
+        a = min(int(start * SR), total)  # free timing can push a line past the end
         b = min(total, a + len(x))
         x = x[: b - a]
         if len(x) == 0:
@@ -169,7 +187,13 @@ def run(job: Job) -> None:
                 v["dub"][a:b, 1] += x * share * np.sin(theta) * np.sqrt(2)
             else:
                 v["dub"][a:b, 0] += x * share
-        spans.append((min(ln.start, start) - 0.04, max(ln.end, start + len(x) / SR) + 0.04))
+        placed += 1
+        spans.append((min(ln.start, start) - 0.04, ln.end + 0.04))
+        run_on = (ln.end + 0.04, start + len(x) / SR + 0.04)
+        if run_on[1] > run_on[0]:
+            holes = [(k0, k1) for k0, k1 in kept if k1 > run_on[0] and k0 < run_on[1]]
+            over_kept += bool(holes)
+            spans.extend(outside(run_on, outside_all(holes, own)))
 
     g = keep_gain(total, spans, ramp_s=0.03)[:, None]
     duck = 10 ** (-abs(float(cfg.get("mix.extra_duck_db", 0.0))) / 20)
@@ -208,9 +232,10 @@ def run(job: Job) -> None:
         pass
     out = soft_limit(out.astype(np.float32))
     media.write_wav(job.path("mix", "dub.wav"), out, SR)
-    job.qc["dubbed_lines"] = len(spans)
+    job.qc["dubbed_lines"] = placed
     if free:
         job.qc["free_timing"] = {"lines_waited": len(waited), "max_wait_s": round(max(waited, default=0.0), 2),
+                                 "ran_over_kept_lines": over_kept,
                                  "mean_wait_s": round(sum(waited) / len(waited), 2) if waited else 0.0}
         L.save(lines, job.path("lines.json"))
-    job.status(f"mixed {len(spans)} dubbed lines")
+    job.status(f"mixed {placed} dubbed lines")

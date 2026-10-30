@@ -45,6 +45,7 @@ def run(job: Job, *, until: str | None = None) -> dict:
         job.status(title, progress=0.0, step_index=i, steps=len(STEPS))
         t0 = time.time()
         fn(job)
+        job.check()  # a step cut short by a cancel or shutdown is not finished
         job.mark_done(name, time.time() - t0)
         if until and name == until:
             break

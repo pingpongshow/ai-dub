@@ -38,6 +38,7 @@ class Job:
             "done": [], "data": {}, "timings": {}}
         self.on_status = on_status or (lambda d: None)
         self.cancel_event = cancel or threading.Event()
+        self.halt_event = threading.Event()  # container shutdown: stop, keep the work, resume later
         self.log_file = self.work / "job.log"
         self._worker: Worker | None = None
         self.step = ""
@@ -100,7 +101,7 @@ class Job:
         self.on_status(d)
 
     def check(self) -> None:
-        if self.cancel_event.is_set():
+        if self.cancel_event.is_set() or self.halt_event.is_set():
             raise Cancelled()
 
     # Workers and the GPU --------------------------------------------------------
