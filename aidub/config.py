@@ -17,6 +17,8 @@ _VAR = re.compile(r"\$\{([A-Z0-9_]+)\}")
 def _merge(base: dict, over: dict) -> dict:
     out = copy.deepcopy(base)
     for k, v in (over or {}).items():
+        if v is None and isinstance(out.get(k), dict):
+            continue  # an empty section ("subtitles:" with nothing under it) changes nothing
         if isinstance(v, dict) and isinstance(out.get(k), dict):
             out[k] = _merge(out[k], v)
         else:
@@ -34,7 +36,7 @@ def check_shape(user: Any, defaults: dict | None = None, where: str = "") -> str
         return f"'{where}' must be a mapping" if where else "the settings must be a mapping of names to values"
     for k, v in user.items():
         if isinstance(defaults.get(k), dict):
-            problem = check_shape(v if v is not None else 0, defaults[k], f"{where}.{k}" if where else k)
+            problem = check_shape(v, defaults[k], f"{where}.{k}" if where else k)
             if problem:
                 return problem
     return ""
