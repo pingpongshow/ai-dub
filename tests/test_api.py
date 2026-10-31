@@ -196,3 +196,34 @@ def test_show_rules_settings(client):
     r = c.get("/api/profiles/rules-show/rules").json()
     assert r["review"] == "always" and r["habits"]["tilde_signs"] is False and "unknown" not in r["habits"]
     assert c.put("/api/profiles/rules-show/rules", json={"review": "sometimes"}).status_code == 400
+
+
+def test_check_a_finished_dub_then_keep_it_or_put_the_original_back(client, cfg, media_root):
+    import hashlib
+    from aidub import jobs as J, originals
+    c, svc = client
+    eps = [synth.episode(media_root / f"Check Show - S01E0{n}.mkv") for n in (1, 2)]
+    digests = [hashlib.sha256(e.read_bytes()).hexdigest() for e in eps]
+    ids = [c.post("/api/jobs", json={"paths": [str(e)], "review": "off"}).json()["added"][0] for e in eps]
+    for _ in ids:
+        svc.run_one(svc.store.next_queued())
+    assert all(svc.store.get(i)["status"] == J.DONE for i in ids)
+    pending = c.get("/api/verify").json()
+    assert sorted(p["id"] for p in pending) == sorted(ids) and all(p["original_size"] > 0 for p in pending)
+    v = c.get(f"/api/jobs/{ids[0]}/verify").json()
+    assert v["ready"] and v["original"]["exists"] and v["duration"] > 10
+    # Only the check files are left of the working folder, and they play.
+    left = {p.name for p in (cfg.work / f"job-{ids[0]}").iterdir()}
+    assert left == {"verify"}
+    r = c.get(f"/api/jobs/{ids[0]}/verify/media/preview.mp4", headers={"Range": "bytes=0-9"})
+    assert r.status_code == 206 and c.get(f"/api/jobs/{ids[0]}/verify/media/dub.m4a").status_code == 200
+    # Good: the original and the check files go, the dub stays.
+    assert c.post(f"/api/jobs/{ids[0]}/verify", json={"verdict": "good"}).status_code == 200
+    assert not originals.aside_name(eps[0]).exists() and not (cfg.work / f"job-{ids[0]}").exists()
+    assert any(s.title == "English (AI dub)" for s in __import__("aidub.media", fromlist=["probe"]).probe(eps[0]).audio)
+    # Put the original back: the file is the untouched original again, and no dub copy is left.
+    assert c.post(f"/api/jobs/{ids[1]}/verify", json={"verdict": "restore"}).status_code == 200
+    assert hashlib.sha256(eps[1].read_bytes()).hexdigest() == digests[1]
+    assert not originals.aside_name(eps[1]).exists() and not originals.aside_name(eps[1], "dubbed").exists()
+    assert c.get("/api/verify").json() == []
+    assert c.post(f"/api/jobs/{ids[1]}/verify", json={"verdict": "maybe"}).status_code == 409

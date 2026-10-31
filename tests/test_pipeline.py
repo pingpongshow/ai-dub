@@ -49,8 +49,10 @@ def test_dub_mkv_in_place(cfg, media_root):
     rec = job["record"]
     assert rec["qc"]["dubbed_lines"] > 0
     assert rec["qc"]["fallback_rate"] < 0.5
-    # Working files are gone, the set-aside original is registered, a profile exists.
-    assert not (cfg.work / f"job-{job['id']}").exists()
+    # Working files are gone but for the small check set, the set-aside original is
+    # registered, a profile exists.
+    assert {p.name for p in (cfg.work / f"job-{job['id']}").iterdir()} == {"verify"}
+    assert job["record"]["verify"] == "pending"
     assert [o["path"] for o in svc.store.originals()] == [str(aside)]
     prof = svc.profiles.get("test-show")
     assert prof and len(prof.characters) == 2

@@ -148,6 +148,20 @@ class Service:
         import json
         return review.start_media(work, json.loads(state.read_text()).get("data", {}))
 
+    def verify_list(self) -> list[dict]:
+        from . import verify
+        return verify.pending(self.store, self.cfg.work)
+
+    def verify_view(self, jid: int) -> dict:
+        from . import verify
+        return verify.view(self.store, self.cfg.work, jid)
+
+    def verify_verdict(self, jid: int, choice: str) -> dict:
+        from . import verify
+        out = verify.verdict(self, jid, choice)
+        self._wake.set()
+        return out
+
     def work_size(self, jid: int) -> int:
         d = self.cfg.work / f"job-{jid}"
         return sum(f.stat().st_size for f in d.rglob("*") if f.is_file()) if d.exists() else 0
@@ -215,7 +229,20 @@ class Service:
                 aside = Path(delivered["set_aside"])
                 self.store.add_original(jid, str(aside), str(originals.live_name(aside)), delivered["set_aside_kind"],
                                         aside.stat().st_size if aside.exists() else 0)
-            job.remove_work()
+            from . import review, verify
+            dec = review.load_decisions(job.work)
+            if dec.get("started"):
+                rec["review_decisions"] = {k: dec.get(k) for k in ("regions", "cues", "lines")}
+            if self.cfg.get("verify.enabled", True) and delivered.get("set_aside"):
+                try:
+                    job.status("preparing the check")
+                    verify.prepare(job, rec)
+                    rec["verify"] = "pending"
+                except Exception as exc:
+                    job.log(f"check files not kept: {exc}")
+                    job.remove_work()
+            else:
+                job.remove_work()
             self.store.update(jid, status=J.DONE, finished=time.time(), progress=1.0,
                               message="done", record=rec)
         except Paused as exc:

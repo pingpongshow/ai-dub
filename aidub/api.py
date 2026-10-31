@@ -212,6 +212,37 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
             bad(404, "not ready")
         return FileResponse(f, media_type=review.MEDIA[name], headers={"Cache-Control": "no-cache"})
 
+    # Checking finished dubs ---------------------------------------------------------------
+    @app.get("/api/verify")
+    def verify_list():
+        return svc.verify_list()
+
+    @app.get("/api/jobs/{jid}/verify")
+    def verify_get(jid: int):
+        try:
+            return svc.verify_view(jid)
+        except KeyError:
+            bad(404, "no such job")
+
+    @app.post("/api/jobs/{jid}/verify")
+    def verify_post(jid: int, verdict: str = Body(..., embed=True)):
+        try:
+            return svc.verify_verdict(jid, verdict)
+        except KeyError:
+            bad(404, "no such job")
+        except (ValueError, OSError) as exc:
+            bad(409, str(exc))
+
+    @app.get("/api/jobs/{jid}/verify/media/{name}")
+    def verify_file(jid: int, name: str):
+        from . import verify
+        if name not in verify.MEDIA:
+            bad(404, "not found")
+        f = cfg.work / f"job-{jid}" / "verify" / name
+        if not f.is_file():
+            bad(404, "not ready")
+        return FileResponse(f, media_type=verify.MEDIA[name], headers={"Cache-Control": "no-cache"})
+
     @app.get("/api/jobs/{jid}/log", response_class=PlainTextResponse)
     def job_log(jid: int, lines: int = 200):
         p = cfg.work / f"job-{jid}" / "job.log"

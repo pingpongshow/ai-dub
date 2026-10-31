@@ -43,6 +43,7 @@ let selected = new Set();
 
 async function pageQueue() {
   main.innerHTML = `
+    <div id="checks"></div>
     <h2>Add files</h2>
     <div class="panel">
       <div class="row small muted" id="crumbs"></div>
@@ -56,6 +57,7 @@ async function pageQueue() {
     <h2>Queue</h2>
     <div id="jobs"></div>`;
   $("#add").onclick = () => showAddForm();
+  loadChecks();
   await loadBrowser(browsePath);
   await loadQueue();
   timer = setInterval(loadQueue, 2500);
@@ -130,6 +132,19 @@ async function showAddForm() {
   };
 }
 
+async function loadChecks() {
+  // Finished dubs waiting for the user's check before their originals are deleted.
+  const box = $("#checks");
+  const items = await api("/verify").catch(() => []);
+  if (!box) return;
+  box.innerHTML = items.length ? `<h2>Dubbed: check them</h2><div class="panel tablewrap"><table>
+      <tr><th>Episode</th><th>Finished</th><th>To listen to</th><th>Original</th><th></th></tr>
+      ${items.map((x) => `<tr><td style="overflow-wrap:anywhere">${esc(x.name)}</td><td class="small">${when(x.finished)}</td>
+        <td class="small">${x.moments} moment${x.moments === 1 ? "" : "s"}</td><td class="small">${gb(x.original_size)} set aside</td>
+        <td><a class="button primary" href="#verify/${x.id}">Check</a></td></tr>`).join("")}</table>
+      <p class="small muted" style="margin:8px 0 0">Listen to each dub; keep it to delete its original and check files, or put the original back.</p></div>` : "";
+}
+
 async function loadQueue() {
   const jobs = await api("/jobs?view=queue");
   const box = $("#jobs");
@@ -171,7 +186,10 @@ async function pageHistory() {
     const tag = { done: "ok", skipped: "", failed: "bad", cancelled: "" }[j.status] ?? "";
     const fit = counts(qc.fit);
     return `<div class="panel" data-id="${j.id}">
-      <div class="row"><span class="grow path">${esc(j.path.split("/").pop())}</span><span class="tag ${tag}">${esc(j.status)}</span></div>
+      <div class="row"><span class="grow path">${esc(j.path.split("/").pop())}</span>
+        ${{ pending: `<a class="button primary" href="#verify/${j.id}">Check</a><span class="tag warn">not checked</span>`, good: `<span class="tag ok">checked, original deleted</span>`,
+            restored: `<span class="tag">original put back</span>`, redo: `<span class="tag">original back, queued again</span>` }[r.verify] || ""}
+        <span class="tag ${tag}">${esc(j.status)}</span></div>
       <div class="small muted">${esc(j.message)} · ${when(j.finished)} · profile ${esc(j.profile)}</div>
       ${qc.subtitle_track && qc.subtitle_track.trusted === false && qc.subtitle_track.why !== "no English subtitle"
         ? `<div class="tag warn" style="margin-top:6px">English subtitles not used as the script: ${esc(qc.subtitle_track.why)}. Dubbed from the speech instead.</div>` : ""}
@@ -446,11 +464,12 @@ async function route() {
   const [page, arg] = (location.hash.slice(1) || "queue").split("/");
   main.classList.remove("wide");
   document.querySelectorAll(".rv-pop").forEach((p) => p.remove());
-  document.querySelectorAll("nav a").forEach((a) => a.classList.toggle("active", a.dataset.page === (page === "review" ? "queue" : page)));
+  document.querySelectorAll("nav a").forEach((a) => a.classList.toggle("active", a.dataset.page === (["review", "verify"].includes(page) ? "queue" : page)));
   main.innerHTML = `<p class="muted">Loading…</p>`;
   try {
     await ({ queue: pageQueue, history: pageHistory, profiles: () => pageProfiles(arg && decodeURIComponent(arg)),
-      originals: pageOriginals, models: pageModels, settings: pageSettings, review: () => pageReview(arg) }[page] || pageQueue)();
+      originals: pageOriginals, models: pageModels, settings: pageSettings, review: () => pageReview(arg),
+      verify: () => pageVerify(arg) }[page] || pageQueue)();
   } catch (e) { main.innerHTML = `<div class="panel tag bad">${esc(e.message)}</div>`; }
 }
 

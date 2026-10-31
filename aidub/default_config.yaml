@@ -83,6 +83,9 @@ translate:
                                                 # 0.1 easier when the show's last episodes' tracks were trusted
   syllables_per_second: 4.3 # voice model's measured pace (plus ~0.25 s per line), used to size lines
 
+verify:
+  enabled: true             # keep a small preview of each finished dub to check before its original is deleted
+
 review:
   mode: unsure              # pause a job before translating for the review screen: off | unsure (only when
                             # something needs a look) | always; per show on its profile, per job when adding it
