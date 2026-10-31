@@ -758,6 +758,16 @@ LYRICS_SYSTEM = "You tell song lyrics from spoken lines in the subtitles of a fi
 LYRICS_RUN_GAP_S = 20.0
 
 
+def outside_songs(cues: list, lines: list[L.Line]) -> list:
+    """Subtitles that are mostly over song lines are lyrics: none of their words go to a
+    spoken line next to the song ("was the stray cat." ran 0.2 s into the announcer's line)."""
+    songs = [(ln.start, ln.end) for ln in lines if ln.kind == L.SONG]
+
+    def in_song(q) -> float:
+        return sum(max(0.0, min(b, q.end) - max(a, q.start)) for a, b in songs) / max(q.end - q.start, 1e-3)
+    return [q for q in cues if in_song(q) < 0.5]
+
+
 def lyrics_prompt(run: list[L.Line], before: list[L.Line], after: list[L.Line], cues: list) -> list[dict]:
     def english(ln):
         if ln.english_ref:
@@ -772,7 +782,8 @@ def lyrics_prompt(run: list[L.Line], before: list[L.Line], after: list[L.Line], 
              "In this stretch of an episode a voice holds notes over music, which may be singing. For each line, "
              "decide whether it is sung (the lyrics of a song being performed or playing) or spoken (dialogue, "
              "narration, an announcer, a phone call, someone talking over the song). Lyrics read like verse: "
-             "imagery, refrains, lines that answer no one. Spoken lines talk to someone or about what is happening. "
+             "imagery, refrains, lines that answer no one. Spoken lines talk to someone or about what is happening; a "
+             'line naming or introducing the song, or reacting to it ("She\'s something."), is spoken. '
              "The lines around them are context only.\n\n"
              f"Before:\n{show(before)}\n\nLines:\n{json.dumps(items, ensure_ascii=False, indent=1)}\n\n"
              f"After:\n{show(after)}\n\n"
@@ -864,6 +875,7 @@ def run(job: Job) -> None:
     with LLM(job) as llm:
         from .subtitles.step import load_chosen
         lyrics_check(job, llm, lines, cues or [q for q in load_chosen(job, "english") if q.text])
+        cues = outside_songs(cues, lines)
         batches = [b for b in ([l for l in b if not l.fallback] for b in _batches(lines, windows)) if b]
         shares = script_cues(cues, batches) if script else [[] for _ in batches]
         # Pass 1: every scene at once (the engine batches them); each scene sees

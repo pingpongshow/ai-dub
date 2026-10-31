@@ -1148,3 +1148,12 @@ def test_short_reply_in_the_other_persons_voice_moves_by_pitch(tmp_path):
     assert voicebank.move_by_pitch(job, prof, lines) == 1
     assert lines[5].character == master and lines[5].voice_note == "moved by pitch"
     assert lines[6].character == woman
+
+
+def test_lyric_subtitles_are_not_given_to_the_next_spoken_line():
+    from aidub import translate
+    from aidub.subtitles.model import Cue
+    cues = [Cue(start=805.6, end=810.9, text="was the stray cat.", raw="", kind=DIALOGUE),
+            Cue(start=810.9, end=815.0, text="Today we feature the hit singer.", raw="", kind=DIALOGUE)]
+    lines = [L.Line(id=1, start=805.6, end=810.5, kind=L.SONG), L.Line(id=2, start=810.7, end=815.4)]
+    assert [q.text for q in translate.outside_songs(cues, lines)] == ["Today we feature the hit singer."]
