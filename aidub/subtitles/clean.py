@@ -66,7 +66,9 @@ def decode(data: bytes) -> str:
     return best if best is not None else data.decode("utf-8", errors="replace")
 
 
-def load(path: str | Path, fmt: str | None = None) -> list[Cue]:
+def load(path: str | Path, fmt: str | None = None, habits: dict | None = None) -> list[Cue]:
+    """`habits`: a show's subtitle habits switched off on its Show rules (romaji_lyrics,
+    tilde_signs: False), else every rule applies."""
     subs = pysubs2.SSAFile.from_string(decode(Path(path).read_bytes()), format_=fmt)
     is_ass = subs.format in ("ass", "ssa") or str(path).lower().endswith((".ass", ".ssa"))
     out = []
@@ -95,12 +97,12 @@ def load(path: str | Path, fmt: str | None = None) -> list[Cue]:
             t = start
             for p in parts:
                 d = (end - start) * len(p) / total
-                text, name, k2 = clean_text(p)
+                text, name, k2 = clean_text(p, habits)
                 out.append(Cue(start=round(t, 3), end=round(t + d, 3), text=text if k2 == DIALOGUE else "",
                                raw=p, name=name, style=ev.style or "", kind=k2))
                 t += d
             continue
-        text, name, k2 = clean_text(raw)
+        text, name, k2 = clean_text(raw, habits)
         if k2 != DIALOGUE and kind == DIALOGUE:
             kind = k2
         out.append(Cue(start=start, end=end, text=text if kind == DIALOGUE else "",
@@ -188,20 +190,22 @@ def is_romaji(row: str) -> bool:
     return sum(w not in ENGLISH_COMMON for w in words) / len(words) >= 0.6
 
 
-def text_kind(raw: str) -> str:
+def text_kind(raw: str, habits: dict | None = None) -> str:
     """SONG or SIGN when a plain-text subtitle's words say so, else DIALOGUE."""
+    habits = habits or {}
     rows = [r for r in re.split(r"\\[Nn]|\n", re.sub(r"<[^>]+>", "", ASS_TAG.sub("", INVISIBLE.sub("", raw))))
             if r.strip()]
-    if any(is_romaji(r) for r in rows) or (rows and SONG_TITLE.match(rows[0])):
+    if (habits.get("romaji_lyrics", True) and any(is_romaji(r) for r in rows)) or (rows and SONG_TITLE.match(rows[0])):
         return SONG
-    if rows and (CREDIT.match(rows[0]) or TILDE_SIGN.match(rows[0]) or TITLE_CARD.match(rows[0])):
+    tilde = habits.get("tilde_signs", True) and bool(rows) and TILDE_SIGN.match(rows[0])
+    if rows and (CREDIT.match(rows[0]) or tilde or TITLE_CARD.match(rows[0])):
         return SIGN
     return DIALOGUE
 
 
-def clean_text(raw: str) -> tuple[str, str, str]:
+def clean_text(raw: str, habits: dict | None = None) -> tuple[str, str, str]:
     """Return (spoken text, speaker name if labelled, kind)."""
-    kind = text_kind(raw)
+    kind = text_kind(raw, habits)
     if kind != DIALOGUE:
         return "", "", kind
     t = ASS_TAG.sub("", INVISIBLE.sub("", raw)).replace("\\N", " ").replace("\\n", " ").replace("\\h", " ")

@@ -670,6 +670,8 @@ def extend_songs(lines: list[L.Line], lang: str, subtitled: set[int] | None = No
                            and ((ln.music_db >= SONG_MUSIC_DB and (near or lyrics)) or singer))
                 if hit:
                     ln.kind = L.SONG
+                    ln.kept_why = ("inside a song, no one heard talking" if unvoiced
+                                   else "the singer's next line during the song" if not near else "next to a song")
                     changed, total = True, total + 1
     return total
 
@@ -748,8 +750,9 @@ def sure_sung(ln: L.Line, p: Pitch, lang: str) -> bool:
 
 
 def sung_candidate(ln: L.Line) -> bool:
-    """Held notes over music: a song, unless the words say it is spoken (the lyrics check)."""
-    return ln.kind == L.SPEECH and ln.sung >= SUNG_SHARE and ln.music_db >= SUNG_MUSIC_DB
+    """Held notes over music: a song, unless the words say it is spoken (the lyrics check).
+    A line decided on the review screen is never a candidate."""
+    return ln.kind == L.SPEECH and not ln.decided and ln.sung >= SUNG_SHARE and ln.music_db >= SUNG_MUSIC_DB
 
 
 def _subtitled(ln: L.Line, cues: list) -> bool:
@@ -776,7 +779,7 @@ def mark_singing(job: Job, lines: list[L.Line]) -> None:
         if not sung_candidate(ln):
             continue
         if cues and not _subtitled(ln, cues):
-            ln.kind = L.SONG
+            ln.kind, ln.kept_why = L.SONG, f"held notes over music ({ln.sung:.2f}), no subtitle"
             sung += 1
         else:
             checked += 1
@@ -788,7 +791,22 @@ def recurring_titles(job: Job, lines: list[L.Line]) -> None:
     the original, all but lines with a dialogue subtitle: a narrator's intro that is the
     same every episode is still dubbed, and a subtitled line that sounds sung is left to
     the lyrics check (narration starting the moment the theme ends sits in its notes)."""
-    if not job.cfg.get("songs.match_episodes", True) or not job.profile:
+    if not job.profile:
+        return
+    # Openings and endings the user marked on another episode (show rules): kept whole.
+    try:
+        ruled = recurring.match_rules(job)
+    except Exception as exc:
+        job.log(f"show rules skipped: {exc}")
+        ruled = []
+    for a, b, rule in ruled:
+        for ln in lines:
+            if ln.kind == L.SPEECH and _in_ranges(ln.start, ln.end, [[a, b]]):
+                ln.kind, ln.kept_why = L.SONG, f"show rule: {rule.get('label') or rule.get('kind')} (set on {rule.get('episode', 'another episode')})"
+    if ruled:
+        job.qc["show_rules"] = [[a, b, r["id"]] for a, b, r in ruled]
+        job.log("show rules matched: " + ", ".join(f"{r.get('label')} {a:.0f}-{b:.0f} s" for a, b, r in ruled))
+    if not job.cfg.get("songs.match_episodes", True):
         return
     try:
         spans = recurring.find(job)
@@ -798,13 +816,14 @@ def recurring_titles(job: Job, lines: list[L.Line]) -> None:
     if not spans:
         return
     cues = load_chosen(job, "english")
+    narrator_dubbed = ((job.profile.data.get("rules") or {}).get("habits") or {}).get("narrator_dubbed", True)
     kept = 0
     for ln in lines:
         if ln.kind != L.SPEECH or not _in_ranges(ln.start, ln.end, spans):
             continue
-        if _subtitled(ln, cues):
+        if _subtitled(ln, cues) and narrator_dubbed:
             continue
-        ln.kind = L.SONG
+        ln.kind, ln.kept_why = L.SONG, "opening/ending shared with other episodes"
         kept += 1
     job.qc["recurring_titles"] = {"spans": spans, "kept": kept}
     job.log("opening/ending shared with other episodes: " + ", ".join(f"{a:.0f}-{b:.0f} s" for a, b in spans))
@@ -845,6 +864,8 @@ def classify(job: Job, lines: list[L.Line]) -> None:
         ln.emotion = max(emotion, key=emotion.get) if emotion else ""
         top_lang = max(langs, key=langs.get) if langs else ""
         if ln.kind == L.SONG or _in_ranges(ln.start, ln.end, songs) or set(tags) & SINGING_EVENTS:
+            ln.kept_why = ("opening or end credits" if _in_ranges(ln.start, ln.end, titles)
+                           else "heard as singing" if set(tags) & SINGING_EVENTS else "lyric subtitle")
             ln.kind = L.SONG
         elif top_lang == "en" and lang != "en" and ln.duration >= 0.8 and not NON_LATIN.search(ln.source_text):
             ln.kind = L.ENGLISH

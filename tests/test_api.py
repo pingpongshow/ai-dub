@@ -143,3 +143,56 @@ def test_paths_and_settings_stay_safe(client, cfg, media_root, tmp_path):
     assert saved["llm_endpoint"]["api_key"] == "sk-secret-123" and saved["media"] == conf["media"]
     assert saved["fit"] == {"timing": "window"}
     assert c.post("/api/settings", json={"overrides": {"paths": None, "fit": 3}}).status_code == 400
+
+
+def test_review_pauses_shows_and_applies_choices(client, cfg, media_root):
+    from aidub import jobs as J
+    c, svc = client
+    ep = synth.episode(media_root / "Review Show - S01E01.mkv")
+    jid = c.post("/api/jobs", json={"paths": [str(ep)], "review": "always"}).json()["added"][0]
+    assert c.post("/api/jobs", json={"paths": [str(ep)], "review": "sometimes"}).status_code == 400
+    svc.run_one(svc.store.next_queued())
+    job = svc.store.get(jid)
+    assert job["status"] == J.REVIEW and "waiting for review" in job["message"]
+    assert job["id"] in [j["id"] for j in c.get("/api/jobs", params={"view": "queue"}).json()]
+    assert svc.store.next_queued() is None                      # the queue moves on without it
+
+    r = c.get(f"/api/jobs/{jid}/review").json()
+    assert r["ready"] and r["editable"] and r["mode"] == "always" and r["duration"] > 10
+    assert r["media"]["state"] == "ready" and r["speakers"] and r["lines"]
+    spoken = [ln for ln in r["lines"] if ln["kind"] == "speech"]
+    assert spoken
+    # The preview plays and seeks (range requests), the subtitles and waveform load.
+    v = c.get(f"/api/jobs/{jid}/review/media/preview.mp4", headers={"Range": "bytes=0-99"})
+    assert v.status_code == 206 and len(v.content) == 100
+    assert c.get(f"/api/jobs/{jid}/review/media/subs.ja.vtt").text.startswith("WEBVTT")
+    assert c.get(f"/api/jobs/{jid}/review/media/peaks.json").json()["peaks"]
+    assert c.get(f"/api/jobs/{jid}/review/media/state.json").status_code == 404
+
+    # Keep the first spoken line in the original; give the second its own audio as the voice.
+    first, second = spoken[0], spoken[1] if len(spoken) > 1 else spoken[0]
+    choice = {"regions": [{"start": first["start"] - 0.05, "end": first["end"] + 0.05, "kind": "song",
+                           "action": "keep", "source": "user"}],
+              "cues": {}, "lines": {str(second["id"]): {"character": "own"}}}
+    assert c.put(f"/api/jobs/{jid}/review", json=choice).status_code == 200
+    assert c.get(f"/api/jobs/{jid}/review").json()["decisions"]["regions"][0]["action"] == "keep"
+    assert c.post(f"/api/jobs/{jid}/review/start", json=choice).status_code == 200
+    assert svc.store.get(jid)["status"] == J.QUEUED
+    svc.run_one(svc.store.next_queued())
+    job = svc.store.get(jid)
+    assert job["status"] == J.DONE, job["message"]
+    assert job["record"]["qc"]["review"]["changes"] >= 1
+    # Once done, decisions can't be changed.
+    assert c.put(f"/api/jobs/{jid}/review", json=choice).status_code in (404, 409)
+
+
+def test_show_rules_settings(client):
+    c, svc = client
+    svc.profiles.get_or_create("Rules Show")
+    r = c.get("/api/profiles/rules-show/rules").json()
+    assert r["habits"]["romaji_lyrics"] is True and r["regions"] == []
+    assert c.put("/api/profiles/rules-show/rules", json={"review": "always", "habits": {"tilde_signs": False,
+                                                                                       "unknown": True}}).status_code == 200
+    r = c.get("/api/profiles/rules-show/rules").json()
+    assert r["review"] == "always" and r["habits"]["tilde_signs"] is False and "unknown" not in r["habits"]
+    assert c.put("/api/profiles/rules-show/rules", json={"review": "sometimes"}).status_code == 400

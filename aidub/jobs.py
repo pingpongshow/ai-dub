@@ -12,7 +12,8 @@ from typing import Any
 
 QUEUED, RUNNING, WAITING, DONE, SKIPPED, FAILED, CANCELLED = (
     "queued", "running", "waiting", "done", "skipped", "failed", "cancelled")
-ACTIVE = {QUEUED, RUNNING, WAITING}
+REVIEW = "review"   # paused for the review screen; the queue moves on without it
+ACTIVE = {QUEUED, RUNNING, WAITING, REVIEW}
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -133,6 +134,13 @@ class Store:
         with self._tx() as c:
             for n, jid in enumerate(ids):
                 c.execute("UPDATE jobs SET position=? WHERE id=?", (n + 1, jid))
+
+    def requeue_front(self, job_id: int) -> None:
+        """Back in the queue, ahead of everything still waiting (a reviewed job continues)."""
+        with self._tx() as c:
+            first = c.execute("SELECT COALESCE(MIN(position), 1) FROM jobs").fetchone()[0]
+            c.execute("UPDATE jobs SET status=?, position=?, message=? WHERE id=?",
+                      (QUEUED, first - 1, "continuing after review", job_id))
 
     def remove(self, job_id: int) -> None:
         with self._tx() as c:

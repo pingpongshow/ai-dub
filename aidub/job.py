@@ -22,6 +22,11 @@ class Skipped(Exception):
     pass
 
 
+class Paused(Exception):
+    """The job waits for the user (the review screen); its work is kept and it resumes
+    from the step that paused."""
+
+
 class Job:
     def __init__(self, cfg: Config, job_id: int | str, src: Path, profile, options: dict | None = None,
                  *, on_status: Callable[[dict], None] | None = None,

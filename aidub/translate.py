@@ -843,13 +843,16 @@ def lyrics_check(job: Job, llm: "LLM", lines: list[L.Line], cues: list) -> int:
     from .pitch import Pitch
     p, lang = Pitch.load(job), job["subtitles"].get("source_language", "")
     todo = [ln for ln in lines if sung_candidate(ln)]
-    quoted = [ln for ln in todo if quoted_lyric(ln, cues)]
+    habits = ((job.profile.data.get("rules") or {}).get("habits") or {}) if getattr(job, "profile", None) else {}
+    quoted = [ln for ln in todo if habits.get("italic_quoted_lyrics", True) and quoted_lyric(ln, cues)]
     todo = [ln for ln in todo if ln not in quoted and not (p is not None and clearly_spoken(ln, p))]
     sure = [ln for ln in todo if p is not None and sure_sung(ln, p, lang)]
     for ln in quoted:
         ln.kind, ln.check_note = L.SONG, "lyrics (in italics and quotation marks, over held notes)"
+        ln.kept_why = ln.check_note
     for ln in sure:
         ln.kind, ln.check_note = L.SONG, "sung (long held notes, far slower than speech)"
+        ln.kept_why = ln.check_note
     sure = quoted + sure
     if not sure and not todo:
         return 0
@@ -879,7 +882,7 @@ def lyrics_check(job: Job, llm: "LLM", lines: list[L.Line], cues: list) -> int:
         for ln in run:
             if said.get(ln.id, True):
                 ln.kind = L.SONG
-                ln.check_note = "lyrics (held notes over music, and the words read as a song)"
+                ln.check_note = ln.kept_why = "lyrics (held notes over music, and the words read as a song)"
                 sung += 1
             else:
                 spoken += 1
@@ -919,7 +922,7 @@ def run(job: Job) -> None:
         under = covered_ids(speech, cues) if cues else set()
         for ln in speech:
             if cues and ln.id not in under:
-                if short_reaction(ln):
+                if short_reaction(ln) and ln.decided != "dub":
                     ln.fallback = ln.check_note = SHORT_KEPT
                 else:
                     ln.check_note = NO_SUBTITLE

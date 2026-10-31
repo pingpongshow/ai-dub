@@ -336,6 +336,16 @@ def assign_voices(job: Job, prof: Profile, lines: list[L.Line], voices: dict[int
     job.qc["lines_voiced_from_own_audio"] = own + sum(1 for ln in lines if ln.voice_note == "own line as reference")
 
 
+def voice_for(prof: Profile, ln: L.Line) -> None:
+    """The voice for a line the review screen gave to another speaker: their voice-bank
+    clip, or the line's own audio when they have none yet."""
+    refs = prof.refs(ln.character)
+    if refs:
+        ln.voice, ln.voice_note = str(prof.root / refs[0]["file"]), "your choice"
+    else:
+        ln.voice, ln.voice_note = "", "own line as reference (your choice)"
+
+
 def move_by_pitch(job: Job, prof: Profile, lines: list[L.Line]) -> int:
     """Short replies the diarizer gave to the other person in a two-hander ("Uh? For
     what?" in a man's voice, filed under the woman he talks to). Too short for the

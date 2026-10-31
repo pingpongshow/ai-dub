@@ -39,7 +39,7 @@ def cmd_run(cfg, args) -> None:
     src = Path(args.file).resolve()
     profiles = Profiles(cfg.appdata)
     prof = profiles.get_or_create(args.profile or guess_name(src))
-    opts = {}
+    opts = {"review": "off"}  # no review screen on the command line
     if args.preview:
         opts["preview_s"] = args.preview
         opts["output"] = str(Path(args.output or f"{src.stem}.preview.mkv").resolve())

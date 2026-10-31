@@ -1305,3 +1305,34 @@ def test_back_check_reads_clipped_words_sighs_own_voices_and_run_together_names(
     # A stage name run into one word by recognition.
     monkeypatch.setattr(pronounce, "LEXICON", {w: [w.upper()] for w in ("erect", "juice", "gushing", "bonanza")})
     assert speak.wer('"Erect Ohki\'s Juice Gushing Bonanza"', "Erectokey's juice gushing bonanza.") <= 0.2
+
+
+def test_review_decisions_go_into_the_lines(cfg, tmp_path):
+    from aidub import review
+    from aidub.job import Job
+    prof = profiles.Profiles(cfg.appdata).get_or_create("Diner")
+    master, miyuki, extra = prof.new_character("Master", gender="male"), prof.new_character("Miyuki"), prof.new_character("X")
+    job = Job(cfg, "rv1", tmp_path / "ep.mkv", prof)
+    job.set("ingest", {"duration": 100.0})
+    lines = [L.Line(1, 10, 12, kind=L.SONG, character=miyuki, kept_why="held notes over music (0.55), no subtitle"),
+             L.Line(2, 20, 22, character=miyuki, source_text="え？何が"),
+             L.Line(3, 30, 32, character=extra),
+             L.Line(4, 40, 42, character=master),
+             L.Line(5, 50, 52, character=master)]
+    prof.merge(master, extra)          # on the Voices tab: X is Master
+    d = {"regions": [{"start": 9.5, "end": 12.5, "action": "dub", "kind": "song", "source": "ai"},
+                     {"start": 49.9, "end": 52.1, "action": "keep", "kind": "song", "source": "user"}],
+         "cues": {}, "lines": {"2": {"character": master}, "4": {"character": "new:Waiter", "gender": "male"}}}
+    n = review.apply(job, lines, d)
+    assert n == 4
+    assert lines[0].kind == L.SPEECH and lines[0].decided == "dub"         # "Dub it" on a kept region
+    assert lines[1].character == master and lines[1].voice_note.startswith("own line")  # Master has no clips yet
+    assert lines[2].character == master                                   # merged speaker
+    waiter = next(c for c, ch in prof.characters.items() if ch["name"] == "Waiter")
+    assert lines[3].character == waiter and prof.characters[waiter]["gender"] == "male"
+    assert lines[4].kind == L.SONG and lines[4].decided == "keep" and lines[4].kept_why == "kept by you"
+    from aidub import align
+    lines[0].sung, lines[0].music_db = 0.6, -3
+    assert not align.sung_candidate(lines[0])                              # the lyrics check can't overrule it
+    regs = review.regions(lines, 100.0)
+    assert [(r["start"], r["kind"]) for r in regs] == [(50, "song")]

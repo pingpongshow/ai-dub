@@ -12,7 +12,7 @@ from pathlib import Path
 from . import jobs as J
 from . import media, originals, pipeline
 from .config import Config
-from .job import Cancelled, Job, Skipped
+from .job import Cancelled, Job, Paused, Skipped
 from .profiles import Profiles, guess_name
 
 log = logging.getLogger("aidub")
@@ -80,7 +80,7 @@ class Service:
         j = self.store.get(jid)
         if not j:
             return
-        if j["status"] in (J.QUEUED, J.WAITING) and jid not in self._cancel:
+        if j["status"] in (J.QUEUED, J.WAITING, J.REVIEW) and jid not in self._cancel:
             self._finish_cancel(jid)
         ev = self._cancel.get(jid)
         if ev:
@@ -109,6 +109,38 @@ class Service:
                 return
         shutil.rmtree(self.cfg.work / f"job-{jid}", ignore_errors=True)
         self.store.remove(jid)
+
+    # Review -------------------------------------------------------------------------------
+    def review_view(self, jid: int) -> dict:
+        from . import review
+        j = self.store.get(jid)
+        if not j:
+            raise KeyError(jid)
+        return review.view(self.cfg, j, self.profiles.get(j["profile"]))
+
+    def review_save(self, jid: int, decisions: dict, start: bool = False) -> None:
+        from . import review
+        j = self.store.get(jid)
+        if not j:
+            raise KeyError(jid)
+        if j["status"] != J.REVIEW:
+            raise ValueError("this job isn't waiting for review")
+        review.save_decisions(self.cfg.work / f"job-{jid}", {**decisions, "started": start})
+        if start:
+            self.store.requeue_front(jid)
+            self._wake.set()
+
+    def review_media(self, jid: int) -> dict:
+        from . import review
+        j = self.store.get(jid)
+        if not j:
+            raise KeyError(jid)
+        work = self.cfg.work / f"job-{jid}"
+        state = work / "state.json"
+        if not (work / "lines.json").exists() or not state.exists():
+            raise ValueError("Ai Dub hasn't worked out the lines of this episode yet")
+        import json
+        return review.start_media(work, json.loads(state.read_text()).get("data", {}))
 
     def work_size(self, jid: int) -> int:
         d = self.cfg.work / f"job-{jid}"
@@ -180,6 +212,9 @@ class Service:
             job.remove_work()
             self.store.update(jid, status=J.DONE, finished=time.time(), progress=1.0,
                               message="done", record=rec)
+        except Paused as exc:
+            job.log(f"paused: {exc}")
+            self.store.update(jid, status=J.REVIEW, message=str(exc), record=pipeline.record(job))
         except Skipped as exc:
             job.remove_work()
             self.store.update(jid, status=J.SKIPPED, finished=time.time(), message=f"skipped: {exc}",

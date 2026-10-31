@@ -101,6 +101,18 @@ Then open `http://<server>:8790`:
 3. **Queue**: browse your media, tick files, add them. One job runs at a
    time; if another program is using the GPU, the job waits and says so.
 
+## Review screen
+
+A job can stop after Ai Dub has worked out the songs and the speakers, before it
+translates or voices anything (Settings, each show's profile, or "Review before
+dubbing" when adding a file: Off, When unsure, Always). The review screen shows a
+small preview of the episode with its subtitles, a timeline of what keeps the
+original (songs, openings, credits) with Ai Dub's reasons, every subtitle with
+the voice it will be dubbed in, and the speakers (man / woman, age, voice). Drag
+or add regions, set any subtitle to keep or dub, give a line to another speaker,
+rename and merge speakers, then **Start dubbing**. Openings and endings marked
+there can apply to every episode of the show.
+
 ## Configuration
 
 `/config/config.yaml` holds your changes; everything else comes from

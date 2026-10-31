@@ -163,10 +163,11 @@ def run(job: Job) -> None:
                 except Exception as exc:
                     job.log(f"OCR failed for {c.label}: {exc}")
                     c.score = {"total": 0.0, "error": str(exc)}
+    habits = ((job.profile.data.get("rules") or {}).get("habits") or {}) if job.profile else {}
     for c in cands:
         if c.format != "pgs" and not c.cues:
             try:
-                sources.load_cues(c)
+                sources.load_cues(c, habits)
             except Exception as exc:
                 job.log(f"unreadable subtitle {c.label}: {exc}")
 

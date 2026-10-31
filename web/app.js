@@ -112,6 +112,8 @@ async function showAddForm() {
       <label>Language <select id="lang"><option value="">detect</option><option value="ja">Japanese</option><option value="ko">Korean</option>
         <option value="zh">Mandarin</option><option value="yue">Cantonese</option></select></label>
       <label><input type="checkbox" id="redo"> Redo</label>
+      <label>Review before dubbing <select id="review"><option value="">Default</option><option value="off">Off</option>
+        <option value="unsure">When unsure</option><option value="always">Always</option></select></label>
       <button class="primary" id="confirmadd">Add ${paths.length} file(s)</button>
     </div>
     <p class="small muted">Profile is guessed from the folder name${paths.length > 1 ? " of the first file; leave it as is to let each file use its own show" : ""}. ${dur(first.duration)}, ${esc(first.container)}.</p>
@@ -120,7 +122,7 @@ async function showAddForm() {
     const prof = $("#prof").value.trim();
     const body = { paths, profile: paths.length > 1 && prof === first.profile_guess ? null : prof || null,
       audio_stream: $("#track") && $("#track").value !== "" ? Number($("#track").value) : null,
-      language: $("#lang").value || null, redo: $("#redo").checked };
+      language: $("#lang").value || null, redo: $("#redo").checked, review: $("#review").value || null };
     const res = await api("/jobs", { body });
     toast(`Added ${res.added.length}` + (res.errors.length ? `; ${res.errors.length} not added: ${res.errors[0].error}` : ""));
     selected.clear(); toggle("", false); form.hidden = true;
@@ -135,15 +137,17 @@ async function loadQueue() {
   if (!jobs.length) { box.innerHTML = `<div class="panel muted">The queue is empty.</div>`; return; }
   box.innerHTML = jobs.map((j, i) => {
     const pct = Math.round((j.progress || 0) * 100);
-    const st = j.status === "waiting" ? `<span class="tag warn">waiting for GPU</span>` : j.status === "running" ? `<span class="tag ok">running</span>` : `<span class="tag">queued</span>`;
+    const st = j.status === "waiting" ? `<span class="tag warn">waiting for GPU</span>` : j.status === "running" ? `<span class="tag ok">running</span>`
+      : j.status === "review" ? `<span class="tag warn">waiting for review</span>` : `<span class="tag">queued</span>`;
     return `<div class="panel job" data-id="${j.id}">
       <div><div class="path">${esc(j.path.split("/").pop())}</div>
         <div class="small muted">${esc(j.profile)} · ${st} ${esc(j.step_title || "")} — ${esc(j.message)}</div>
-        ${j.status !== "queued" ? `<div class="progress"><div style="width:${pct}%"></div></div>` : ""}</div>
+        ${j.status !== "queued" && j.status !== "review" ? `<div class="progress"><div style="width:${pct}%"></div></div>` : ""}</div>
       <div class="row">
+        ${j.status === "review" ? `<a class="button primary" href="#review/${j.id}">Review</a>` : j.status === "running" ? `<a class="button" href="#review/${j.id}" title="See what Ai Dub has decided so far">Look</a>` : ""}
         ${j.status === "queued" ? `<button data-act="up" ${i === 0 ? "disabled" : ""}>↑</button><button data-act="down">↓</button>` : ""}
         <button data-act="log">Log</button>
-        <button class="danger" data-act="cancel">${j.status === "queued" ? "Remove" : "Cancel"}</button>
+        <button class="danger" data-act="cancel">${j.status === "queued" || j.status === "review" ? "Remove" : "Cancel"}</button>
       </div>
       <pre class="log" hidden></pre></div>`;
   }).join("");
@@ -221,6 +225,8 @@ async function pageProfile(slug) {
       <p class="small muted" style="width:100%;margin:0">Honorifics and style apply to lines translated from the speech. Lines dubbed from
         English subtitles keep the subtitles' own wording.</p>
     </div>
+    <h2>Show rules</h2>
+    <div class="panel" id="rules"><span class="muted small">Loading…</span></div>
     <h2>Voice bank</h2>
     <div class="chars">${p.characters.map((c) => `
       <div class="panel" data-cid="${c.id}">
@@ -247,6 +253,7 @@ async function pageProfile(slug) {
         `<tr><td>${esc(k)}</td><td>${esc(v.en)}${v.edited ? ' <span class="tag">edited</span>' : ""}</td><td>${v.count || 0}</td>
          <td><button data-gdel="${esc(k)}">Remove</button></td></tr>`).join("")}</table>
     </div>`;
+  showRules(slug);
   $("#hon").value = p.settings.honorifics || "keep";
   $("#style").value = p.settings.style || "natural";
   const save = () => api("/profiles/" + encodeURIComponent(slug), { method: "PATCH", body: { settings: { honorifics: $("#hon").value, style: $("#style").value } } }).then(() => toast("Saved"));
@@ -285,6 +292,32 @@ async function pageProfile(slug) {
       };
     });
   });
+}
+
+async function showRules(slug) {
+  const box = $("#rules");
+  const r = await api(`/profiles/${encodeURIComponent(slug)}/rules`);
+  const names = { romaji_lyrics: "Romaji lines are lyrics", italic_quoted_lyrics: "Italics in quotation marks are lyrics",
+    tilde_signs: "“~ text ~” is a sign, not spoken", narrator_dubbed: "The narrator's opening is dubbed" };
+  box.innerHTML = `<div class="row"><label>Review before dubbing <select id="ruleMode"><option value="">Default (${esc(r.default_review)})</option>
+      <option value="off">Off</option><option value="unsure">When unsure</option><option value="always">Always</option></select></label></div>
+    <div class="row" style="margin-top:8px">${Object.entries(names).map(([k, t]) => `<label class="small"><input type="checkbox" data-habit="${k}" ${r.habits[k] ? "checked" : ""}> ${t}</label>`).join("")}</div>
+    ${r.regions.length ? `<table class="small" style="margin-top:8px"><tr><th>Opening / ending</th><th>Length</th><th>Set on</th><th></th></tr>
+      ${r.regions.map((x) => `<tr><td>${esc(x.label || x.kind)}</td><td>${x.seconds} s</td><td>${esc(x.episode)}</td><td><button data-unrule="${esc(x.id)}">Remove</button></td></tr>`).join("")}</table>`
+      : `<p class="small muted">No opening or ending marked yet. Mark one on an episode's review screen and tick “Use for every episode”.</p>`}`;
+  $("#ruleMode").value = r.review || "";
+  const save = (body) => api(`/profiles/${encodeURIComponent(slug)}/rules`, { method: "PUT", body }).then(() => toast("Saved")).catch((e) => toast(e.message));
+  $("#ruleMode").onchange = () => save({ review: $("#ruleMode").value });
+  box.querySelectorAll("[data-habit]").forEach((cb) => (cb.onchange = () => {
+    const habits = {};
+    box.querySelectorAll("[data-habit]").forEach((x) => (habits[x.dataset.habit] = x.checked));
+    save({ habits });
+  }));
+  box.querySelectorAll("[data-unrule]").forEach((b) => (b.onclick = async () => {
+    if (!confirm("Remove this rule? Later episodes won't look for it.")) return;
+    await save({ remove_regions: [b.dataset.unrule] });
+    showRules(slug);
+  }));
 }
 
 // Originals ------------------------------------------------------------------------------------
@@ -372,11 +405,22 @@ async function pageSettings() {
         <span class="tag ${set ? "ok" : ""}">${set ? "set" : "not set"}</span>
         <input type="password" data-secret="${esc(k)}" placeholder="new value" autocomplete="off"><button data-save="${esc(k)}">Save</button>
         ${set ? `<button data-clear="${esc(k)}">Clear</button>` : ""}</div>`).join("")}</div>
+    <div class="panel"><h2>Review before dubbing</h2>
+      <p class="small muted">A job can stop after Ai Dub has worked out the songs and speakers, so you can check them on the review screen before it translates and voices anything. Each show and each job can choose differently.</p>
+      <div class="row"><select id="revMode"><option value="off">Off: never stop</option><option value="unsure">When unsure: stop only if something needs a look</option>
+        <option value="always">Always: stop for every episode</option></select><button id="revSave">Save</button></div></div>
     <div class="panel tablewrap"><h2>Models per step</h2><table class="small">
       ${Object.entries(s.effective.stages || {}).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v.worker || "")}</td><td>${esc(v.model || "")}</td>
         <td>${status && status.workers[v.worker] ? '<span class="tag ok">installed</span>' : '<span class="tag warn">not installed</span>'}</td></tr>`).join("")}</table>
       <p class="small muted">Install models on the Models page. Choose different ones in config.yaml in the app data folder.</p></div>
     <div class="panel"><details><summary>Effective configuration</summary><pre>${esc(JSON.stringify(s.effective, null, 1))}</pre></details></div>`;
+  $("#revMode").value = (s.effective.review || {}).mode || "unsure";
+  $("#revSave").onclick = async () => {
+    const o = s.overrides || {};
+    o.review = { ...(o.review || {}), mode: $("#revMode").value };
+    const r = await api("/settings", { body: { overrides: o } });
+    toast(r.note);
+  };
   $("#bzsave").onclick = async () => {
     const o = s.overrides || {};
     o.subtitles = o.subtitles || {}; o.subtitles.providers = o.subtitles.providers || {};
@@ -400,11 +444,13 @@ async function pageSettings() {
 async function route() {
   clearInterval(timer); clearTimeout(timer);
   const [page, arg] = (location.hash.slice(1) || "queue").split("/");
-  document.querySelectorAll("nav a").forEach((a) => a.classList.toggle("active", a.dataset.page === page));
+  main.classList.remove("wide");
+  document.querySelectorAll(".rv-pop").forEach((p) => p.remove());
+  document.querySelectorAll("nav a").forEach((a) => a.classList.toggle("active", a.dataset.page === (page === "review" ? "queue" : page)));
   main.innerHTML = `<p class="muted">Loading…</p>`;
   try {
     await ({ queue: pageQueue, history: pageHistory, profiles: () => pageProfiles(arg && decodeURIComponent(arg)),
-      originals: pageOriginals, models: pageModels, settings: pageSettings }[page] || pageQueue)();
+      originals: pageOriginals, models: pageModels, settings: pageSettings, review: () => pageReview(arg) }[page] || pageQueue)();
   } catch (e) { main.innerHTML = `<div class="panel tag bad">${esc(e.message)}</div>`; }
 }
 

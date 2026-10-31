@@ -121,6 +121,15 @@ class Profile:
             ch["embedding"] = list(embedding)
         ch["embedding_weight"] = w0 + weight
 
+    def current(self, cid: str) -> str:
+        """The character id now standing for `cid` (after merges)."""
+        seen = set()
+        merged = self.data.get("merged") or {}
+        while cid in merged and cid not in seen:
+            seen.add(cid)
+            cid = merged[cid]
+        return cid
+
     def voice_source(self, cid: str) -> str:
         """The character whose references this character speaks with."""
         seen = set()
@@ -157,6 +166,7 @@ class Profile:
         if b.get("embedding"):
             self.update_embedding(keep, b["embedding"], float(b.get("embedding_weight", 1.0)))
         a.setdefault("aliases", []).append(b.get("name", other))
+        self.data.setdefault("merged", {})[other] = keep  # lines of a job in progress still name `other`
         for ch in self.characters.values():
             if ch.get("voice_of") == other:
                 ch["voice_of"] = keep

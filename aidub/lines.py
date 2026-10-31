@@ -59,6 +59,8 @@ class Line:
     take_scores: dict = field(default_factory=dict)
     fit: dict = field(default_factory=dict)
     fallback: str = ""                # why the original audio was kept, if it was
+    kept_why: str = ""                # why a song / titles line keeps the original (for the review screen)
+    decided: str = ""                 # "keep" or "dub" when the review screen decided it; nothing overrules it
 
     @property
     def duration(self) -> float:

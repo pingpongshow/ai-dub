@@ -51,7 +51,7 @@ def _ber(a: np.ndarray, b: np.ndarray) -> np.ndarray:
     return np.unpackbits(x.view(np.uint8).reshape(-1, 4), axis=1).sum(axis=1) / 32.0
 
 
-def common(a: np.ndarray, b: np.ndarray) -> list[tuple[float, float]]:
+def common(a: np.ndarray, b: np.ndarray, min_run: float = MIN_RUN_S) -> list[tuple[float, float]]:
     """Stretches of `a` (start, end in seconds from a's start) that also play somewhere in `b`."""
     if not a.size or not b.size:
         return []
@@ -74,7 +74,7 @@ def common(a: np.ndarray, b: np.ndarray) -> list[tuple[float, float]]:
         same = np.convolve(ber, np.ones(k) / k, mode="same") < MATCH_BER
         edges = np.flatnonzero(np.diff(np.concatenate([[0], same.astype(np.int8), [0]])))
         for s, e in zip(edges[::2], edges[1::2]):
-            if (e - s) * HOP >= MIN_RUN_S:
+            if (e - s) * HOP >= min_run:
                 out.append(((lo + s) * HOP, (lo + e) * HOP))
     return merge(out)
 
@@ -148,6 +148,49 @@ def siblings(src: Path, n: int = 2) -> list[Path]:
     else:
         files.sort(key=lambda p: p.name)
     return files[:n]
+
+
+def rule_file(prof, rule_id: str) -> Path:
+    return prof.root / "fingerprints" / "rules" / f"{rule_id}.npy"
+
+
+def save_rule(job, start: float, end: float, kind: str, label: str = "") -> dict:
+    """A stretch the user marked as the show's opening or ending, kept as a fingerprint so
+    every later episode finds it (aidub.align.recurring_titles)."""
+    prof = job.profile
+    rid = hashlib.sha1(f"{job.src.name}:{start:.1f}:{end:.1f}".encode()).hexdigest()[:10]
+    fp = fingerprint(_part(job.path("audio", "source.wav"), start, end - start))
+    f = rule_file(prof, rid)
+    f.parent.mkdir(parents=True, exist_ok=True)
+    np.save(f, fp)
+    rule = {"id": rid, "kind": kind, "label": label or kind, "episode": job.src.name,
+            "start": round(start, 2), "end": round(end, 2), "seconds": round(end - start, 1)}
+    rules = prof.data.setdefault("rules", {}).setdefault("regions", [])
+    rules[:] = [r for r in rules if r.get("id") != rid] + [rule]
+    return rule
+
+
+def match_rules(job) -> list[tuple[float, float, dict]]:
+    """Where this episode plays the stretches the user marked on other episodes."""
+    prof = job.profile
+    rules = ((prof.data.get("rules") or {}).get("regions") or []) if prof else []
+    if not rules:
+        return []
+    duration = float(job["ingest"]["duration"])
+    source = job.path("audio", "source.wav")
+    end_at = max(0.0, duration - END_S)
+    windows = [(0.0, fingerprint(_part(source, 0.0, START_S))), (end_at, fingerprint(_part(source, end_at, END_S)))]
+    out = []
+    for r in rules:
+        f = rule_file(prof, r["id"])
+        if not f.exists():
+            continue
+        fp = np.load(f)
+        need = min(MIN_RUN_S, 0.6 * float(r.get("seconds", MIN_RUN_S)))
+        for at, mine in windows:
+            for a, b in common(mine, fp, need):
+                out.append((round(a + at, 2), round(min(b + at, duration), 2), r))
+    return out
 
 
 def find(job) -> list[list[float]]:

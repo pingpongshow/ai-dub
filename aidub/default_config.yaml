@@ -83,6 +83,10 @@ translate:
                                                 # 0.1 easier when the show's last episodes' tracks were trusted
   syllables_per_second: 4.3 # voice model's measured pace (plus ~0.25 s per line), used to size lines
 
+review:
+  mode: unsure              # pause a job before translating for the review screen: off | unsure (only when
+                            # something needs a look) | always; per show on its profile, per job when adding it
+
 songs:                      # songs keep the original voice; never translated
   detect_by_pitch: true     # held notes over music (FCPE pitch of the dialogue); subtitled ones get a lyrics check
   match_episodes: true      # the opening/ending shared with the episodes next to it in the folder

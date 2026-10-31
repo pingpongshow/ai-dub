@@ -95,9 +95,9 @@ def from_sidecars(job_dir: Path, video: Path) -> list[Candidate]:
     return out
 
 
-def load_cues(c: Candidate) -> None:
+def load_cues(c: Candidate, habits: dict | None = None) -> None:
     """Fill `c.cues` for a text candidate and confirm its language from the text."""
-    c.cues = clean.load(c.path)
+    c.cues = clean.load(c.path, habits=habits)
     guessed = clean.script_language([q.text for q in c.cues if q.kind == DIALOGUE])
     cjk = {"ja", "zh", "yue", "ko"}
     # The writing system only tells CJK from Latin-script languages apart, so it

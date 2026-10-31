@@ -29,6 +29,8 @@ mimetypes.add_type("audio/mp4", ".m4a")  # missing from some system tables; Safa
 WEB_DIR = Path(os.environ.get("AIDUB_WEB", Path(__file__).resolve().parent.parent / "web"))
 SECRET_NAMES = ["BAZARR_API_KEY", "HF_TOKEN"]
 LOCKED_SETTINGS = ("paths", "media")
+# Subtitle habits a show's rules can switch off (all on unless switched off).
+HABITS = {"romaji_lyrics": True, "italic_quoted_lyrics": True, "tilde_signs": True, "narrator_dubbed": True}
 REDACTED = "••••"
 
 
@@ -130,10 +132,13 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
 
     @app.post("/api/jobs")
     def add_jobs(paths: list[str] = Body(...), profile: str | None = Body(None), audio_stream: int | None = Body(None),
-                 language: str | None = Body(None), redo: bool = Body(False)):
+                 language: str | None = Body(None), redo: bool = Body(False), review: str | None = Body(None)):
         added, errors = [], []
+        if review is not None and review not in ("off", "unsure", "always"):
+            bad(400, "review must be off, unsure or always")
         for p in paths:
-            opts = {k: v for k, v in {"audio_stream": audio_stream, "language": language, "redo": redo}.items() if v}
+            opts = {k: v for k, v in {"audio_stream": audio_stream, "language": language, "redo": redo,
+                                      "review": review}.items() if v}
             try:
                 added.append(svc.add(p, profile or None, opts))
             except Exception as exc:
@@ -159,6 +164,53 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
     def remove(jid: int):
         svc.remove(jid)
         return {"ok": True}
+
+    # Review ---------------------------------------------------------------------------------
+    @app.get("/api/jobs/{jid}/review")
+    def review_get(jid: int):
+        try:
+            return svc.review_view(jid)
+        except KeyError:
+            bad(404, "no such job")
+
+    @app.put("/api/jobs/{jid}/review")
+    def review_put(jid: int, body: dict = Body(...)):
+        try:
+            svc.review_save(jid, body, start=False)
+        except KeyError:
+            bad(404, "no such job")
+        except ValueError as exc:
+            bad(409, str(exc))
+        return {"ok": True}
+
+    @app.post("/api/jobs/{jid}/review/start")
+    def review_start(jid: int, body: dict = Body(...)):
+        try:
+            svc.review_save(jid, body, start=True)
+        except KeyError:
+            bad(404, "no such job")
+        except ValueError as exc:
+            bad(409, str(exc))
+        return {"ok": True}
+
+    @app.post("/api/jobs/{jid}/review/media")
+    def review_media(jid: int):
+        try:
+            return svc.review_media(jid)
+        except KeyError:
+            bad(404, "no such job")
+        except ValueError as exc:
+            bad(409, str(exc))
+
+    @app.get("/api/jobs/{jid}/review/media/{name}")
+    def review_file(jid: int, name: str):
+        from . import review
+        if name not in review.MEDIA:
+            bad(404, "not found")
+        f = cfg.work / f"job-{jid}" / "review" / name
+        if not f.is_file():
+            bad(404, "not ready")
+        return FileResponse(f, media_type=review.MEDIA[name], headers={"Cache-Control": "no-cache"})
 
     @app.get("/api/jobs/{jid}/log", response_class=PlainTextResponse)
     def job_log(jid: int, lines: int = 200):
@@ -240,6 +292,32 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
                     p.characters[cid][k] = str(body[k])
         else:
             bad(400, "unknown action")
+        p.save()
+        return {"ok": True}
+
+    @app.get("/api/profiles/{slug}/rules")
+    def rules_get(slug: str):
+        p = _profile(slug)
+        rules = p.data.get("rules") or {}
+        return {"review": rules.get("review", ""), "habits": {**HABITS, **(rules.get("habits") or {})},
+                "regions": rules.get("regions", []), "default_review": cfg.get("review.mode", "unsure")}
+
+    @app.put("/api/profiles/{slug}/rules")
+    def rules_put(slug: str, body: dict = Body(...)):
+        p = _profile(slug)
+        rules = p.data.setdefault("rules", {})
+        if "review" in body:
+            if body["review"] not in ("", "off", "unsure", "always"):
+                bad(400, "review must be off, unsure or always")
+            rules["review"] = body["review"]
+        if isinstance(body.get("habits"), dict):
+            rules["habits"] = {k: bool(v) for k, v in body["habits"].items() if k in HABITS}
+        if isinstance(body.get("remove_regions"), list):
+            from .recurring import rule_file
+            gone = {str(x) for x in body["remove_regions"]}
+            for rid in gone:
+                rule_file(p, rid).unlink(missing_ok=True)
+            rules["regions"] = [r for r in rules.get("regions", []) if r.get("id") not in gone]
         p.save()
         return {"ok": True}
 
