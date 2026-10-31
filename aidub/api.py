@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import collections
+import hashlib
 import html
 import json
 import mimetypes
@@ -61,12 +62,16 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
         raise HTTPException(status_code=status, detail=msg)
 
     # Status --------------------------------------------------------------------------------
+    # The web files as served: a page left open across an update reloads itself.
+    UI_BUILD = hashlib.sha1(b"".join(f.read_bytes() for f in sorted(WEB_DIR.glob("*")) if f.is_file())).hexdigest()[:12] \
+        if WEB_DIR.exists() else ""
+
     @app.get("/api/status")
     def status():
         g = gpu.query()
         names = sorted({cfg.get(f"stages.{s}.worker") for s in cfg.get("stages", {}) if cfg.get(f"stages.{s}.worker")})
         installed = {n: workers.env_ready(cfg, n) for n in names}
-        return {"version": __version__, "gpu": {"present": g.present, "name": g.name, "total_mb": g.total_mb,
+        return {"version": __version__, "ui": UI_BUILD, "gpu": {"present": g.present, "name": g.name, "total_mb": g.total_mb,
                                                 "used_mb": g.used_mb, "processes": g.processes},
                 "workers": installed, "steps": [{"name": s, "title": TITLES[s]} for s in STEP_NAMES]}
 

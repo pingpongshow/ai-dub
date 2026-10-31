@@ -32,6 +32,13 @@ function toast(msg) {
 async function refreshStatus() {
   try {
     status = await api("/status");
+    // Ai Dub was updated while this page stayed open: reload, so the page and the server
+    // match (unless the review page has unsaved changes).
+    if (refreshStatus.ui && status.ui && status.ui !== refreshStatus.ui) {
+      if (typeof RV !== "undefined" && RV && RV.dirty && location.hash.startsWith("#review/")) toast("Ai Dub was updated: save your changes, then reload the page.");
+      else { location.reload(); return; }
+    }
+    refreshStatus.ui = refreshStatus.ui || status.ui;
     const g = status.gpu;
     $("#gpu").textContent = g.present ? `${g.name}: ${Math.round(g.used_mb / 1024)} of ${Math.round(g.total_mb / 1024)} GB in use` : "No GPU visible";
   } catch { $("#gpu").textContent = "server unreachable"; }
