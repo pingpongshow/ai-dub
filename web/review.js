@@ -259,24 +259,61 @@ function rvSubsMode(mode) {
 function rvSeek(t) {
   const v = $("#rvv");
   t = Math.max(0, Math.min(RV.data.duration, t));
-  if (v && v.readyState) v.currentTime = t;
+  if (v && v.readyState) pairedSeek(v, rvAudio(RV.hear), t);
   RV.t = t;
-  rvSync(true);
   rvKeepInView(t);
   rvDraw();
   rvClock();
 }
-function rvNow() { const v = $("#rvv"); return v && v.readyState ? v.currentTime : (RV.t || 0); }
-function rvSync(force) {
-  const v = $("#rvv"), aud = { voices: $("#rvVoices"), music: $("#rvMusic"), dub: $("#rvDub") };
-  for (const [k, a] of Object.entries(aud)) {
-    if (!a) continue;
-    if (RV.hear !== k) { if (!a.paused) a.pause(); continue; }
-    a.playbackRate = v.playbackRate;
-    if (force || Math.abs(a.currentTime - v.currentTime) > 0.12) a.currentTime = v.currentTime;
-    if (v.paused && !a.paused) a.pause();
-    if (!v.paused && a.paused) a.play().catch(() => {});
+// A video with a separate sound track heard in its place (the dub, voices, music) --------------
+// Re-seeking a sound that is still on its way restarts it: over a slow link each correction
+// took longer than the next timeupdate, so after a jump while playing the sound never came
+// back. Instead the picture waits for the sound, then both start together.
+const PAIR_DRIFT_S = 0.3;
+function pairedSeek(v, a, t) {
+  const playing = !v.paused || !!v._pairBusy && !!v._pairResume;
+  v._pairBusy = (v._pairBusy || 0) + 1;
+  const mine = v._pairBusy;
+  v._pairResume = playing;
+  if (!v.paused) v.pause();
+  if (a && !a.paused) a.pause();
+  v.currentTime = t;
+  if (a) a.currentTime = t;
+  const there = (el) => new Promise((res) => {
+    if (!el || !el.seeking) return res();
+    el.addEventListener("seeked", res, { once: true });
+    setTimeout(res, 8000);  // a sound that never arrives doesn't hold the picture for ever
+  });
+  Promise.all([there(v), there(a)]).then(() => {
+    if (v._pairBusy !== mine) return;  // a newer jump took over
+    v._pairBusy = 0;
+    if (v._pairResume) { v.play().catch(() => {}); if (a) a.play().catch(() => {}); }
+  });
+}
+function pairedSync(v, a, on, force) {
+  if (!a) return;
+  if (!on) { if (!a.paused) a.pause(); return; }
+  if (v._pairBusy || a.seeking) return;
+  a.playbackRate = v.playbackRate;
+  if (force || Math.abs(a.currentTime - v.currentTime) > PAIR_DRIFT_S) {
+    if (!v.paused) { pairedSeek(v, a, v.currentTime); return; }
+    a.currentTime = v.currentTime;
   }
+  if (v.paused && !a.paused) a.pause();
+  if (!v.paused && a.paused) a.play().catch(() => {});
+}
+function pairedToggle(v) {
+  if (v._pairBusy) { v._pairResume = !v._pairResume; return v._pairResume; }  // waiting for the sound
+  if (v.paused) v.play().catch(() => {}); else v.pause();
+  return v.paused;
+}
+
+function rvNow() { const v = $("#rvv"); return v && v.readyState ? v.currentTime : (RV.t || 0); }
+function rvAudio(k) { return { voices: $("#rvVoices"), music: $("#rvMusic"), dub: $("#rvDub") }[k] || null; }
+function rvSync(force) {
+  const v = $("#rvv");
+  if (!v) return;
+  for (const k of ["voices", "music", "dub"]) pairedSync(v, rvAudio(k), RV.hear === k, force);
   v.muted = RV.hear !== "orig";
 }
 function rvClock() {
@@ -807,16 +844,16 @@ function rvOverview(C) {
 // Wiring -------------------------------------------------------------------------------------------------------
 function rvWire() {
   const v = $("#rvv"), d = RV.data;
-  v.onplay = () => { $("#rvPlay").textContent = "❚❚"; rvSync(true); rvLoop(); };
-  v.onpause = () => { $("#rvPlay").textContent = "▶"; rvSync(true); rvDraw(); };
-  v.onseeked = () => rvSync(true);
+  v.onplay = () => { $("#rvPlay").textContent = "❚❚"; rvSync(false); rvLoop(); };
+  v.onpause = () => { if (v._pairBusy) return; $("#rvPlay").textContent = "▶"; rvSync(false); rvDraw(); };
+  v.onseeked = () => rvSync(false);
   v.ontimeupdate = () => { rvSync(false); rvClock(); };
   v.onloadedmetadata = () => { if (RV.t) v.currentTime = RV.t; };
-  $("#rvPlay").onclick = () => (v.paused ? v.play().catch(() => {}) : v.pause());
+  $("#rvPlay").onclick = () => { if (v._pairBusy) $("#rvPlay").textContent = pairedToggle(v) ? "❚❚" : "▶"; else pairedToggle(v); };
   $("#rvBack").onclick = () => rvSeek(rvNow() - 5);
   $("#rvFwd").onclick = () => rvSeek(rvNow() + 5);
   segWire("#rvHear", (val) => { RV.hear = val; rvSync(true); });
-  segWire("#rvRate", (val) => { v.playbackRate = Number(val); rvSync(true); });
+  segWire("#rvRate", (val) => { v.playbackRate = Number(val); rvSync(false); });
   segWire("#rvSubs", (val) => rvSubsMode(val));
   segWire("#rvZoom", (val) => rvZoom(val));
   const search = $("#rvSearch");
@@ -1015,7 +1052,7 @@ document.addEventListener("keydown", (ev) => {
     else return;
     setDirty(); rvList(); rvInspector(); rvDraw();
   };
-  if (k === " ") { ev.preventDefault(); v.paused ? v.play().catch(() => {}) : v.pause(); }
+  if (k === " ") { ev.preventDefault(); $("#rvPlay").click(); }
   else if (k === "ArrowLeft" || k === "ArrowRight") { ev.preventDefault(); rvSeek(rvNow() + (k === "ArrowLeft" ? -1 : 1) * (ev.shiftKey ? 5 : 1)); }
   else if ((k === "i" || k === "I") && ed) { RV.markIn = rvNow(); rvDraw(); toast("Marked in. Press O at the end."); }
   else if ((k === "o" || k === "O") && ed && RV.markIn != null) rvMarkKey();

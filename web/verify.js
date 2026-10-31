@@ -83,16 +83,11 @@ function vfSync(force) {
   const v = $("#vfv"), a = $("#vfDub");
   if (!v || !a) return;
   v.muted = VF.hear === "dub";
-  if (VF.hear !== "dub") { if (!a.paused) a.pause(); return; }
-  a.playbackRate = v.playbackRate;
-  if (force || Math.abs(a.currentTime - v.currentTime) > 0.12) a.currentTime = v.currentTime;
-  if (v.paused && !a.paused) a.pause();
-  if (!v.paused && a.paused) a.play().catch(() => {});
+  pairedSync(v, a, VF.hear === "dub", force);
 }
 function vfSeek(t) {
   const v = $("#vfv");
-  v.currentTime = Math.max(0, Math.min(VF.d.duration, t));
-  vfSync(true);
+  pairedSeek(v, VF.hear === "dub" ? $("#vfDub") : null, Math.max(0, Math.min(VF.d.duration, t)));
   vfDraw();
 }
 function vfHear(h) {
@@ -138,15 +133,15 @@ function vfLoop() {
 }
 function vfWire() {
   const v = $("#vfv"), d = VF.d;
-  v.onplay = () => { $("#vfPlay").textContent = "❚❚"; vfSync(true); vfLoop(); };
-  v.onpause = () => { $("#vfPlay").textContent = "▶"; vfSync(true); vfDraw(); };
-  v.onseeked = () => vfSync(true);
+  v.onplay = () => { $("#vfPlay").textContent = "❚❚"; vfSync(false); vfLoop(); };
+  v.onpause = () => { if (v._pairBusy) return; $("#vfPlay").textContent = "▶"; vfSync(false); vfDraw(); };
+  v.onseeked = () => vfSync(false);
   v.ontimeupdate = () => { vfSync(false); $("#vfTime").textContent = `${fmtT(v.currentTime)} / ${fmtT(d.duration, false)}`; };
-  $("#vfPlay").onclick = () => (v.paused ? v.play().catch(() => {}) : v.pause());
+  $("#vfPlay").onclick = () => { if (v._pairBusy) $("#vfPlay").textContent = pairedToggle(v) ? "❚❚" : "▶"; else pairedToggle(v); };
   $("#vfBack").onclick = () => vfSeek(vfNow() - 5);
   $("#vfFwd").onclick = () => vfSeek(vfNow() + 5);
   segWire("#vfHear", (val) => vfHear(val));
-  segWire("#vfRate", (val) => { v.playbackRate = Number(val); vfSync(true); });
+  segWire("#vfRate", (val) => { v.playbackRate = Number(val); vfSync(false); });
   segWire("#vfSubs", (val) => { for (const t of v.textTracks) t.mode = val === "en" ? "showing" : "hidden"; });
   document.querySelectorAll("#vfList .frow").forEach((r) => (r.onclick = () => vfGo(Number(r.dataset.m))));
   const bar = $("#vfBar");
@@ -169,7 +164,7 @@ document.addEventListener("keydown", (ev) => {
   if ((ev.target.closest && ev.target.closest("input, select, textarea")) || ev.metaKey || ev.ctrlKey || ev.altKey) return;
   const v = $("#vfv"), k = ev.key, n = VF.d.moments.length;
   if (!v) return;
-  if (k === " ") { ev.preventDefault(); v.paused ? v.play().catch(() => {}) : v.pause(); }
+  if (k === " ") { ev.preventDefault(); $("#vfPlay").click(); }
   else if (k === "ArrowLeft" || k === "ArrowRight") { ev.preventDefault(); vfSeek(vfNow() + (k === "ArrowLeft" ? -1 : 1) * (ev.shiftKey ? 5 : 1)); }
   else if ((k === "n" || k === "N") && n) vfGo((VF.m + 1) % n);
   else if ((k === "p" || k === "P") && n) vfGo((VF.m - 1 + n) % n);
