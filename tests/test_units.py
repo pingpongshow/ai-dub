@@ -349,7 +349,8 @@ def test_unvoiced_lines_inside_a_song_are_sung():
     lines = [mk(25.7, 29.7, L.SONG, "S1"), mk(33.5, 34.9, L.SPEECH, "S1", -3), mk(35.8, 37.7, L.SPEECH, ""),
              mk(38.7, 39.8, L.SPEECH, ""), mk(41.7, 43.0, L.SONG, "S1"), mk(71.1, 72.0, L.SPEECH, "")]
     align.extend_songs(lines, "ko")
-    assert [x.kind for x in lines] == [L.SONG, L.SPEECH, L.SONG, L.SONG, L.SONG, L.SPEECH]
+    # The singer's own slow line over the music between two sung lines is the song too.
+    assert [x.kind for x in lines] == [L.SONG, L.SONG, L.SONG, L.SONG, L.SONG, L.SPEECH]
 
 
 def _ln(a, b, text, spk="S1", kind=L.SPEECH, words=(), heard=None, i=0):
@@ -989,3 +990,38 @@ def test_intro_and_end_credits_keep_the_original(tmp_path, monkeypatch):
     # Without English subtitles only chapters and song/credit runs count.
     monkeypatch.setattr(align, "load_chosen", lambda job, which: [])
     assert align.intro_credits({"ingest": {"duration": 1477.0}}) == []
+
+
+def test_subtitle_flashes_and_offscreen_rows(tmp_path):
+    p = tmp_path / "e02.en.srt"
+    p.write_text("1\n00:11:16,400 --> 00:11:17,830\nthey really don't\nneed that much salt.\n\n"
+                 "2\n00:11:17,830 --> 00:11:18,180\nBut I love salty foods...\nthey really don't\nneed that much salt.\n\n"
+                 "3\n00:11:18,180 --> 00:11:19,760\nBut I love salty foods...\n\n"
+                 "4\n00:14:22,760 --> 00:14:29,280\nI can't really explain it,\nbut I'm just giving my best for now.\n"
+                 "<i>Roaming the streets of Shinjuku</i>\n\n"
+                 "5\n00:14:29,620 --> 00:14:34,820\n<i>Is the stray cat...</i>\n\n"
+                 "6\n00:14:39,750 --> 00:14:44,930\n- The Red & White Contest!\n- She's something.\n<i>To a woman...</i>\n",
+                 encoding="utf-8")
+    texts = [c.text for c in clean.load(p)]
+    # The 0.35 s flash repeating its neighbours is gone; a lyric row under speech isn't spoken.
+    assert texts == ["they really don't need that much salt.", "But I love salty foods...",
+                     "I can't really explain it, but I'm just giving my best for now.", "Is the stray cat...",
+                     "The Red & White Contest!", "She's something."]
+
+
+def test_a_singers_performance_stays_a_song():
+    from aidub import align
+
+    def ln(i, a, b, text, spk="S5", ev=("BGM",), music=-7.0):
+        return L.Line(id=i, start=a, end=b, source_text=text, speaker=spk, events=list(ev), music_db=music)
+    lines = [ln(1, 584.0, 584.7, "行き当たり渡り", ev=("Sing",), music=-0.2),
+             ln(2, 589.8, 598.4, "行き当たり渡りを"),               # 5 s later, music a little quieter
+             ln(3, 602.0, 605.6, "になっても"),
+             ln(4, 617.9, 620.8, "路地裏見つけて"),                  # 12 s gap: reached through line 5
+             ln(5, 610.0, 612.0, "行き当たりバタリ"),
+             ln(6, 625.0, 630.3, "よくわからないですけどとにかく一生懸命歌わせていただいてます"),  # her interview: spoken
+             ln(7, 621.0, 623.0, "次の方どうぞ", spk="S9"),           # someone else
+             ln(8, 640.0, 642.0, "とてもなのよ")]                      # too long after
+    lines[0].kind = L.SONG
+    align.extend_songs(lines, "ja")
+    assert [l.id for l in lines if l.kind == L.SONG] == [1, 2, 3, 4, 5]

@@ -37,6 +37,7 @@ CREDIT = re.compile(r"^\s*(?:starring|(?:directed|written|produced|composed|perf
 TILDE_SIGN = re.compile(r"^\s*~[^~]+~")
 NAME_ONLY = re.compile(r"(?:[A-Z][a-z'’\-]+\s+){0,3}[A-Z][a-z'’\-]+")  # "Ando Tamae": a credit, next to other credits
 CREDIT_REACH_S = 8.0
+FLASH_S = 1.0
 TITLE_CARD = re.compile(r"^\s*(?:episode|ep\.?|chapter|part)\s*\d+\b|^\s*to\s+be\s+continued\b", re.I)
 
 
@@ -74,6 +75,8 @@ def load(path: str | Path, fmt: str | None = None) -> list[Cue]:
             continue
         raw = ev.text
         kind = DIALOGUE
+        if not is_ass:
+            raw = spoken_rows(raw)
         if is_ass:
             if SONG_STYLES.search(ev.style or "") or KARAOKE.search(raw):
                 kind = SONG
@@ -100,6 +103,13 @@ def load(path: str | Path, fmt: str | None = None) -> list[Cue]:
         out.append(Cue(start=start, end=end, text=text if kind == DIALOGUE else "",
                        raw=shown, name=(ev.name or name or "").strip(), style=ev.style or "", kind=kind))
     out.sort(key=lambda c: (c.start, c.end))
+    # A flash between two subtitles that only repeats their words (an authoring slip: 0.35 s
+    # showing "But I love salty foods... / they really don't need that much salt.") would be
+    # dubbed twice.
+    rows = lambda c: {re.sub(r"\W+", " ", r).strip().lower() for r in re.sub(r"<[^>]+>", "", c.raw).split("\n")} - {""}
+    out = [c for i, c in enumerate(out)
+           if not (c.end - c.start <= FLASH_S and 0 < i < len(out) - 1 and rows(c)
+                   and rows(c) <= rows(out[i - 1]) | rows(out[i + 1]))]
     # A bare name shown among credits or over a song (opening titles) is a credit too.
     last = None
     for c in out:
@@ -109,6 +119,25 @@ def load(path: str | Path, fmt: str | None = None) -> list[Cue]:
               and NAME_ONLY.fullmatch(re.sub(r"<[^>]+>", "", c.raw).strip())):
             c.kind, c.text, last = SIGN, "", c.end
     return out
+
+
+def spoken_rows(raw: str) -> str:
+    """A plain-text subtitle mixing upright and italic rows shows two voices at once:
+    someone on screen and an off-screen one (a song playing, a TV). The italic rows are
+    left out so the on-screen speaker isn't given the other voice's words."""
+    rows, italic, state = raw.split("\\N"), [], False
+    for row in rows:
+        seen = []
+        for part in re.split(r"(\{[^}]*\})", row):
+            if part.startswith("{"):
+                flags = re.findall(r"\\i([01])", part)
+                state = flags[-1] == "1" if flags else state
+            elif part.strip():
+                seen.append(state)
+        italic.append(bool(seen) and all(seen))
+    if any(italic) and not all(i for r, i in zip(rows, italic) if ASS_TAG.sub("", r).strip()):
+        return "\\N".join(r for r, i in zip(rows, italic) if not i)
+    return raw
 
 
 DASH_TURN = re.compile(r"^\s*[-–—‐]\s*")

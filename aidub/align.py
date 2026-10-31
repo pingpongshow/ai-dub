@@ -42,6 +42,9 @@ MIN_SPLIT_S = 0.6
 PHRASE_GAP_S = 0.25   # words closer than this are one phrase when assigning them to subtitle cues
 SONG_MUSIC_DB = -6.0  # music this loud under a voice (relative to it), next to a song, is part of the song
 SONG_REACH_S = 3.0
+SINGER_GAP_S = 8.0    # the singer's next line over music this soon after a sung line is the same song ...
+SUNG_RATE = {"cjk": 5.0, "other": 1.8}  # ... when delivered this slowly (characters / words a second):
+                                         # an interview cut into the performance is spoken faster
 BACKGROUND_DB = 6.0  # music & effects this far above the voice: the speech may be in the background track
 BACKGROUND_QUIET_DB = 10.0  # ...and the voice this far below the episode's usual dialogue: it is
 CROWD_MAX_S = 2.0     # longer lines over other voices (a TV, a crowd) are still one person's line
@@ -617,12 +620,20 @@ def measure_music(job: Job, lines: list[L.Line]) -> None:
             ln.music_db = round(20 * np.log10(m / v), 1)
 
 
+def _sung_pace(ln: L.Line, lang: str) -> bool:
+    if lang in CJK:
+        return len(clean_norm(ln.source_text)) / max(ln.duration, 0.1) < SUNG_RATE["cjk"]
+    return len(ln.source_text.split()) / max(ln.duration, 0.1) < SUNG_RATE["other"]
+
+
 def extend_songs(lines: list[L.Line], lang: str) -> int:
     """Song lines the subtitles didn't mark: a voice over music as loud as itself, with
     music tagged, right next to a song line (the edges of an opening, a line of the
     chorus between marked ones), or English words in a non-English show over such
-    music (lyrics). Within a song (song lines close on both sides), a line the
-    diarizer heard no one talking in is sung too. Spreads until nothing changes."""
+    music (lyrics), or the same singer's next line while the music plays (a performance
+    whose lyrics are subtitled as plain English, where only one line was heard as
+    singing). Within a song (song lines close on both sides), a line the diarizer heard
+    no one talking in is sung too. Spreads until nothing changes."""
     total = 0
     # Voices over music first; the unvoiced lines after, so they don't carry the song on to speech.
     for unvoiced in (False, True):
@@ -642,7 +653,10 @@ def extend_songs(lines: list[L.Line], lang: str) -> int:
                 else:
                     lyrics = (lang != "en" and bool(LATIN.search(ln.source_text))
                               and not re.search(r"[^\x00-\x7f]", ln.source_text))
-                    hit = ln.music_db >= SONG_MUSIC_DB and "BGM" in ln.events and (near or lyrics)
+                    singer = (bool(ln.speaker) and _sung_pace(ln, lang)
+                              and any(o.speaker == ln.speaker and max(o.start - ln.end, ln.start - o.end) <= SINGER_GAP_S
+                                      for o in songs))
+                    hit = "BGM" in ln.events and ((ln.music_db >= SONG_MUSIC_DB and (near or lyrics)) or singer)
                 if hit:
                     ln.kind = L.SONG
                     changed, total = True, total + 1
