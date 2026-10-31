@@ -768,6 +768,16 @@ def outside_songs(cues: list, lines: list[L.Line]) -> list:
     return [q for q in cues if in_song(q) < 0.5]
 
 
+QUOTED = re.compile(r'^\s*["“”„«「『].+["“”»」』]\s*$', re.S)
+
+
+def quoted_lyric(ln: L.Line, cues: list) -> bool:
+    """Its subtitle in italics and in quotation marks, as subtitlers set lyrics apart
+    ("This waltz is no laughing matter, either."): with held notes over music, a lyric."""
+    return any(q.style == "italic" and QUOTED.match(q.text or "")
+               and min(q.end, ln.end) - max(q.start, ln.start) > 0.3 * ln.duration for q in cues)
+
+
 def lyrics_prompt(run: list[L.Line], before: list[L.Line], after: list[L.Line], cues: list) -> list[dict]:
     def english(ln):
         if ln.english_ref:
@@ -801,7 +811,7 @@ def lyrics_check(job: Job, llm: "LLM", lines: list[L.Line], cues: list) -> int:
     if not todo:
         return 0
     p, lang = Pitch.load(job), job["subtitles"].get("source_language", "")
-    sure = [ln for ln in todo if p is not None and sure_sung(ln, p, lang)]
+    sure = [ln for ln in todo if (p is not None and sure_sung(ln, p, lang)) or quoted_lyric(ln, cues)]
     for ln in sure:
         ln.kind, ln.check_note = L.SONG, "sung (long held notes, far slower than speech)"
     todo = [ln for ln in todo if ln.kind == L.SPEECH]

@@ -674,18 +674,21 @@ def intro_credits(job: Job) -> list[list[float]]:
     """Opening titles and end credits, which keep the original audio whole (songs and
     all): chapters named so (ingest), a run of song and credit subtitles, and, when an
     English subtitle track was chosen, the stretch before its first and after its last
-    dialogue subtitle (an unsubtitled closing song would otherwise be translated)."""
+    dialogue subtitle (an unsubtitled closing song would otherwise be translated). A
+    dialogue subtitle ends a run: the narration after an opening isn't part of it."""
     out = [list(r) for r in job["ingest"].get("song_ranges", [])]
     for which in ("source", "english"):
-        cues = sorted((q for q in load_chosen(job, which) if q.kind in (SONG, SIGN)), key=lambda q: q.start)
+        cues = sorted((q for q in load_chosen(job, which) if q.kind in (SONG, SIGN) or q.text.strip()),
+                      key=lambda q: q.start)
         run: list = []
         for q in cues + [None]:
-            if q is not None and (not run or q.start - max(r.end for r in run) <= CREDITS_GAP_S):
+            talk = q is not None and q.kind == DIALOGUE
+            if q is not None and not talk and (not run or q.start - max(r.end for r in run) <= CREDITS_GAP_S):
                 run.append(q)
                 continue
             if run and any(r.kind == SONG for r in run) and max(r.end for r in run) - run[0].start >= CREDITS_MIN_S:
                 out.append([run[0].start, max(r.end for r in run)])
-            run = [q] if q is not None else []
+            run = [q] if q is not None and not talk else []
     talk = [q for q in load_chosen(job, "english") if q.kind == DIALOGUE and q.text.strip()]
     duration = job["ingest"].get("duration")
     if talk and duration:

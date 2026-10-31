@@ -75,8 +75,11 @@ def load(path: str | Path, fmt: str | None = None) -> list[Cue]:
             continue
         raw = ev.text
         kind = DIALOGUE
+        italic = False
         if not is_ass:
             raw = spoken_rows(raw)
+            rows = italic_rows(raw)
+            italic = bool(rows) and all(i for _, i in rows)
         if is_ass:
             if SONG_STYLES.search(ev.style or "") or KARAOKE.search(raw):
                 kind = SONG
@@ -101,7 +104,8 @@ def load(path: str | Path, fmt: str | None = None) -> list[Cue]:
         if k2 != DIALOGUE and kind == DIALOGUE:
             kind = k2
         out.append(Cue(start=start, end=end, text=text if kind == DIALOGUE else "",
-                       raw=shown, name=(ev.name or name or "").strip(), style=ev.style or "", kind=kind))
+                       raw=shown, name=(ev.name or name or "").strip(), style="italic" if italic else ev.style or "",
+                       kind=kind))
     out.sort(key=lambda c: (c.start, c.end))
     # A flash between two subtitles that only repeats their words (an authoring slip: 0.35 s
     # showing "But I love salty foods... / they really don't need that much salt.") would be
@@ -121,12 +125,10 @@ def load(path: str | Path, fmt: str | None = None) -> list[Cue]:
     return out
 
 
-def spoken_rows(raw: str) -> str:
-    """A plain-text subtitle mixing upright and italic rows shows two voices at once:
-    someone on screen and an off-screen one (a song playing, a TV). The italic rows are
-    left out so the on-screen speaker isn't given the other voice's words."""
-    rows, italic, state = raw.split("\\N"), [], False
-    for row in rows:
+def italic_rows(raw: str) -> list[tuple[str, bool]]:
+    """The visible rows of a subtitle and whether each is in italics."""
+    out, state = [], False
+    for row in raw.split("\\N"):
         seen = []
         for part in re.split(r"(\{[^}]*\})", row):
             if part.startswith("{"):
@@ -134,9 +136,18 @@ def spoken_rows(raw: str) -> str:
                 state = flags[-1] == "1" if flags else state
             elif part.strip():
                 seen.append(state)
-        italic.append(bool(seen) and all(seen))
-    if any(italic) and not all(i for r, i in zip(rows, italic) if ASS_TAG.sub("", r).strip()):
-        return "\\N".join(r for r, i in zip(rows, italic) if not i)
+        if seen:
+            out.append((row, all(seen)))
+    return out
+
+
+def spoken_rows(raw: str) -> str:
+    """A plain-text subtitle mixing upright and italic rows shows two voices at once:
+    someone on screen and an off-screen one (a song playing, a TV). The italic rows are
+    left out so the on-screen speaker isn't given the other voice's words."""
+    rows = italic_rows(raw)
+    if any(i for _, i in rows) and not all(i for _, i in rows):
+        return "\\N".join(r for r, i in rows if not i)
     return raw
 
 

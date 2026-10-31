@@ -1148,6 +1148,12 @@ def test_short_reply_in_the_other_persons_voice_moves_by_pitch(tmp_path):
     assert voicebank.move_by_pitch(job, prof, lines) == 1
     assert lines[5].character == master and lines[5].voice_note == "moved by pitch"
     assert lines[6].character == woman
+    # A man's line measured far higher (a raised voice, a woman talking over him) stays his.
+    np.save(tmp_path / "pitch.npy", _f0((10, "speak", 10), (1, "speak", 25), (9, "speak", 10), (10, "speak", 25)))
+    lines = [L.Line(i, a, a + 1.5, character=master) for i, a in enumerate((1, 4, 7, 12, 15), 1)]
+    lines += [L.Line(10, 10.3, 10.7, character=master, source_text="いらっしゃい")]
+    lines += [L.Line(20 + i, a, a + 1.5, character=woman) for i, a in enumerate((21, 24, 27))]
+    assert voicebank.move_by_pitch(job, prof, lines) == 0
 
 
 def test_lyric_subtitles_are_not_given_to_the_next_spoken_line():
@@ -1178,3 +1184,22 @@ def test_long_slow_held_lines_are_songs_without_asking(tmp_path):
     translate.lyrics_check(job, Quiet(), [verse, talk], [])
     assert verse.kind == L.SONG and job.qc["lyrics_check"]["sure"] == 1
     assert talk.kind == L.SONG  # the model gave no answer for it: songs are never dubbed
+
+
+def test_opening_run_stops_at_the_narration_and_quoted_italics_are_lyrics(tmp_path, monkeypatch):
+    from aidub import align, translate
+    p = tmp_path / "e03.en.srt"
+    p.write_text("1\n00:00:02,000 --> 00:00:05,000\nOpening Song\nOmohide by Suzuki\n\n"
+                 "2\n00:00:26,000 --> 00:00:28,000\nkimi ga hai ta shiroi iki ga\nThe white breath\n\n"
+                 "3\n00:00:48,000 --> 00:00:57,160\nkimi ga hai ta iki o sutte\nAnd drink the breath\n\n"
+                 "4\n00:00:57,260 --> 00:00:59,020\n<i>As the day comes to an end,</i>\n\n"
+                 "5\n00:01:02,790 --> 00:01:04,980\n<i>my own day begins.</i>\n\n"
+                 "6\n00:01:05,290 --> 00:01:06,480\n~ Beer ~ 600 yen\n\n"
+                 "7\n00:14:43,000 --> 00:14:47,000\n<i>\"This waltz is no laughing matter, either.\"</i>\n\n"
+                 "8\n00:20:00,000 --> 00:20:02,000\nGood night!\n", encoding="utf-8")
+    cues = clean.load(p)
+    monkeypatch.setattr(align, "load_chosen", lambda job, which: cues if which == "english" else [])
+    ranges = align.intro_credits({"ingest": {"duration": 1300.0, "song_ranges": []}})
+    assert not align._in_ranges(57.3, 59.0, ranges) and align._in_ranges(30, 40, ranges)
+    assert translate.quoted_lyric(L.Line(id=1, start=884.0, end=888.6), cues)
+    assert not translate.quoted_lyric(L.Line(id=2, start=57.3, end=59.0), cues)   # narration: italic, no quotes

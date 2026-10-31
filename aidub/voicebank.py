@@ -341,7 +341,8 @@ def move_by_pitch(job: Job, prof: Profile, lines: list[L.Line]) -> int:
     what?" in a man's voice, filed under the woman he talks to). Too short for the
     voice and gender checks, they are told by pitch: a line an octave or so from its
     character's usual pitch moves to the character of the other gender heard nearby
-    whose usual pitch it matches (the one heard most around it, if several do)."""
+    whose usual pitch it matches (the one heard most around it, if several do). Only a
+    line far below its character's pitch moves."""
     p = Pitch.load(job)
     if p is None:
         return 0
@@ -357,7 +358,9 @@ def move_by_pitch(job: Job, prof: Profile, lines: list[L.Line]) -> int:
     moved = 0
     for ln in speech:
         m, own = med[ln.id], usual.get(ln.character)
-        if m is None or own is None or ln.duration >= PITCH_SHORT_S or abs(m - own) < PITCH_OFF_ST:
+        # Only far lower: a raised voice or a second voice over it lifts a line's pitch,
+        # but nothing but a man speaking puts a woman's line an octave down.
+        if m is None or own is None or ln.duration >= PITCH_SHORT_S or own - m < PITCH_OFF_ST:
             continue
         if not gender.get(ln.character):
             continue
