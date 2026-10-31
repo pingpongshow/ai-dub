@@ -116,7 +116,13 @@ class Service:
         j = self.store.get(jid)
         if not j:
             raise KeyError(jid)
-        return review.view(self.cfg, j, self.profiles.get(j["profile"]))
+        v = review.view(self.cfg, j, self.profiles.get(j["profile"]))
+        if j["status"] == J.REVIEW and v.get("ready"):
+            n = len(v.get("flags", []))
+            msg = f"waiting for review: {n} to check" if n else "waiting for review"
+            if msg != j.get("message"):
+                self.store.update(jid, message=msg)  # the queue shows what the screen shows
+        return v
 
     def review_save(self, jid: int, decisions: dict, start: bool = False) -> None:
         from . import review
