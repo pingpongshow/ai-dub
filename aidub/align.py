@@ -43,6 +43,7 @@ MIN_SPLIT_S = 0.6
 PHRASE_GAP_S = 0.25   # words closer than this are one phrase when assigning them to subtitle cues
 SONG_MUSIC_DB = -6.0  # music this loud under a voice (relative to it), next to a song, is part of the song
 SONG_REACH_S = 3.0
+CHAIN_SUNG = 0.65     # a subtitled line joins a song through its neighbours only inside a performance this sung
 SINGER_GAP_S = 8.0    # the singer's next line over music this soon after a sung line is the same song ...
 SUNG_RATE = {"cjk": 5.0, "other": 1.8}  # ... when delivered this slowly (characters / words a second):
                                          # an interview cut into the performance is spoken faster
@@ -627,15 +628,23 @@ def _sung_pace(ln: L.Line, lang: str) -> bool:
     return len(ln.source_text.split()) / max(ln.duration, 0.1) < SUNG_RATE["other"]
 
 
-def extend_songs(lines: list[L.Line], lang: str) -> int:
+def extend_songs(lines: list[L.Line], lang: str, subtitled: set[int] | None = None) -> int:
     """Song lines the subtitles didn't mark: a voice over music as loud as itself, with
     music tagged, right next to a song line (the edges of an opening, a line of the
     chorus between marked ones), or English words in a non-English show over such
     music (lyrics), or the same singer's next line while the music plays (a performance
     whose lyrics are subtitled as plain English, where only one line was heard as
     singing). Within a song (song lines close on both sides), a line the diarizer heard
-    no one talking in is sung too. Spreads until nothing changes."""
+    no one talking in is sung too. Spreads until nothing changes.
+
+    A voiced line with a dialogue subtitle (`subtitled`, line ids) is made a song by its
+    neighbours only inside a performance (the voice around it held on notes CHAIN_SUNG
+    or more: 0.69-0.80 through S02's enka). A recording of the theme can play under a
+    conversation and the diarizer may file the singer under the person talking (S01E04,
+    0.56: "Go visit her often." became part of the song); such a line is left to the
+    lyrics check, which reads it."""
     total = 0
+    subtitled = subtitled or set()
     # Voices over music first; the unvoiced lines after, so they don't carry the song on to speech.
     for unvoiced in (False, True):
         changed = True
@@ -657,7 +666,8 @@ def extend_songs(lines: list[L.Line], lang: str) -> int:
                     singer = (bool(ln.speaker) and _sung_pace(ln, lang)
                               and any(o.speaker == ln.speaker and max(o.start - ln.end, ln.start - o.end) <= SINGER_GAP_S
                                       for o in songs))
-                    hit = "BGM" in ln.events and ((ln.music_db >= SONG_MUSIC_DB and (near or lyrics)) or singer)
+                    hit = ("BGM" in ln.events and (ln.id not in subtitled or ln.sung >= CHAIN_SUNG)
+                           and ((ln.music_db >= SONG_MUSIC_DB and (near or lyrics)) or singer))
                 if hit:
                     ln.kind = L.SONG
                     changed, total = True, total + 1
@@ -944,7 +954,8 @@ def run(job: Job) -> None:
     classify(job, lines)
     mark_singing(job, lines)
     recurring_titles(job, lines)
-    extend_songs(lines, job["subtitles"].get("source_language", ""))
+    talk = [q for q in load_chosen(job, "english") if q.kind == DIALOGUE and q.text.strip()]
+    extend_songs(lines, job["subtitles"].get("source_language", ""), {ln.id for ln in lines if _subtitled(ln, talk)})
     # Translation context: which window each line belongs to.
     job.set("line_windows", [next((wi for wi, (a, b) in enumerate(windows) if a <= ln.start < b), len(windows) - 1)
                              for ln in lines])

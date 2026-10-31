@@ -826,6 +826,8 @@ def lyrics_prompt(run: list[L.Line], before: list[L.Line], after: list[L.Line], 
              "narration, an announcer, a phone call, someone talking over the song). Lyrics read like verse: "
              "imagery, refrains, lines that answer no one. Spoken lines talk to someone or about what is happening; a "
              'line naming or introducing the song, or reacting to it ("She\'s something."), is spoken. '
+             "A recording of a song may play under people talking, and the original-language text can mix the "
+             "song's words with what they say; then the English subtitle tells which it is. "
              "The lines around them are context only.\n\n"
              f"Before:\n{show(before)}\n\nLines:\n{json.dumps(items, ensure_ascii=False, indent=1)}\n\n"
              f"After:\n{show(after)}\n\n"

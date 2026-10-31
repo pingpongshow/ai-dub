@@ -1245,3 +1245,23 @@ def test_a_good_track_is_trusted_whatever_its_coverage_and_shows_remember(tmp_pa
     assert not T.subtitles_trusted(job("E05.mkv", 0.5, 0.80, 30))[0]   # a wrong track still fails
     T.remember_trust(job("E04.mkv", 0.5, 0.7, 10), False, "meaning 0.50 below 0.80")
     assert not T.subtitles_trusted(job("E05.mkv", 0.75, 0.80, 30))[0]  # the last episode's track failed
+
+
+def test_a_subtitled_line_over_a_song_recording_is_not_carried_into_the_song():
+    from aidub import align
+
+    def ln(i, a, b, text, ev=("BGM",), music=-7.0):
+        return L.Line(id=i, start=a, end=b, source_text=text, speaker="S4", events=list(ev), music_db=music)
+    # The theme plays under the conversation; the diarizer filed the singer under the son.
+    lines = [ln(1, 1250.6, 1251.2, "息を", ev=("Sing", "BGM")), ln(2, 1263.7, 1270.0, "ことのようだねあたしちょくちょく帰ってやれよ"),
+             ln(3, 1272.8, 1274.0, "雲が"), ln(4, 1253.0, 1254.0, "ポカリと")]
+    lines[0].kind = L.SONG
+    align.extend_songs(lines, "ja", subtitled={2, 3})
+    # The subtitled lines are left to the lyrics check; the unsubtitled one carries the song on.
+    assert [l.kind for l in lines] == [L.SONG, L.SPEECH, L.SPEECH, L.SONG]
+    # Inside an on-stage performance (singing all around), a subtitled verse still joins the song.
+    verse = ln(5, 1256.0, 1258.0, "路地裏見つけて")
+    verse.sung = 0.76
+    lines = [lines[0], verse]
+    align.extend_songs(lines, "ja", subtitled={5})
+    assert verse.kind == L.SONG
