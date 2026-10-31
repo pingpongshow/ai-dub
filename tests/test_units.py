@@ -1298,6 +1298,10 @@ def test_back_check_reads_clipped_words_sighs_own_voices_and_run_together_names(
     assert not speak._passes({**take, "own_ref": True, "sim": -0.3}, cfg)   # still far below the character's own
     # ... unless it was given its own voice because it isn't that character at all.
     assert speak._passes({**take, "own_ref": True, "not_character": True, "sim": 0.217, "sim_median": 0.467}, cfg)
+    # A contraction heard for the word it sounds like.
+    assert speak.wer("were all teachers.", "We're all teachers.") == 0.0
+    assert speak.wer("We're all teachers.", "We're all teachers.") == 0.0
+    assert speak.wer("Is that your bag?", "Is that you're bag?") == 0.0
     # A stage name run into one word by recognition.
     monkeypatch.setattr(pronounce, "LEXICON", {w: [w.upper()] for w in ("erect", "juice", "gushing", "bonanza")})
     assert speak.wer('"Erect Ohki\'s Juice Gushing Bonanza"', "Erectokey's juice gushing bonanza.") <= 0.2

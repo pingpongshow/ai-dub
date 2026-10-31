@@ -72,6 +72,10 @@ INTERJECTIONS = set("ah ahh ahhh aah oh ohh ooh uh uhh um umm hm hmm huh eh mm m
                     "phew tsk".split())
 
 
+SOUND_ALIKE = {"we're": ("were",), "you're": ("your", "yore"), "they're": ("their", "there"), "it's": ("its",),
+               "who's": ("whose",), "there's": ("theirs",), "he'll": ("heel",), "we'll": ("wheel",)}
+
+
 def _full(word: str) -> str:
     full = CLIPPED_FULL[word.lower()]
     return full.capitalize() if word[0].isupper() else full
@@ -152,7 +156,12 @@ def _numbers(words: list[str], digitwise: bool) -> list[str]:
 def wer(ref: str, hyp: str) -> float:
     """Back-check error rate. Short lines (names, one or two words) are compared
     letter by letter, so "Kikoru" heard as "Kikaru" is a small error, not 100%.
-    A number counts read either way ("212": "two hundred and twelve", "two one two")."""
+    A number counts read either way ("212": "two hundred and twelve", "two one two").
+    A contraction heard for the word it sounds like counts as that word ("were all
+    teachers" heard as "We're all teachers")."""
+    said = set(re.findall(r"[a-z']+", said_as(ref).lower().replace("’", "'")))
+    hyp = re.sub(r"[A-Za-z]+['’][a-z]+", lambda m: next(
+        (w for w in SOUND_ALIKE.get(m.group(0).lower().replace("’", "'"), ()) if w in said), m.group(0)), hyp)
     a, b = _words(ref), _words(hyp)
     b = [w for i, w in enumerate(b) if not (w == "and" and i and b[i - 1] in ("hundred", "thousand"))]
     b = ["zero" if w == "oh" and i and b[i - 1] == "point" else w for i, w in enumerate(b)]  # "nine point oh"
