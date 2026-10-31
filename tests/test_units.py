@@ -1340,3 +1340,35 @@ def test_review_decisions_go_into_the_lines(cfg, tmp_path):
     many = [L.Line(10 + i, 60 + 2 * i, 61.5 + 2 * i, kind=L.SONG, kept_why=f"held notes over music (0.5{i}), no subtitle")
             for i in range(4)]
     assert review.regions(many, 100.0)[0]["reasons"] == ["held notes over music, no subtitle (4 lines)"]
+
+
+def test_tuned_from_the_s01e05_review():
+    from aidub import translate as T
+    from aidub.subtitles.model import Cue
+
+    class J(dict):
+        qc = {}
+        def log(self, m): pass
+    job = J(subtitles={"source_language": "ja"})
+
+    def cue(a, b, text):
+        return Cue(start=a, end=b, text=text, raw=text, kind=DIALOGUE)
+    # The guitarist: quoted lyrics, sung slowly over music.
+    song = [L.Line(id=i, start=a, end=a + 6, source_text=t, music_db=-7)
+            for i, (a, t) in enumerate([(465, "ハルバル北ぜ箱だて"), (474, "さあかまく波乗り越えて"), (482, "思い出すたびに")], 1)]
+    cues = [cue(465, 471, '"It was a long and winding road to Hakodate."'), cue(474, 479, '"Past the storming waves I went."'),
+            cue(482, 488, '"As you sent me away, you hid the tears."')]
+    assert T.quoted_songs(job, song, cues) == 3 and all(l.kind == L.SONG for l in song)
+    talk = [L.Line(id=i, start=a, end=a + 2, source_text="これは手紙に書いてあったことなんですけどね", music_db=-30)
+            for i, a in enumerate((10, 14, 18), 1)]           # someone reading quotes aloud: spoken, no music
+    assert T.quoted_songs(job, talk, [cue(10, 12, '"Dear John,"'), cue(14, 16, '"I miss you."'), cue(18, 20, '"Love, Mary."')]) == 0
+    # Short subtitled replies kept as sounds are dubbed; pure exclamations and captions are not.
+    yes = L.Line(id=1, start=100, end=101.3, source_text="はい", kind=L.WORDLESS, music_db=-12)
+    ohh = L.Line(id=2, start=110, end=110.3, source_text="ほう", kind=L.WORDLESS, music_db=-28)
+    tv = L.Line(id=3, start=120, end=121.2, source_text="はい", kind=L.BACKGROUND, music_db=110)
+    edge = L.Line(id=4, start=130, end=130.2, source_text="恋", kind=L.WORDLESS, music_db=8)
+    sung = L.Line(id=5, start=131, end=140, kind=L.SONG)
+    ls = [yes, ohh, tv, edge, sung]
+    n = T.subtitled_reactions(ls, [cue(100, 101.5, "Yes."), cue(110, 110.5, "Ohh!"), cue(120, 121.5, "Is gang warfare back?"),
+                                   cue(130, 135, "From the lips of a hostess")])
+    assert n == 1 and yes.kind == L.SPEECH and ohh.kind == L.WORDLESS and tv.kind == L.BACKGROUND and edge.kind == L.WORDLESS

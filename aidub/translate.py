@@ -800,6 +800,44 @@ def outside_songs(cues: list, lines: list[L.Line]) -> list:
     return [q for q in cues if in_song(q) < 0.5]
 
 
+REACTION_KINDS = {L.WORDLESS, L.BACKGROUND, L.CROWD}
+REACTION_MAX_S = 3.0      # a short reply ...
+REACTION_MUSIC_DB = 15.0  # ... with a voice to be heard over the music ...
+REACTION_SONG_S = 2.0     # ... and not at the edge of a song
+EN_SOUNDS = set("ah ahh aah oh ohh ooh uh uhh um umm hm hmm huh eh mm mmm ugh whoa wow ha haha heh hey oops phew tsk "
+                "argh ow ouch wha".split())
+
+
+def subtitled_reactions(lines: list[L.Line], cues: list) -> int:
+    """With the subtitles as the script, a short line kept as a sound (wordless, background,
+    a crowd) whose subtitle says a real word is dubbed: \u201cYes.\u201d, \u201cThank you.\u201d, \u201cHere
+    you are.\u201d (the owner dubbed every such line on S01E05's review). A subtitle that is only a
+    sound (\u201cOhh!\u201d, \u201cUh?!\u201d) keeps the original, and so does a line whose subtitle another
+    spoken line already carries."""
+    n = 0
+    speech = [ln for ln in lines if ln.kind == L.SPEECH]
+    songs = [ln for ln in lines if ln.kind == L.SONG]
+    for ln in lines:
+        if ln.kind not in REACTION_KINDS or ln.decided or ln.duration > REACTION_MAX_S:
+            continue
+        if ln.music_db > REACTION_MUSIC_DB:  # no voice to speak over: an on-screen caption ("The Victim - ...")
+            continue
+        if any(max(o.start - ln.end, ln.start - o.end) <= REACTION_SONG_S for o in songs):
+            continue  # the edge of a song
+        mine = [q for q in cues if min(q.end, ln.end) - max(q.start, ln.start) > 0.3 * min(ln.duration, q.end - q.start)]
+        if not mine:
+            continue
+        words = [w for q in mine for w in re.findall(r"[a-z']+", q.text.lower())]
+        if not words or all(w.strip("'") in EN_SOUNDS for w in words):
+            continue
+        if any(min(o.end, q.end) - max(o.start, q.start) > 0.3 * (q.end - q.start) for q in mine for o in speech):
+            continue
+        ln.kind, ln.kept_why = L.SPEECH, ""
+        ln.check_note = "short subtitled line: dubbed"
+        n += 1
+    return n
+
+
 QUOTED = re.compile(r'^\s*["“”„«「『].+["“”»」』]\s*$', re.S)
 
 
@@ -808,6 +846,54 @@ def quoted_lyric(ln: L.Line, cues: list) -> bool:
     ("This waltz is no laughing matter, either."): with held notes over music, a lyric."""
     return any(q.style == "italic" and QUOTED.match(q.text or "")
                and min(q.end, ln.end) - max(q.start, ln.start) > 0.3 * ln.duration for q in cues)
+
+
+QUOTED_RUN = 3          # quoted subtitles in a row ...
+QUOTED_GAP_S = 15.0     # ... this close together ...
+QUOTED_PACE = {"cjk": 3.0, "other": 1.2}  # ... over lines this slow (characters / words a second) ...
+QUOTED_MUSIC_DB = -12.0  # ... with music under them: a song sung on screen
+
+
+def quoted_songs(job: Job, lines: list[L.Line], cues: list) -> int:
+    """A song whose lyrics the subtitles put in quotation marks (not italics), sung too
+    plainly for held notes to show: S01E05's guitarist at 0.15-0.32, at 1.6-2.6
+    characters a second over his guitar, where speech runs 5-9. Three or more quoted
+    subtitles in a row whose lines are that slow, with music under them, are a song."""
+    from .subtitles.clean import norm_chars
+    lang = job["subtitles"].get("source_language", "")
+    cjk = lang in ("ja", "zh", "yue", "ko")
+
+    def slow(ln: L.Line) -> bool:
+        n = len(norm_chars(ln.source_text)) if cjk else len(ln.source_text.split())
+        return n / max(ln.duration, 0.1) < QUOTED_PACE["cjk" if cjk else "other"]
+
+    talk = sorted((q for q in cues if q.text.strip()), key=lambda q: q.start)
+    runs: list[list] = []
+    for q in talk:
+        if QUOTED.match(q.text):
+            if runs and runs[-1] and q.start - runs[-1][-1].end <= QUOTED_GAP_S:
+                runs[-1].append(q)
+            else:
+                runs.append([q])
+        elif runs and runs[-1]:
+            runs.append([])
+    n = 0
+    for run in runs:
+        if len(run) < QUOTED_RUN:
+            continue
+        ls = [ln for ln in lines if ln.kind == L.SPEECH and not ln.decided
+              and any(min(ln.end, q.end) - max(ln.start, q.start) > 0.3 * min(ln.duration, q.end - q.start) for q in run)]
+        if len(ls) < QUOTED_RUN or sum(slow(ln) for ln in ls) < 0.75 * len(ls) \
+                or sum(ln.music_db >= QUOTED_MUSIC_DB for ln in ls) < 0.75 * len(ls):
+            continue
+        for ln in ls:
+            ln.kind = L.SONG
+            ln.check_note = ln.kept_why = "quoted lyrics, sung slowly over music"
+            n += 1
+    if n:
+        job.qc["quoted_songs"] = n
+        job.log(f"{n} lines are a song subtitled in quotation marks")
+    return n
 
 
 def lyrics_prompt(run: list[L.Line], before: list[L.Line], after: list[L.Line], cues: list) -> list[dict]:
@@ -916,6 +1002,11 @@ def run(job: Job) -> None:
             lead_by = "audio"
             job.log(f"WARNING: the English subtitles are not used as the script ({why}); "
                     "the episode is translated from the speech instead")
+        if trusted:
+            n = subtitled_reactions(lines, cues)
+            if n:
+                job.qc["subtitled_reactions_dubbed"] = n
+                job.log(f"{n} short subtitled lines kept as sounds are dubbed (\"Yes.\", \"Thank you.\")")
         # Speech the subtitles leave out: a short reaction keeps the original, a longer
         # line is translated from the speech and flagged.
         speech = [ln for ln in lines if ln.kind == L.SPEECH]
@@ -938,7 +1029,9 @@ def run(job: Job) -> None:
 
     with LLM(job) as llm:
         from .subtitles.step import load_chosen
-        lyrics_check(job, llm, lines, cues or [q for q in load_chosen(job, "english") if q.text])
+        every = cues or [q for q in load_chosen(job, "english") if q.text]
+        quoted_songs(job, lines, every)
+        lyrics_check(job, llm, lines, every)
         cues = outside_songs(cues, lines)
         batches = [b for b in ([l for l in b if not l.fallback] for b in _batches(lines, windows)) if b]
         shares = script_cues(cues, batches) if script else [[] for _ in batches]

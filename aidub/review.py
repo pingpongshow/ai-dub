@@ -236,11 +236,14 @@ DUBBABLE = {L.SONG, L.WORDLESS, L.BACKGROUND, L.CROWD}
 
 def apply(job, lines: list[L.Line], d: dict | None = None) -> int:
     """Put the review's decisions into the lines (before translation). Returns how many
-    lines changed."""
+    lines changed. What each line was before is kept in the job record (qc
+    review_changes), to tune the automatic decisions from the user's corrections."""
     from . import recurring, voicebank
     d = d if d is not None else load_decisions(job.work)
     prof = job.profile
     changed: set[int] = set()
+    before = {ln.id: (ln.kind, ln.kept_why, ln.character, ln.sung, ln.music_db, ln.english_ref, ln.source_text)
+              for ln in lines}
     for ln in lines:  # speakers merged on the review screen
         if ln.character and prof and ln.character not in prof.characters:
             ln.character = prof.current(ln.character)
@@ -294,6 +297,15 @@ def apply(job, lines: list[L.Line], d: dict | None = None) -> int:
         changed.add(ln.id)
     if prof:
         prof.save()
+    log = []
+    for ln in lines:
+        if ln.id in changed:
+            kind, why, who, sung, music, en, src = before[ln.id]
+            log.append({"start": round(ln.start, 2), "end": round(ln.end, 2), "was": kind, "why": why, "now": ln.kind,
+                        "character_was": who, "character": ln.character, "sung": sung, "music_db": music,
+                        "english": en, "source": src})
+    if hasattr(job, "qc"):
+        job.qc["review_changes"] = log
     return len(changed)
 
 
