@@ -8,7 +8,7 @@ main.wide { max-width: none; padding: 12px 16px 40px; }
 .rv [hidden] { display: none !important; }
 .rv { display: flex; flex-direction: column; gap: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel); }
 .rv-title { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
-.rv-title .crumbs { color: var(--muted); }
+.rv-title .crumbs { color: var(--muted); gap: 8px; align-items: baseline; }
 .rv-title .crumbs b { color: var(--text); font-size: 15px; }
 .rv-title .grow { flex: 1; }
 .chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }

@@ -214,6 +214,10 @@ def test_check_a_finished_dub_then_keep_it_or_put_the_original_back(client, cfg,
     assert sorted(p["id"] for p in pending) == sorted(ids) and all(p["original_size"] > 0 for p in pending)
     v = c.get(f"/api/jobs/{ids[0]}/verify").json()
     assert v["ready"] and v["original"]["exists"] and v["duration"] > 10
+    # The header counts them, and the folder browser marks both episodes dubbed.
+    assert c.get("/api/status").json()["counts"] == {"queue": 0, "review": 0, "check": 2, "originals": 2}
+    listing = c.get("/api/browse", params={"path": str(media_root)}).json()["entries"]
+    assert all(e["dubbed"] for e in listing if e["name"].startswith("Check Show"))
     # The check files and what the job had at its review are left (for a redub); what
     # was made after it (voiced takes, the mix) is gone. The check files play.
     left = {p.name for p in (cfg.work / f"job-{ids[0]}").iterdir()}

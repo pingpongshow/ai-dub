@@ -73,7 +73,15 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
         installed = {n: workers.env_ready(cfg, n) for n in names}
         return {"version": __version__, "ui": UI_BUILD, "gpu": {"present": g.present, "name": g.name, "total_mb": g.total_mb,
                                                 "used_mb": g.used_mb, "processes": g.processes},
-                "workers": installed, "steps": [{"name": s, "title": TITLES[s]} for s in STEP_NAMES]}
+                "workers": installed, "steps": [{"name": s, "title": TITLES[s]} for s in STEP_NAMES],
+                "counts": _counts()}
+
+    def _counts() -> dict:
+        """What the header shows: jobs in the queue, and what waits for the user."""
+        active = svc.store.list(J.ACTIVE)
+        return {"queue": len(active), "review": sum(j["status"] == J.REVIEW for j in active),
+                "check": sum((j.get("record") or {}).get("verify") == "pending" for j in svc.store.list({J.DONE})),
+                "originals": len(svc.store.originals())}
 
     # Browsing --------------------------------------------------------------------------------
     @app.get("/api/browse")
@@ -88,6 +96,9 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
         if not p.is_dir():
             bad(404, "not a folder")
         queued = {j["path"] for j in svc.store.list(J.ACTIVE)}
+        # Dubbed: delivered by a job whose dub wasn't undone afterwards (its original may be gone).
+        dubbed = {j["path"] for j in svc.store.list({J.DONE})
+                  if (j.get("record") or {}).get("delivered") and (j.get("record") or {}).get("verify") not in ("restored", "redo")}
         entries = []
         try:
             items = sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))
@@ -105,7 +116,7 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
                     continue  # a broken link or a file that vanished
                 entries.append({"name": e.name, "path": str(e), "dir": False, "size": size,
                                 "queued": str(e) in queued,
-                                "set_aside": originals.aside_name(e).exists()})
+                                "set_aside": originals.aside_name(e).exists(), "dubbed": str(e) in dubbed})
         roots = [str(r.resolve()) for r in svc.media_roots()]
         parent = None if str(p) in roots else str(p.parent)
         return {"path": str(p), "parent": parent, "entries": entries}

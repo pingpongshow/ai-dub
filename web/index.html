@@ -11,16 +11,16 @@
 </head>
 <body>
 <header>
-  <h1>Ai Dub</h1>
+  <a class="brand" href="#queue"><img src="icon.png" alt="">Ai Dub</a>
   <nav>
-    <a href="#queue" data-page="queue">Queue</a>
+    <a href="#queue" data-page="queue">Queue <span class="count" id="nQueue"></span></a>
     <a href="#history" data-page="history">History</a>
-    <a href="#profiles" data-page="profiles">Profiles</a>
-    <a href="#originals" data-page="originals">Originals pending deletion</a>
+    <a href="#profiles" data-page="profiles">Shows</a>
+    <a href="#originals" data-page="originals" title="Originals set aside next to their dubs">Originals <span class="count" id="nOrig"></span></a>
     <a href="#models" data-page="models">Models</a>
     <a href="#settings" data-page="settings">Settings</a>
   </nav>
-  <div id="gpu" class="muted"></div>
+  <div id="gpu"></div>
 </header>
 <main id="main"></main>
 <div id="toast" hidden></div>

@@ -142,7 +142,7 @@ function rvShell() {
   main.innerHTML = `
   <div class="rv ${d.editable ? "editable" : ""}">
     <div class="rv-title">
-      <div class="crumbs"><a href="#queue">Queue</a> › <b>${esc(d.name)}</b></div>
+      <div class="crumbs"><a href="#queue">Queue</a><span class="faint">›</span><b title="${esc(d.name)}">${epLabel(d.name)}</b>${episode(d.name).show ? `<span class="muted">${esc(episode(d.name).show)}</span>` : ""}</div>
       ${statusChip}${nLook ? `<span class="chip look">${nLook} to check</span>` : `<span class="chip dub">Nothing flagged</span>`}
       <span class="grow"></span>
       ${d.editable ? `<button id="rvDiscard">Discard my changes</button><button id="rvSave">${RV.dirty ? "Save" : "Saved"}</button>

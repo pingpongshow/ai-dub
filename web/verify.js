@@ -20,7 +20,7 @@ async function pageVerify(id) {
   main.innerHTML = `
   <div class="rv editable">
     <div class="rv-title">
-      <div class="crumbs"><a href="#queue">Queue</a> › <b>${esc(d.name)}</b></div>
+      <div class="crumbs"><a href="#queue">Queue</a><span class="faint">›</span><b title="${esc(d.name)}">${epLabel(d.name)}</b>${episode(d.name).show ? `<span class="muted">${esc(episode(d.name).show)}</span>` : ""}</div>
       <span class="chip keep">Dubbed: not checked yet</span>
       <span class="grow"></span>
       ${d.can_redub ? `<a class="button" href="#review/${id}" title="Open the full review page: change songs, subtitles or voices, then redub from there (the analysis is kept)">Review and change…</a>`
