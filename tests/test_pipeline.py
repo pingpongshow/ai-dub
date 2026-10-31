@@ -49,9 +49,11 @@ def test_dub_mkv_in_place(cfg, media_root):
     rec = job["record"]
     assert rec["qc"]["dubbed_lines"] > 0
     assert rec["qc"]["fallback_rate"] < 0.5
-    # Working files are gone but for the small check set, the set-aside original is
-    # registered, a profile exists.
-    assert {p.name for p in (cfg.work / f"job-{job['id']}").iterdir()} == {"verify"}
+    # Working files made after the review are gone (the check set and the analysis stay
+    # for a redub until the dub is checked), the set-aside original is registered, a
+    # profile exists.
+    left = {p.name for p in (cfg.work / f"job-{job['id']}").iterdir()}
+    assert {"verify", "review"} <= left and not {"mix", "deliver"} & left
     assert job["record"]["verify"] == "pending"
     assert [o["path"] for o in svc.store.originals()] == [str(aside)]
     prof = svc.profiles.get("test-show")

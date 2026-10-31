@@ -1,8 +1,10 @@
 """Checking a finished dub before its original is deleted.
 
-When a job finishes, everything in its working folder is deleted except verify/:
-a small preview of the episode with the original sound, the dub as its own track,
-the English subtitles and the moments worth listening to. The Queue page lists
+When a job finishes, what it made after the review step is deleted. Kept: verify/
+(a small preview of the episode with the original sound, the dub as its own track,
+the English subtitles and the moments worth listening to) and what the job had at
+the review, so the review page can open on the finished dub and dub it again with
+the user's changes without redoing the analysis. The Queue page lists
 these dubs; on the check screen the user either keeps the dub (the set-aside
 original and the check files are deleted), puts the original back, or puts it
 back and dubs again with a review.
@@ -41,7 +43,7 @@ def prepare(job, rec: dict) -> dict:
     src = aside if aside.name and aside.exists() and delivered.get("set_aside_kind") == "original" else job.src
     pre = work / "review" / "preview.mp4"
     if pre.exists():
-        shutil.move(str(pre), d / "preview.mp4")
+        review._link(pre, d / "preview.mp4")
     else:
         review._preview(src, int(ing.get("audio_index", 1)), bool(ing.get("has_video", True)), d / "preview.mp4")
     if (work / "mix" / "dub.wav").exists():
@@ -55,8 +57,13 @@ def prepare(job, rec: dict) -> dict:
     meta = {"name": job.src.name, "duration": float(ing.get("duration", 0) or 0), "created": time.time(),
             "original": str(aside) if aside.name else "", "moments": moments(lines, float(ing.get("duration", 0) or 0))}
     (d / "meta.json").write_text(json.dumps(meta, ensure_ascii=False))
+    # What the job had when it reached the review stays until the check, so the review
+    # page can open on the finished dub and dub it again with changes; what was made
+    # after (takes, mixes) goes.
+    kept = review.kept_names(work)
+    keep = kept | {"review", "verify"} if kept else {"verify"}
     for p in work.iterdir():
-        if p.name != "verify":
+        if p.name not in keep:
             shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink(missing_ok=True)
     return meta
 
@@ -98,7 +105,7 @@ def pending(store: Store, work_root: Path) -> list[dict]:
         out.append({"id": j["id"], "name": meta.get("name", Path(j["path"]).name), "finished": j.get("finished"),
                     "moments": len(meta.get("moments", [])),
                     "original_size": orig.stat().st_size if orig.name and orig.exists() else 0,
-                    "check_size": sum(f.stat().st_size for f in d.rglob("*") if f.is_file())})
+                    "check_size": sum(f.stat().st_size for f in d.parent.rglob("*") if f.is_file())})
     out.sort(key=lambda x: -(x["finished"] or 0))
     return out
 
@@ -117,11 +124,25 @@ def view(store: Store, work_root: Path, jid: int) -> dict:
             "moments": meta.get("moments", []), "verify": rec.get("verify", ""),
             "original": {"path": str(orig), "exists": orig.exists() if orig.name else False,
                          "size": orig.stat().st_size if orig.name and orig.exists() else 0},
-            "qc": {k: (rec.get("qc") or {}).get(k) for k in ("fallback_rate", "dubbed_lines", "free_timing")}}
+            "qc": {k: (rec.get("qc") or {}).get(k) for k in ("fallback_rate", "dubbed_lines", "free_timing")},
+            "can_redub": review.can_redub(work_root / f"job-{jid}"),
+            "work_size": sum(f.stat().st_size for f in (work_root / f"job-{jid}").rglob("*") if f.is_file())}
 
 
 def _entry(store: Store, jid: int, kind: str = "original") -> dict | None:
     return next((o for o in store.originals() if o.get("job_id") == jid and o["kind"] == kind), None)
+
+
+def put_back(store: Store, jid: int) -> None:
+    """The set-aside original back under its own name; the dub is deleted."""
+    o = _entry(store, jid)
+    if not o:
+        raise ValueError("the original isn't set aside any more")
+    originals.restore(store, o["id"])
+    dub = _entry(store, jid, "dubbed") or next(
+        (x for x in store.originals() if x["kind"] == "dubbed" and x["live_path"] == o["live_path"]), None)
+    if dub:
+        originals.delete(store, [dub["id"]])
 
 
 def verdict(svc, jid: int, choice: str) -> dict:
@@ -142,14 +163,7 @@ def verdict(svc, jid: int, choice: str) -> dict:
         rec["verify"] = "good"
         msg = f"kept the dub; deleted the original ({freed / 1e9:.2f} GB) and the check files"
     elif choice in ("restore", "redo"):
-        o = _entry(store, jid)
-        if not o:
-            raise ValueError("the original isn't set aside any more")
-        originals.restore(store, o["id"])
-        dub = _entry(store, jid, "dubbed") or next(
-            (x for x in store.originals() if x["kind"] == "dubbed" and x["live_path"] == o["live_path"]), None)
-        if dub:
-            originals.delete(store, [dub["id"]])
+        put_back(store, jid)
         shutil.rmtree(work, ignore_errors=True)
         rec["verify"] = "restored" if choice == "restore" else "redo"
         msg = "put the original back; the dub is deleted"

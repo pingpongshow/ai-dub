@@ -137,8 +137,8 @@ async function pageReview(id) {
 function rvShell() {
   const d = RV.data, base = `/api/jobs/${RV.id}/review/media/`;
   const nLook = d.flags.length;
-  const statusChip = d.editable ? `<span class="chip keep">Waiting for review</span>`
-    : `<span class="chip plain">${esc(d.job.status)}</span>`;
+  const statusChip = d.redub ? `<span class="chip dub">Dubbed: change anything, then redub</span>`
+    : d.editable ? `<span class="chip keep">Waiting for review</span>` : `<span class="chip plain">${esc(d.job.status)}</span>`;
   main.innerHTML = `
   <div class="rv ${d.editable ? "editable" : ""}">
     <div class="rv-title">
@@ -146,9 +146,13 @@ function rvShell() {
       ${statusChip}${nLook ? `<span class="chip look">${nLook} to check</span>` : `<span class="chip dub">Nothing flagged</span>`}
       <span class="grow"></span>
       ${d.editable ? `<button id="rvDiscard">Discard my changes</button><button id="rvSave">${RV.dirty ? "Save" : "Saved"}</button>
-        <button class="primary" id="rvStart">Start dubbing ›</button>` : ""}
+        ${d.redub ? `<a class="button" href="#verify/${RV.id}">Check page</a><button class="primary" id="rvRedub" title="Put the original back and dub again from here with your changes">Redub with these changes ›</button>`
+          : `<button class="primary" id="rvStart">Start dubbing ›</button>`}` : ""}
+      ${d.can_hold ? `<button class="primary" id="rvHold" title="The job stops here before anything is translated">Stop for review</button>` : ""}
     </div>
-    ${d.editable ? "" : `<div class="rv-note">This job isn't waiting for review, so you can look but not change anything. Set "Review before dubbing" to Always when adding a file to stop here.</div>`}
+    ${d.redub ? `<div class="rv-note">This episode is dubbed. Everything here can still be changed: <b>Redub with these changes</b> puts the original back and dubs again from this point, keeping the analysis (no need to wait for it again). Hear <b>Dub</b> to listen to the current dub.</div>`
+      : d.editable ? "" : d.can_hold ? `<div class="rv-note">You can look now. To change anything before it's dubbed, press <b>Stop for review</b>: the job pauses here even with nothing flagged.</div>`
+      : `<div class="rv-note">This job is past its review step, so you can look but not change anything yet. Once it's dubbed, open the review again from its check page to change anything and redub.</div>`}
     <div class="rv-body">
       <div class="rv-left">
         <div class="rv-video">
@@ -161,13 +165,14 @@ function rvShell() {
         </div>
         <audio id="rvVoices" preload="auto" src="${base}voices.m4a"></audio>
         <audio id="rvMusic" preload="auto" src="${base}music.m4a"></audio>
+        ${d.redub ? `<audio id="rvDub" preload="auto" src="/api/jobs/${RV.id}/verify/media/dub.m4a"></audio>` : ""}
         <div class="rv-transport">
           <button class="play" id="rvPlay" title="Play / pause (Space)">▶</button>
           <button id="rvBack" title="Back 5 s (Shift+←)">−5 s</button><button id="rvFwd" title="Forward 5 s (Shift+→)">+5 s</button>
           <span class="rv-time" id="rvTime">0:00.0 / ${fmtT(d.duration, false)}</span>
           <span class="grow" style="flex:1"></span>
           <span class="muted small">Hear</span>
-          <div class="seg" id="rvHear"><button data-v="orig" class="on">Original</button><button data-v="voices">Voices only</button><button data-v="music">Music only</button></div>
+          <div class="seg" id="rvHear">${d.redub ? `<button data-v="dub">Dub</button>` : ""}<button data-v="orig" class="on">Original</button><button data-v="voices">Voices only</button><button data-v="music">Music only</button></div>
           <div class="seg" id="rvRate"><button data-v="0.75">0.75×</button><button data-v="1" class="on">1×</button><button data-v="1.5">1.5×</button></div>
           <div class="seg" id="rvSubs"><button data-v="en" class="on">English subs</button><button data-v="both">+ Japanese</button><button data-v="none">Off</button></div>
         </div>
@@ -231,6 +236,10 @@ function rvMedia() {
       const d = await api(`/jobs/${RV.id}/review`).catch(() => null);
       if (d && d.media) { RV.data.media = d.media; rvMedia(); }
     }, 4000);
+  } else if (st.state !== "failed" && RV.data.redub && !RV.autoMedia) {
+    RV.autoMedia = true;  // a finished dub: its preview is already made, the rest takes a minute
+    api(`/jobs/${RV.id}/review/media`, { body: {} }).then((m) => { RV.data.media = m; rvMedia(); }).catch((e) => toast(e.message));
+    wait.innerHTML = `<div>Preparing the review audio… this takes a minute.</div>`;
   } else {
     wait.innerHTML = `<div>${st.state === "failed" ? `The preview couldn't be made: ${esc(st.error || "")}` : "No preview video yet."}</div>
       <div><button class="primary" id="rvPrep">Prepare preview</button></div>`;
@@ -259,7 +268,7 @@ function rvSeek(t) {
 }
 function rvNow() { const v = $("#rvv"); return v && v.readyState ? v.currentTime : (RV.t || 0); }
 function rvSync(force) {
-  const v = $("#rvv"), aud = { voices: $("#rvVoices"), music: $("#rvMusic") };
+  const v = $("#rvv"), aud = { voices: $("#rvVoices"), music: $("#rvMusic"), dub: $("#rvDub") };
   for (const [k, a] of Object.entries(aud)) {
     if (!a) continue;
     if (RV.hear !== k) { if (!a.paused) a.pause(); continue; }
@@ -817,7 +826,8 @@ function rvWire() {
   if ($("#rvMark")) $("#rvMark").onclick = () => rvMarkKey();
   if (d.editable) {
     $("#rvSave").onclick = () => rvSave(false);
-    $("#rvStart").onclick = () => rvSave(true);
+    if ($("#rvStart")) $("#rvStart").onclick = () => rvSave(true);
+    if ($("#rvRedub")) $("#rvRedub").onclick = () => rvRedub();
     $("#rvDiscard").onclick = async () => {
       if (!confirm("Go back to Ai Dub's own decisions for this episode? Your marks and choices here are cleared. (Speaker names and merges are kept: they belong to the show.)")) return;
       await api(`/jobs/${RV.id}/review`, { method: "PUT", body: { regions: [], cues: {}, lines: {} } });
@@ -826,6 +836,14 @@ function rvWire() {
       rvShell(); rvMedia(); rvList(); rvInspector(); rvDraw();
     };
   }
+  if ($("#rvHold")) $("#rvHold").onclick = async () => {
+    try {
+      const r = await api(`/jobs/${RV.id}/review/hold`, { body: {} });
+      toast(`Will stop for review: ${r.message}`);
+      RV.data = await api(`/jobs/${RV.id}/review`);
+      rvShell(); rvMedia(); rvList(); rvInspector(); rvDraw();
+    } catch (e) { toast(e.message); }
+  };
   fetch(`/api/jobs/${RV.id}/review/media/peaks.json`).then((r) => (r.ok ? r.json() : null)).then((p) => { RV.peaks = p; rvDraw(); }).catch(() => {});
   rvTimelineWire();
   window.onresize = () => rvDraw();
@@ -844,6 +862,17 @@ function rvLoop() {
   if (RV.follow && (t > RV.view[1] || t < RV.view[0])) rvKeepInView(t);
   rvDraw();
   requestAnimationFrame(rvLoop);
+}
+async function rvRedub() {
+  const n = Object.keys(RV.dec.cues).length + RV.dec.regions.filter((r) => r.source !== "hidden").length + Object.keys(RV.dec.lines).length;
+  if (!confirm(`Put the original back, delete this dub and dub the episode again${n ? ` with your ${n} change${n === 1 ? "" : "s"}` : ""}? `
+    + "The analysis is kept, so it starts from translating.")) return;
+  try {
+    const r = await api(`/jobs/${RV.id}/review/redub`, { body: decisionsOut() });
+    RV.dirty = false;
+    toast(r.message || "Dubbing again");
+    location.hash = "#queue";
+  } catch (e) { toast(e.message); }
 }
 async function rvSave(start) {
   try {

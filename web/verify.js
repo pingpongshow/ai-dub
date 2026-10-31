@@ -8,7 +8,7 @@ async function pageVerify(id) {
   main.classList.add("wide");
   const d = await api(`/jobs/${id}/verify`);
   if (!d.ready) {
-    const done = { good: "You kept this dub; its original and check files are deleted.", restored: "The original is back; the dub was deleted.",
+    const done = { good: "You kept this dub; its original and working files are deleted.", restored: "The original is back; the dub was deleted.",
       redo: "The original is back and the episode is queued again with a review." }[d.verify];
     main.innerHTML = `<p><a href="#queue">← Queue</a></p><div class="panel"><h2>${esc(d.name)}</h2>
       <p class="muted">${esc(done || "There's nothing to check for this job: its check files aren't there.")}</p></div>`;
@@ -23,7 +23,8 @@ async function pageVerify(id) {
       <div class="crumbs"><a href="#queue">Queue</a> › <b>${esc(d.name)}</b></div>
       <span class="chip keep">Dubbed: not checked yet</span>
       <span class="grow"></span>
-      <button id="vfRedo" title="Put the original back and queue the episode again, stopping for review">Redo with review</button>
+      ${d.can_redub ? `<a class="button" href="#review/${id}" title="Open the full review page: change songs, subtitles or voices, then redub from there (the analysis is kept)">Review and change…</a>`
+        : `<button id="vfRedo" title="Put the original back and queue the episode again, stopping for review">Redo with review</button>`}
       <button id="vfRestore">Put the original back</button>
       <button class="primary" id="vfGood">Looks good: delete the original</button>
     </div>
@@ -64,8 +65,11 @@ async function pageVerify(id) {
             <span class="lab">Dubbed lines</span><span>${d.qc.dubbed_lines ?? "?"}${d.qc.fallback_rate != null ? ` · ${(d.qc.fallback_rate * 100).toFixed(1)} % left in Japanese` : ""}</span>
             ${d.qc.free_timing ? `<span class="lab">Timing</span><span>latest start ${d.qc.free_timing.max_wait_s} s after its original</span>` : ""}
           </div>
-          <p class="muted small" style="margin:8px 0 0"><b>Looks good</b> deletes the original and these check files, for good.
-            <b>Put the original back</b> deletes the dub instead. <b>Redo with review</b> puts the original back and dubs again, stopping for review first.</p>
+          ${d.can_redub ? `<div class="grid" style="margin-top:6px"><span class="lab">Working files</span><span>${gbs(d.work_size)}, kept so you can change and redub</span></div>` : ""}
+          <p class="muted small" style="margin:8px 0 0"><b>Looks good</b> deletes the original and the working files, for good.
+            <b>Put the original back</b> deletes the dub instead. ${d.can_redub
+              ? "<b>Review and change</b> opens the full review page, even if nothing was flagged; redub from there with your changes."
+              : "<b>Redo with review</b> puts the original back and dubs again, stopping for review first."}</p>
         </div>
       </div>
     </div>
@@ -155,9 +159,9 @@ function vfWire() {
       location.hash = "#queue";
     } catch (e) { toast(e.message); }
   };
-  $("#vfGood").onclick = () => decide("good", `Keep this dub and permanently delete the original${d.original.exists ? ` (${(d.original.size / 1e9).toFixed(2)} GB)` : ""} and the check files? This can't be undone.`, "Kept");
+  $("#vfGood").onclick = () => decide("good", `Keep this dub and permanently delete the original${d.original.exists ? ` (${(d.original.size / 1e9).toFixed(2)} GB)` : ""} and the working files? This can't be undone.`, "Kept");
   $("#vfRestore").onclick = () => decide("restore", "Put the original back and delete this dub?", "Original put back");
-  $("#vfRedo").onclick = () => decide("redo", "Put the original back, delete this dub, and dub the episode again (stopping for review first)?", "Queued again");
+  if ($("#vfRedo")) $("#vfRedo").onclick = () => decide("redo", "Put the original back, delete this dub, and dub the episode again (stopping for review first)?", "Queued again");
   window.onresize = () => vfDraw();
 }
 document.addEventListener("keydown", (ev) => {

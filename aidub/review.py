@@ -16,6 +16,7 @@ Files, in the job's working folder under review/:
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -87,7 +88,53 @@ def _set_media(work: Path, **st) -> None:
 
 
 # The pipeline step ----------------------------------------------------------------------------
+BASE = "base-lines.json"   # the lines as they reached the review, before any decision was applied
+KEPT = "kept.json"         # what the working folder held then: kept after the dub, for a redub
+
+
+def snapshot(work: Path) -> None:
+    """Remember the lines and the working files as they reach the review, once, so a
+    finished dub can be reviewed and dubbed again from here without redoing the analysis."""
+    d = folder(work)
+    if (d / BASE).exists():
+        return
+    shutil.copyfile(work / "lines.json", d / BASE)
+    (d / KEPT).write_text(json.dumps(sorted(p.name for p in work.iterdir() if p.name not in ("review", "verify"))))
+
+
+def kept_names(work: Path) -> set[str] | None:
+    f = work / "review" / KEPT
+    return set(json.loads(f.read_text())) if f.exists() else None
+
+
+def can_redub(work: Path) -> bool:
+    return (work / "review" / BASE).exists() and (work / "review" / KEPT).exists() and (work / "state.json").exists()
+
+
+def reset_for_redub(work: Path, live: Path) -> None:
+    """Back to the moment the job reached the review: the lines as they were, everything
+    made after it deleted, the analysis kept. The original is back at `live` by now."""
+    from .pipeline import STEP_NAMES
+    keep = kept_names(work) or set()
+    for p in work.iterdir():
+        if p.name not in keep and p.name != "review":
+            shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink(missing_ok=True)
+    shutil.copyfile(work / "review" / BASE, work / "lines.json")
+    f = work / "state.json"
+    st = json.loads(f.read_text())
+    st["done"] = [s for s in st.get("done", []) if s in STEP_NAMES[:STEP_NAMES.index("review")]]
+    data = st.setdefault("data", {})
+    for k in ("deliver_swap", "delivered"):
+        data.pop(k, None)
+    if data.get("ingest"):
+        data["ingest"]["source"] = str(live)
+    tmp = f.with_suffix(".tmp")
+    tmp.write_text(json.dumps(st, ensure_ascii=False))
+    tmp.replace(f)
+
+
 def run(job: Job) -> None:
+    snapshot(job.work)
     lines = L.load(job.path("lines.json"))
     d = load_decisions(job.work)
     if d.get("started"):
@@ -327,8 +374,13 @@ def cue_key(q) -> str:
 def view(cfg, row: dict, prof) -> dict:
     """Everything the review page shows, read from the job's working folder."""
     work = cfg.work / f"job-{row['id']}"
+    rec = row.get("record") or {}
+    redub = row["status"] == "done" and rec.get("verify") == "pending" and can_redub(work)
+    before = row["status"] in ("queued", "running", "waiting") and (row.get("options") or {}).get("review") != "always" \
+        and not (row.get("step") or "") in _after_review()
     base = {"job": {k: row.get(k) for k in ("id", "path", "status", "message", "step", "profile")},
-            "name": Path(row["path"]).name, "editable": row["status"] == "review"}
+            "name": Path(row["path"]).name, "editable": row["status"] == "review" or redub, "redub": redub,
+            "can_hold": before}
     if not (work / "lines.json").exists():
         return {**base, "ready": False, "why": "Ai Dub hasn't worked out the lines of this episode yet."}
     job = Job(cfg, row["id"], Path(row["path"]), prof, row.get("options") or {})
@@ -354,6 +406,11 @@ def view(cfg, row: dict, prof) -> dict:
             "regions": regions(lines, duration), "flags": flags, "speakers": speakers,
             "decisions": load_decisions(work), "media": media_status(work),
             "rules": (prof.data.get("rules") or {}) if prof else {}}
+
+
+def _after_review() -> set[str]:
+    from .pipeline import STEP_NAMES
+    return set(STEP_NAMES[STEP_NAMES.index("review"):])
 
 
 def _speakers(prof, lines: list[L.Line]) -> list[dict]:
@@ -402,13 +459,25 @@ def build_media(work: Path, data: dict, status=lambda *a, **k: None) -> dict:
                 media.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", group[key], "-ac", "2", "-c:a", "aac",
                            "-b:a", "96k", "-movflags", "+faststart", str(d / name)])
         status("review: preview video")
-        _preview(src, int(ing.get("audio_index", 1)), bool(ing.get("has_video", True)), d / "preview.mp4")
+        done = work / "verify" / "preview.mp4"  # a finished dub's check already has it
+        if done.exists():
+            _link(done, d / "preview.mp4")
+        else:
+            _preview(src, int(ing.get("audio_index", 1)), bool(ing.get("has_video", True)), d / "preview.mp4")
         _set_media(work, state="ready")
     except Exception as exc:
         _set_media(work, state="failed", error=str(exc)[:500])
     finally:
         _building.discard(str(work))
     return media_status(work)
+
+
+def _link(a: Path, b: Path) -> None:
+    b.unlink(missing_ok=True)
+    try:
+        os.link(a, b)
+    except OSError:
+        shutil.copyfile(a, b)
 
 
 def _preview(src: Path, audio_index: int, has_video: bool, out: Path) -> None:

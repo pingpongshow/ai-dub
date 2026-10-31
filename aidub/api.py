@@ -193,6 +193,24 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
             bad(409, str(exc))
         return {"ok": True}
 
+    @app.post("/api/jobs/{jid}/review/redub")
+    def review_redub(jid: int, body: dict = Body(...)):
+        try:
+            return {"ok": True, "message": svc.review_redub(jid, body)}
+        except KeyError:
+            bad(404, "no such job")
+        except (ValueError, OSError) as exc:
+            bad(409, str(exc))
+
+    @app.post("/api/jobs/{jid}/review/hold")
+    def review_hold(jid: int):
+        try:
+            return {"ok": True, "message": svc.review_hold(jid)}
+        except KeyError:
+            bad(404, "no such job")
+        except ValueError as exc:
+            bad(409, str(exc))
+
     @app.post("/api/jobs/{jid}/review/media")
     def review_media(jid: int):
         try:

@@ -141,9 +141,11 @@ async function loadChecks() {
       <tr><th>Episode</th><th>Finished</th><th>To listen to</th><th>Original</th><th></th></tr>
       ${items.map((x) => `<tr><td style="overflow-wrap:anywhere">${esc(x.name)}</td><td class="small">${when(x.finished)}</td>
         <td class="small">${x.moments} moment${x.moments === 1 ? "" : "s"}</td><td class="small">${gb(x.original_size)} set aside</td>
-        <td><a class="button primary" href="#verify/${x.id}">Check</a></td></tr>`).join("")}</table>
-      <p class="small muted" style="margin:8px 0 0">Listen to each dub; keep it to delete its original and check files, or put the original back.</p></div>` : "";
+        <td><div class="row"><a class="button primary" href="#verify/${x.id}">Check</a><a class="button" href="#review/${x.id}" title="The full review page: change anything and redub">Review</a></div></td></tr>`).join("")}</table>
+      <p class="small muted" style="margin:8px 0 0">Listen to each dub; keep it to delete its original and working files, put the original back, or open its review to change anything and redub.</p></div>` : "";
 }
+
+const AFTER_REVIEW = ["review", "translate", "speak", "check", "finalize", "condense", "bwe", "mix", "deliver"];
 
 async function loadQueue() {
   const jobs = await api("/jobs?view=queue");
@@ -160,6 +162,9 @@ async function loadQueue() {
         ${j.status !== "queued" && j.status !== "review" ? `<div class="progress"><div style="width:${pct}%"></div></div>` : ""}</div>
       <div class="row">
         ${j.status === "review" ? `<a class="button primary" href="#review/${j.id}">Review</a>` : j.status === "running" ? `<a class="button" href="#review/${j.id}" title="See what Ai Dub has decided so far">Look</a>` : ""}
+        ${["queued", "running", "waiting"].includes(j.status) && !AFTER_REVIEW.includes(j.step || "") ? ((j.options || {}).review === "always"
+          ? `<span class="tag">will stop for review</span>`
+          : `<button data-act="hold" title="Pause this job at its review step, even if nothing is flagged">Stop for review</button>`) : ""}
         ${j.status === "queued" ? `<button data-act="up" ${i === 0 ? "disabled" : ""}>↑</button><button data-act="down">↓</button>` : ""}
         <button data-act="log">Log</button>
         <button class="danger" data-act="cancel">${j.status === "queued" || j.status === "review" ? "Remove" : "Cancel"}</button>
@@ -172,6 +177,7 @@ async function loadQueue() {
       const act = b.dataset.act;
       if (act === "up" || act === "down") await api(`/jobs/${id}/move`, { body: { direction: act === "up" ? -1 : 1 } });
       if (act === "cancel") { if (!confirm("Cancel this job? Its working files are deleted.")) return; await api(`/jobs/${id}`, { method: "DELETE" }); }
+      if (act === "hold") { try { await api(`/jobs/${id}/review/hold`, { body: {} }); toast("It will stop for review before anything is translated"); } catch (e) { toast(e.message); } }
       if (act === "log") { const pre = $("pre.log", b.closest(".job")); pre.hidden = !pre.hidden; pre.textContent = await api(`/jobs/${id}/log`); return; }
       loadQueue();
     };

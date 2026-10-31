@@ -129,12 +129,57 @@ class Service:
         j = self.store.get(jid)
         if not j:
             raise KeyError(jid)
+        work = self.cfg.work / f"job-{jid}"
+        if j["status"] == J.DONE and (j.get("record") or {}).get("verify") == "pending" and review.can_redub(work):
+            if start:
+                raise ValueError("this dub is finished: redub it with the changes instead")
+            review.save_decisions(work, {**decisions, "started": True})
+            return
         if j["status"] != J.REVIEW:
             raise ValueError("this job isn't waiting for review")
-        review.save_decisions(self.cfg.work / f"job-{jid}", {**decisions, "started": start})
+        review.save_decisions(work, {**decisions, "started": start})
         if start:
             self.store.requeue_front(jid)
             self._wake.set()
+
+    def review_redub(self, jid: int, decisions: dict) -> str:
+        """Dub a finished episode again with the review's changes: the original goes back,
+        the job returns to its review step (the analysis is kept) and continues from there."""
+        from . import review, verify
+        j = self.store.get(jid)
+        if not j:
+            raise KeyError(jid)
+        work = self.cfg.work / f"job-{jid}"
+        rec = j.get("record") or {}
+        if j["status"] != J.DONE or rec.get("verify") != "pending" or not review.can_redub(work):
+            raise ValueError("this dub can't be redone from its review (its working files are gone)")
+        if self.store.active_for(j["path"]):
+            raise ValueError("this file is already in the queue")
+        review.save_decisions(work, {**decisions, "started": True})
+        verify.put_back(self.store, jid)
+        review.reset_for_redub(work, Path(j["path"]))
+        rec["verify"] = ""
+        rec["redubbed"] = rec.get("redubbed", 0) + 1
+        self.store.update(jid, record=rec, finished=None, progress=0)
+        self.store.requeue_front(jid)
+        self.store.update(jid, message="dubbing again with your review changes")
+        self._wake.set()
+        return "the original is back; dubbing again with your changes"
+
+    def review_hold(self, jid: int) -> str:
+        """Stop a queued or running job at its review step, even with nothing flagged."""
+        from . import review
+        j = self.store.get(jid)
+        if not j:
+            raise KeyError(jid)
+        if j["status"] not in (J.QUEUED, J.RUNNING, J.WAITING) or (j.get("step") or "") in review._after_review():
+            raise ValueError("this job is already past its review step; once it's done, review it and redub")
+        opts = {**(j.get("options") or {}), "review": "always"}
+        self.store.update(jid, options=opts)
+        cur = self._current
+        if cur is not None and str(cur.id) == str(jid):
+            cur.options["review"] = "always"
+        return "it will stop for review before anything is translated"
 
     def review_media(self, jid: int) -> dict:
         from . import review

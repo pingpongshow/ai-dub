@@ -182,7 +182,9 @@ def test_review_pauses_shows_and_applies_choices(client, cfg, media_root):
     job = svc.store.get(jid)
     assert job["status"] == J.DONE, job["message"]
     assert job["record"]["qc"]["review"]["changes"] >= 1
-    # Once done, decisions can't be changed.
+    # Once done, the review stays open for changes and a redub, until the dub is kept.
+    assert c.get(f"/api/jobs/{jid}/review").json()["redub"]
+    assert c.post(f"/api/jobs/{jid}/verify", json={"verdict": "good"}).status_code == 200
     assert c.put(f"/api/jobs/{jid}/review", json=choice).status_code in (404, 409)
 
 
@@ -212,9 +214,10 @@ def test_check_a_finished_dub_then_keep_it_or_put_the_original_back(client, cfg,
     assert sorted(p["id"] for p in pending) == sorted(ids) and all(p["original_size"] > 0 for p in pending)
     v = c.get(f"/api/jobs/{ids[0]}/verify").json()
     assert v["ready"] and v["original"]["exists"] and v["duration"] > 10
-    # Only the check files are left of the working folder, and they play.
+    # The check files and what the job had at its review are left (for a redub); what
+    # was made after it (voiced takes, the mix) is gone. The check files play.
     left = {p.name for p in (cfg.work / f"job-{ids[0]}").iterdir()}
-    assert left == {"verify"}
+    assert {"verify", "review", "lines.json", "state.json", "audio"} <= left and not {"mix", "deliver"} & left
     r = c.get(f"/api/jobs/{ids[0]}/verify/media/preview.mp4", headers={"Range": "bytes=0-9"})
     assert r.status_code == 206 and c.get(f"/api/jobs/{ids[0]}/verify/media/dub.m4a").status_code == 200
     # Good: the original and the check files go, the dub stays.
@@ -227,3 +230,51 @@ def test_check_a_finished_dub_then_keep_it_or_put_the_original_back(client, cfg,
     assert not originals.aside_name(eps[1]).exists() and not originals.aside_name(eps[1], "dubbed").exists()
     assert c.get("/api/verify").json() == []
     assert c.post(f"/api/jobs/{ids[1]}/verify", json={"verdict": "maybe"}).status_code == 409
+
+
+def test_review_a_finished_dub_and_redub_it_with_changes(client, cfg, media_root):
+    import hashlib
+    from aidub import jobs as J, originals
+    c, svc = client
+    ep = synth.episode(media_root / "Redub Show - S01E01.mkv")
+    digest = hashlib.sha256(ep.read_bytes()).hexdigest()
+    jid = c.post("/api/jobs", json={"paths": [str(ep)], "review": "off"}).json()["added"][0]
+    svc.run_one(svc.store.next_queued())
+    assert svc.store.get(jid)["status"] == J.DONE
+    assert c.get(f"/api/jobs/{jid}/verify").json()["can_redub"]
+    # Nothing was flagged and it never stopped, yet the whole review page opens and can be changed.
+    r = c.get(f"/api/jobs/{jid}/review").json()
+    assert r["ready"] and r["editable"] and r["redub"] and r["lines"]
+    assert c.post(f"/api/jobs/{jid}/review/media", json={}).status_code == 200
+    first = next(ln for ln in r["lines"] if ln["kind"] == "speech")
+    choice = {"regions": [{"start": first["start"] - 0.05, "end": first["end"] + 0.05, "kind": "song",
+                           "action": "keep", "source": "user"}], "cues": {}, "lines": {}}
+    assert c.put(f"/api/jobs/{jid}/review", json=choice).status_code == 200
+    assert c.post(f"/api/jobs/{jid}/review/start", json=choice).status_code == 409   # a finished dub redubs
+    assert c.post(f"/api/jobs/{jid}/review/redub", json=choice).status_code == 200
+    # The original is back, the job is queued again from its review step.
+    j = svc.store.get(jid)
+    assert j["status"] == J.QUEUED and not originals.aside_name(ep).exists()
+    assert hashlib.sha256(ep.read_bytes()).hexdigest() == digest
+    state = __import__("json").loads((cfg.work / f"job-{jid}" / "state.json").read_text())
+    assert "voicebank" in state["done"] and "review" not in state["done"] and "translate" not in state["done"]
+    svc.run_one(svc.store.next_queued())
+    j = svc.store.get(jid)
+    assert j["status"] == J.DONE, j["message"]
+    assert j["record"]["qc"]["review"]["changes"] >= 1 and j["record"]["verify"] == "pending"
+    assert originals.aside_name(ep).exists()                       # the original set aside again
+    assert any(s.title == "English (AI dub)" for s in __import__("aidub.media", fromlist=["probe"]).probe(ep).audio)
+    assert c.post(f"/api/jobs/{jid}/verify", json={"verdict": "good"}).status_code == 200
+    assert c.post(f"/api/jobs/{jid}/review/redub", json=choice).status_code == 409   # nothing left to redub
+
+
+def test_stop_for_review_with_nothing_flagged(client, cfg, media_root):
+    from aidub import jobs as J
+    c, svc = client
+    ep = synth.episode(media_root / "Hold Show - S01E01.mkv")
+    jid = c.post("/api/jobs", json={"paths": [str(ep)], "review": "off"}).json()["added"][0]
+    assert c.post(f"/api/jobs/{jid}/review/hold", json={}).status_code == 200
+    assert svc.store.get(jid)["options"]["review"] == "always"
+    svc.run_one(svc.store.next_queued())
+    assert svc.store.get(jid)["status"] == J.REVIEW
+    assert c.post(f"/api/jobs/{jid}/review/hold", json={}).status_code == 409    # already there
