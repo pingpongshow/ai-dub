@@ -762,8 +762,9 @@ def mark_singing(job: Job, lines: list[L.Line]) -> None:
 
 def recurring_titles(job: Job, lines: list[L.Line]) -> None:
     """The opening and ending this episode shares with its siblings (aidub.recurring) keep
-    the original, all but spoken lines with a dialogue subtitle (a narrator's intro that
-    is the same every episode is still dubbed)."""
+    the original, all but lines with a dialogue subtitle: a narrator's intro that is the
+    same every episode is still dubbed, and a subtitled line that sounds sung is left to
+    the lyrics check (narration starting the moment the theme ends sits in its notes)."""
     if not job.cfg.get("songs.match_episodes", True) or not job.profile:
         return
     try:
@@ -778,7 +779,7 @@ def recurring_titles(job: Job, lines: list[L.Line]) -> None:
     for ln in lines:
         if ln.kind != L.SPEECH or not _in_ranges(ln.start, ln.end, spans):
             continue
-        if _subtitled(ln, cues) and not sung_candidate(ln):
+        if _subtitled(ln, cues):
             continue
         ln.kind = L.SONG
         kept += 1
