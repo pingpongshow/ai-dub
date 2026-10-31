@@ -4,8 +4,8 @@
   "https://download.pytorch.org/whl/cu128"
  ],
  "index_strategy": "unsafe-best-match",
- "title": "Laughs, cries, music, emotion",
- "models": "SenseVoice-Small",
- "licence": "FunASR model licence",
+ "title": "Laughs, cries, music, emotion, voice pitch",
+ "models": "SenseVoice-Small, FCPE pitch",
+ "licence": "FunASR model licence; FCPE MIT",
  "download": "~1 GB"
 }

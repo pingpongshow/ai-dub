@@ -754,6 +754,71 @@ def _collect(reply: str, ids: set[int] | None = None) -> dict[int, dict]:
     return out
 
 
+LYRICS_SYSTEM = "You tell song lyrics from spoken lines in the subtitles of a film or TV episode. Answer with JSON only."
+LYRICS_RUN_GAP_S = 20.0
+
+
+def lyrics_prompt(run: list[L.Line], before: list[L.Line], after: list[L.Line], cues: list) -> list[dict]:
+    def english(ln):
+        if ln.english_ref:
+            return ln.english_ref
+        return " ".join(q.text for q in cues if min(q.end, ln.end) - max(q.start, ln.start) > 0.3 * ln.duration)
+
+    def show(ls):
+        return "\n".join(f"- {english(x) or '(no subtitle)'} [{x.source_text}]" for x in ls) or "(none)"
+    items = [{"id": ln.id, "original": ln.source_text, "english": english(ln)} for ln in run]
+    return [{"role": "system", "content": LYRICS_SYSTEM},
+            {"role": "user", "content":
+             "In this stretch of an episode a voice holds notes over music, which may be singing. For each line, "
+             "decide whether it is sung (the lyrics of a song being performed or playing) or spoken (dialogue, "
+             "narration, an announcer, a phone call, someone talking over the song). Lyrics read like verse: "
+             "imagery, refrains, lines that answer no one. Spoken lines talk to someone or about what is happening. "
+             "The lines around them are context only.\n\n"
+             f"Before:\n{show(before)}\n\nLines:\n{json.dumps(items, ensure_ascii=False, indent=1)}\n\n"
+             f"After:\n{show(after)}\n\n"
+             'Answer: {"lines": [{"id": <id>, "sung": true or false}]}'}]
+
+
+def lyrics_check(job: Job, llm: "LLM", lines: list[L.Line], cues: list) -> int:
+    """Lines that sound sung (held notes over music, aidub.align.mark_singing) but have
+    text to read: the translation model reads them with their neighbours and says
+    which are lyrics. Those keep the original voice; a line spoken over a song is
+    still dubbed. An answer that can't be read leaves the lines as songs."""
+    from .align import sung_candidate
+    todo = [ln for ln in lines if sung_candidate(ln)]
+    if not todo or not job.cfg.get("songs.lyrics_check", True):
+        return 0
+    runs: list[list[L.Line]] = []
+    for ln in sorted(todo, key=lambda l: l.start):
+        if runs and ln.start - runs[-1][-1].end <= LYRICS_RUN_GAP_S:
+            runs[-1].append(ln)
+        else:
+            runs.append([ln])
+    speech = sorted((l for l in lines if l.kind == L.SPEECH), key=lambda l: l.start)
+    prompts = []
+    for run in runs:
+        ids = {l.id for l in run}
+        before = [l for l in speech if l.end <= run[0].start and l.id not in ids][-3:]
+        after = [l for l in speech if l.start >= run[-1].end and l.id not in ids][:3]
+        prompts.append(lyrics_prompt(run, before, after, cues))
+    sung = spoken = 0
+    for run, reply in zip(runs, llm.chat_many(prompts, max_tokens=1024)):
+        try:
+            said = {int(x["id"]): bool(x.get("sung")) for x in parse_json(reply).get("lines", []) if isinstance(x, dict)}
+        except Exception:
+            said = {}
+        for ln in run:
+            if said.get(ln.id, True):
+                ln.kind = L.SONG
+                ln.check_note = "lyrics (held notes over music, and the words read as a song)"
+                sung += 1
+            else:
+                spoken += 1
+    job.qc["lyrics_check"] = {"sung": sung, "spoken": spoken}
+    job.log(f"lyrics check: {sung} lines are lyrics, {spoken} spoken over music")
+    return sung
+
+
 def run(job: Job) -> None:
     prof: Profile = job.profile
     lines = L.load(job.path("lines.json"))
@@ -790,8 +855,6 @@ def run(job: Job) -> None:
     free = free_timing(job)  # (auto timing follows the lead actually used)
     script = lead_by in SCRIPT_LEADS
     word_for_word = lead_by == VERBATIM_LEAD
-    batches = [b for b in ([l for l in b if not l.fallback] for b in _batches(lines, windows)) if b]
-    shares = script_cues(cues, batches) if script else [[] for _ in batches]
     system = SCRIPT_SYSTEM if script else SYSTEM
 
     def prompt(b, p, c, share):
@@ -799,6 +862,10 @@ def run(job: Job) -> None:
                 else translate_prompt(b, p, c, None if free else rate, names, lead_by))
 
     with LLM(job) as llm:
+        from .subtitles.step import load_chosen
+        lyrics_check(job, llm, lines, cues or [q for q in load_chosen(job, "english") if q.text])
+        batches = [b for b in ([l for l in b if not l.fallback] for b in _batches(lines, windows)) if b]
+        shares = script_cues(cues, batches) if script else [[] for _ in batches]
         # Pass 1: every scene at once (the engine batches them); each scene sees
         # the end of the previous scene in the original language as context.
         drafts: dict[int, dict] = {}

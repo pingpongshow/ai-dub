@@ -151,8 +151,20 @@ def asr_ops():
 
 
 def events_ops():
+    def pitch(a):
+        # The test voices are steady tones; speech glides, so each tone is given a slow
+        # rise and fall (3 Hz, ±3 semitones) that no held-note test takes for singing.
+        x = read_mono(a["input"], 16000)
+        hop, win = 160, 640
+        f0 = np.zeros(max(0, (len(x) - win) // hop + 1), np.float32)
+        for i in range(f0.size):
+            seg = x[i * hop: i * hop + win]
+            if np.sqrt(np.mean(seg ** 2)) > 0.01:
+                f0[i] = dominant_freq(seg, 16000) * 2 ** (3 * np.sin(2 * np.pi * 3 * i * 0.01) / 12)
+        np.save(a["output"], f0)
+        return {"output": a["output"], "hop": 0.01, "frames": int(f0.size), "voiced": float(np.mean(f0 > 0))}
     return {"tag": lambda a: {"results": [{"language": "ja", "emotion": "NEUTRAL", "events": [], "text": ""}
-                                          for _ in a["segments"]]}}
+                                          for _ in a["segments"]]}, "pitch": pitch}
 
 
 def llm_ops():
@@ -160,6 +172,10 @@ def llm_ops():
         outs = []
         for conv in a["conversations"]:
             user = conv[-1]["content"]
+            if '"sung":' in user:  # lyrics check: everything is spoken dialogue
+                ids = re.findall(r'"id":\s*(\d+)', user)
+                outs.append(json.dumps({"lines": [{"id": int(i), "sung": False} for i in ids]}))
+                continue
             if '"notes"' in user:
                 outs.append(json.dumps({"notes": []}))
                 continue

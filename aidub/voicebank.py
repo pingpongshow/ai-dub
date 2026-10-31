@@ -15,7 +15,13 @@ import soundfile as sf
 from . import lines as L
 from . import media, speakers
 from .job import Job
+from .pitch import Pitch
 from .profiles import Profile
+
+PITCH_SHORT_S = 0.8     # shorter lines are too short for the voice and gender checks ...
+PITCH_OFF_ST = 9.0      # ... so one this far from its character's usual pitch ...
+PITCH_FIT_ST = 3.0      # ... goes to a character of the other gender this close to it ...
+PITCH_NEAR_S = 180.0    # ... heard within this long of the line
 
 
 def _bleed_db(dlg: np.ndarray, mne: np.ndarray) -> float:
@@ -330,12 +336,53 @@ def assign_voices(job: Job, prof: Profile, lines: list[L.Line], voices: dict[int
     job.qc["lines_voiced_from_own_audio"] = own + sum(1 for ln in lines if ln.voice_note == "own line as reference")
 
 
+def move_by_pitch(job: Job, prof: Profile, lines: list[L.Line]) -> int:
+    """Short replies the diarizer gave to the other person in a two-hander ("Uh? For
+    what?" in a man's voice, filed under the woman he talks to). Too short for the
+    voice and gender checks, they are told by pitch: a line an octave or so from its
+    character's usual pitch moves to the character of the other gender heard nearby
+    whose usual pitch it matches (the one heard most around it, if several do)."""
+    p = Pitch.load(job)
+    if p is None:
+        return 0
+    speech = [ln for ln in lines if ln.kind == L.SPEECH and ln.character]
+    med = {ln.id: p.median(ln.start, ln.end) for ln in speech}
+    per: dict[str, list[float]] = defaultdict(list)
+    for ln in speech:
+        if med[ln.id] is not None:
+            per[ln.character].append(med[ln.id])
+    usual = {c: float(np.median(v)) for c, v in per.items() if len(v) >= 3}
+    gender = {c: prof.characters.get(c, {}).get("gender", "") for c in usual}
+    everywhere = Counter(ln.character for ln in speech)
+    moved = 0
+    for ln in speech:
+        m, own = med[ln.id], usual.get(ln.character)
+        if m is None or own is None or ln.duration >= PITCH_SHORT_S or abs(m - own) < PITCH_OFF_ST:
+            continue
+        if not gender.get(ln.character):
+            continue
+        near = Counter(o.character for o in speech
+                       if o.character != ln.character and abs(o.start - ln.start) <= PITCH_NEAR_S
+                       and o.character in usual and abs(usual[o.character] - m) <= PITCH_FIT_ST
+                       and gender.get(o.character) and gender[o.character] != gender[ln.character])
+        if not near:
+            continue
+        best = max(near, key=lambda c: (near[c], everywhere[c], -abs(usual[c] - m)))
+        job.log(f"line {ln.id} at {ln.start:.1f} s ({ln.source_text[:20]}): pitch {m:.1f} st is "
+                f"{prof.characters[best].get('name', best)}'s, not {prof.characters[ln.character].get('name', ln.character)}'s")
+        ln.character, ln.voice_note = best, "moved by pitch"
+        moved += 1
+    job.qc["lines_moved_by_pitch"] = moved
+    return moved
+
+
 def run(job: Job) -> None:
     prof: Profile = job.profile
     lines = L.load(job.path("lines.json"))
     voices = line_voices(job, lines)
     mapping = link_characters(job, prof, lines, voices)
     update_refs(job, prof, mapping, lines, voices)
+    move_by_pitch(job, prof, lines)
     assign_voices(job, prof, lines, voices)
     if job.src.name not in prof.data.setdefault("episodes", []):
         prof.data["episodes"].append(job.src.name)

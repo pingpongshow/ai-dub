@@ -1,7 +1,11 @@
-"""Sound events, emotion and language per speech turn with SenseVoice-Small.
+"""Sound events, emotion and language per speech turn with SenseVoice-Small,
+and the voice's pitch over time with FCPE.
 
 SenseVoice labels one language, one emotion and one event per input, so it is
-run on each diarized turn separately (turns longer than 30 s are cut).
+run on each diarized turn separately (turns longer than 30 s are cut). FCPE (a
+pitch tracker made for singing voices, MIT) gives the pitch of the separated
+dialogue every 10 ms: held notes tell singing from speech, and how high a line
+sits tells whose voice it is.
 """
 
 import os
@@ -9,6 +13,7 @@ import re
 import tempfile
 from pathlib import Path
 
+import numpy as np
 import soundfile as sf
 
 from aidub_worker import device, read_mono, serve, torch_info
@@ -61,8 +66,33 @@ def tag(args):
     return {"results": out}
 
 
+def pitch(args):
+    """Pitch of `input` every 10 ms (Hz, 0 where unvoiced), saved to `output` (.npy)."""
+    import torch
+    from torchfcpe import spawn_bundled_infer_model
+    if "fcpe" not in state:
+        state["fcpe"] = spawn_bundled_infer_model(device="cuda" if device() == "cuda" else "cpu")
+    audio = read_mono(args["input"], 16000).astype(np.float32)
+    hop, chunk = 160, 16000 * 60
+    out = []
+    with torch.no_grad():
+        for a in range(0, len(audio), chunk):
+            x = audio[a: a + chunk]
+            n = max(1, len(x) // hop)
+            f0 = state["fcpe"].infer(torch.from_numpy(x)[None, :, None].to(state["fcpe"].get_device()), sr=16000,
+                                     decoder_mode="local_argmax", threshold=float(args.get("threshold", 0.006)),
+                                     f0_min=50, interp_uv=False, output_interp_target_length=n)
+            out.append(f0.squeeze().reshape(-1).float().cpu().numpy()[:n])
+    f0 = np.concatenate(out) if out else np.zeros(0, np.float32)
+    np.save(args["output"], f0.astype(np.float32))
+    return {"output": args["output"], "hop": hop / 16000, "frames": int(f0.size),
+            "voiced": round(float(np.mean(f0 > 0)) if f0.size else 0.0, 3)}
+
+
 def prefetch(args):
     load(args)
+    from torchfcpe import spawn_bundled_infer_model
+    spawn_bundled_infer_model(device="cpu")
     return {}
 
 
@@ -72,4 +102,4 @@ def doctor(args):
 
 
 if __name__ == "__main__":
-    serve({"load": load, "tag": tag, "prefetch": prefetch, "doctor": doctor})
+    serve({"load": load, "tag": tag, "pitch": pitch, "prefetch": prefetch, "doctor": doctor})

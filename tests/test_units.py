@@ -1025,3 +1025,126 @@ def test_a_singers_performance_stays_a_song():
     lines[0].kind = L.SONG
     align.extend_songs(lines, "ja")
     assert [l.id for l in lines if l.kind == L.SONG] == [1, 2, 3, 4, 5]
+
+
+def _f0(*parts):
+    """Pitch track (Hz every 10 ms) from (seconds, kind, semitones) parts: 'sing' holds notes
+    with vibrato, 'speak' glides, 'rest' is unvoiced."""
+    out = []
+    for seconds, kind, st in parts:
+        t = np.arange(int(seconds * 100)) * 0.01
+        if kind == "rest":
+            out.append(np.zeros(t.size))
+            continue
+        if kind == "sing":   # a new note every 0.6 s, 0.4 st vibrato at 6 Hz
+            curve = st + 2 * (np.floor(t / 0.6) % 3) + 0.4 * np.sin(2 * np.pi * 6 * t)
+        else:                # syllables gliding up and down by 4 st, a gap every 0.3 s
+            curve = st + 4 * np.sin(2 * np.pi * 2.5 * t)
+        f = 55 * 2 ** (curve / 12)
+        if kind == "speak":
+            f[(t % 0.3) > 0.24] = 0
+        out.append(f)
+    return np.concatenate(out).astype(np.float32)
+
+
+def test_pitch_tells_singing_from_speech():
+    from aidub.pitch import Pitch
+    p = Pitch(_f0((20, "sing", 20), (5, "rest", 0), (20, "speak", 20)))
+    assert p.held_share(5, 15) > 0.6 and p.held_share(30, 40) < 0.1
+    assert p.held_share(21, 22) is None                     # nothing voiced to judge
+    assert abs(p.median(30, 40) - 20) < 1.5
+
+
+def test_singing_marks_unsubtitled_lines_and_leaves_subtitled_ones_to_the_lyrics_check(tmp_path, monkeypatch):
+    from aidub import align
+    np.save(tmp_path / "pitch.npy", _f0((40, "sing", 20), (40, "speak", 10)))
+    p = tmp_path / "e.en.srt"
+    p.write_text("1\n00:00:10,000 --> 00:00:14,000\nWherever fate leads me,\n\n"
+                 "2\n00:00:50,000 --> 00:00:53,000\nI'm buying!\n", encoding="utf-8")
+    cues = clean.load(p)
+    monkeypatch.setattr(align, "load_chosen", lambda job, which: cues if which == "english" else [])
+    job = _StubJob({}, {"pitch": {"path": str(tmp_path / "pitch.npy"), "hop": 0.01}})
+    job.qc = {}
+
+    def ln(i, a, b, music):
+        return L.Line(id=i, start=a, end=b, source_text="x", music_db=music)
+    lines = [ln(1, 10, 14, -3), ln(2, 20, 24, -3), ln(3, 30, 33, -30), ln(4, 50, 53, -3), ln(5, 60, 63, -3)]
+    align.mark_singing(job, lines)
+    assert [l.kind for l in lines] == [L.SPEECH, L.SONG, L.SPEECH, L.SPEECH, L.SPEECH]
+    assert align.sung_candidate(lines[0])                    # subtitled: the lyrics check decides
+    assert not align.sung_candidate(lines[2])               # no music under it
+    assert not align.sung_candidate(lines[3]) and not align.sung_candidate(lines[4])   # spoken
+    assert job.qc["songs_by_pitch"] == {"sung": 1, "lyrics_to_check": 1}
+
+
+def test_lyrics_check_keeps_lyrics_and_dubs_lines_spoken_over_a_song():
+    from aidub import translate
+
+    class FakeLLM:
+        def __init__(self, reply):
+            self.reply, self.asked = reply, []
+
+        def chat_many(self, prompts, max_tokens=4096):
+            self.asked += prompts
+            return [self.reply] * len(prompts)
+
+    def lines():
+        out = [L.Line(id=i, start=a, end=a + 3, source_text=t, english_ref=e, music_db=-3, sung=0.6)
+               for i, (a, t, e) in enumerate([(10, "行き当たりばったり", "Wherever fate leads me,"),
+                                               (14, "もしもし", "Ahh, are you there? Just a moment."),
+                                               (100, "迷い猫", "was the stray cat.")], 1)]
+        return out + [L.Line(id=9, start=5, end=7, source_text="ね", english_ref="Isn't it?")]
+    job = _StubJob({}, {})
+    job.qc, job.log = {}, lambda m: None
+    ls = lines()
+    llm = FakeLLM('{"lines": [{"id": 1, "sung": true}, {"id": 2, "sung": false}, {"id": 3, "sung": true}]}')
+    assert translate.lyrics_check(job, llm, ls, []) == 3 - 1
+    assert [l.kind for l in ls] == [L.SONG, L.SPEECH, L.SONG, L.SPEECH]
+    assert len(llm.asked) == 2 and "Isn't it?" in llm.asked[0][1]["content"]   # two runs; neighbours as context
+    ls = lines()
+    translate.lyrics_check(job, FakeLLM("no idea"), ls, [])  # unreadable: songs are never dubbed
+    assert [l.kind for l in ls] == [L.SONG, L.SONG, L.SONG, L.SPEECH]
+
+
+def test_recurring_opening_found_in_a_sibling_episode():
+    from aidub import recurring
+    rng = np.random.default_rng(7)
+    sr = recurring.SR
+
+    def sound(seconds):  # music-like: noise shaped by a changing envelope
+        n = int(seconds * sr)
+        env = np.repeat(rng.uniform(0.2, 1.0, n // 512 + 1), 512)[:n]
+        return (rng.standard_normal(n) * env).astype(np.float32)
+    theme = sound(60)
+    a = np.concatenate([sound(30), theme, sound(120)])
+    b = np.concatenate([sound(75), theme + 0.05 * rng.standard_normal(theme.size).astype(np.float32), sound(90)])
+    found = recurring.common(recurring.fingerprint(a), recurring.fingerprint(b))
+    assert len(found) == 1 and abs(found[0][0] - 30) < 3 and abs(found[0][1] - 90) < 3
+    assert recurring.common(recurring.fingerprint(sound(120)), recurring.fingerprint(sound(120))) == []
+
+
+def test_recurring_siblings_nearest_episode_first(tmp_path):
+    from aidub import recurring
+    for n in (1, 2, 3, 5, 12):
+        (tmp_path / f"Show - S01E{n:02d} - Title.mkv").write_bytes(b"")
+    (tmp_path / "Show - S01E04 - Title.mkv.aidub-original").write_bytes(b"")
+    (tmp_path / "Show - S01E04 - Title.en.srt").write_bytes(b"")
+    me = tmp_path / "Show - S01E04 - Title.mkv"
+    assert [p.name[7:13] for p in recurring.siblings(me, 3)] == ["S01E03", "S01E05", "S01E02"]
+
+
+def test_short_reply_in_the_other_persons_voice_moves_by_pitch(tmp_path):
+    from aidub import voicebank
+    prof = profiles.Profiles(tmp_path).get_or_create("Diner")
+    woman, master = prof.new_character("Miyuki", gender="female"), prof.new_character("Master", gender="male")
+    # Her lines sit at 25 st, his at 10; his 0.4 s reply "Uh? For what?" was filed under her.
+    np.save(tmp_path / "pitch.npy", _f0((10, "speak", 25), (1, "speak", 10), (9, "speak", 25), (10, "speak", 10)))
+    job = _StubJob({}, {"pitch": {"path": str(tmp_path / "pitch.npy"), "hop": 0.01}})
+    job.qc, job.log = {}, lambda m: None
+    lines = [L.Line(i, a, a + 1.5, character=woman) for i, a in enumerate((1, 4, 7, 12, 15), 1)]
+    lines += [L.Line(10, 10.3, 10.7, character=woman, source_text="え？何が"),
+              L.Line(11, 13.2, 13.6, character=woman, source_text="ふふ")]           # her own short laugh
+    lines += [L.Line(20 + i, a, a + 1.5, character=master) for i, a in enumerate((21, 24, 27))]
+    assert voicebank.move_by_pitch(job, prof, lines) == 1
+    assert lines[5].character == master and lines[5].voice_note == "moved by pitch"
+    assert lines[6].character == woman

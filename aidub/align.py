@@ -16,8 +16,9 @@ from pathlib import Path
 import numpy as np
 
 from . import lines as L
-from . import media, scenes
+from . import media, recurring, scenes
 from .job import Job
+from .pitch import Pitch
 from .subtitles.model import DIALOGUE, SIGN, SONG
 from .subtitles.clean import norm_chars as clean_norm
 from .subtitles.score import cer
@@ -696,6 +697,73 @@ def intro_credits(job: Job) -> list[list[float]]:
     return sorted(out)
 
 
+SUNG_REACH_S = 10.0     # singing is judged on the voice around a line ...
+SUNG_SHARE = 0.4        # ... this much of it on held notes ...
+SUNG_MUSIC_DB = -12.0   # ... with music under the line
+
+
+def sung_candidate(ln: L.Line) -> bool:
+    """Held notes over music: a song, unless the words say it is spoken (the lyrics check)."""
+    return ln.kind == L.SPEECH and ln.sung >= SUNG_SHARE and ln.music_db >= SUNG_MUSIC_DB
+
+
+def _subtitled(ln: L.Line, cues: list) -> bool:
+    return any(q.kind == DIALOGUE and q.text.strip() and min(q.end, ln.end) - max(q.start, ln.start) > 0.3 * ln.duration
+               for q in cues)
+
+
+def mark_singing(job: Job, lines: list[L.Line]) -> None:
+    """Singing heard in the voice itself (aidub.pitch), whatever the subtitles say. A
+    sung line no subtitle covers is a song; one a subtitle covers is decided by the
+    translation step's lyrics check, so a line spoken over a song isn't lost."""
+    if not job.cfg.get("songs.detect_by_pitch", True):
+        return
+    p = Pitch.load(job)
+    if p is None:
+        return
+    cues = load_chosen(job, "english")
+    sung = checked = 0
+    for ln in lines:
+        if ln.kind != L.SPEECH:
+            continue
+        share = p.held_share(ln.start, ln.end, SUNG_REACH_S)
+        ln.sung = round(share, 3) if share is not None else 0.0
+        if not sung_candidate(ln):
+            continue
+        if cues and not _subtitled(ln, cues):
+            ln.kind = L.SONG
+            sung += 1
+        else:
+            checked += 1
+    job.qc["songs_by_pitch"] = {"sung": sung, "lyrics_to_check": checked}
+
+
+def recurring_titles(job: Job, lines: list[L.Line]) -> None:
+    """The opening and ending this episode shares with its siblings (aidub.recurring) keep
+    the original, all but spoken lines with a dialogue subtitle (a narrator's intro that
+    is the same every episode is still dubbed)."""
+    if not job.cfg.get("songs.match_episodes", True) or not job.profile:
+        return
+    try:
+        spans = recurring.find(job)
+    except Exception as exc:  # a sibling that can't be read only costs this check
+        job.log(f"opening/ending match skipped: {exc}")
+        return
+    if not spans:
+        return
+    cues = load_chosen(job, "english")
+    kept = 0
+    for ln in lines:
+        if ln.kind != L.SPEECH or not _in_ranges(ln.start, ln.end, spans):
+            continue
+        if _subtitled(ln, cues) and not sung_candidate(ln):
+            continue
+        ln.kind = L.SONG
+        kept += 1
+    job.qc["recurring_titles"] = {"spans": spans, "kept": kept}
+    job.log("opening/ending shared with other episodes: " + ", ".join(f"{a:.0f}-{b:.0f} s" for a, b in spans))
+
+
 def classify(job: Job, lines: list[L.Line]) -> None:
     turns = job["diarization"]["segments"]
     ev = job.get("events") or []
@@ -841,6 +909,8 @@ def run(job: Job) -> None:
     measure_music(job, lines)
     measure(job, lines)
     classify(job, lines)
+    mark_singing(job, lines)
+    recurring_titles(job, lines)
     extend_songs(lines, job["subtitles"].get("source_language", ""))
     # Translation context: which window each line belongs to.
     job.set("line_windows", [next((wi for wi, (a, b) in enumerate(windows) if a <= ln.start < b), len(windows) - 1)

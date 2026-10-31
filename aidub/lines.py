@@ -41,6 +41,7 @@ class Line:
     relisten: str = ""                # what recognition heard re-listening to this line alone (wordless check)
     subtitle_text: str = ""           # the source subtitle's wording, where recognition heard something else
     music_db: float = -99.0           # music & effects level under the line, relative to the voice
+    sung: float = 0.0                 # share of the voice around the line (±10 s) on held notes (singing)
     scene: int = 0
     overlap: bool = False
     emotion: str = ""                 # SenseVoice emotion tag

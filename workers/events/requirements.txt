@@ -2,3 +2,4 @@ torch==2.11.0+cu128
 torchaudio==2.11.0+cu128
 funasr==1.4.16
 soundfile
+torchfcpe==0.0.4

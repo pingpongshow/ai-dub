@@ -6,6 +6,8 @@ reference, and the language of each turn (lines already in English).
 
 Saves `events`: list parallel to diarization segments:
   {"language": "ja", "emotion": "HAPPY", "events": ["Laughter"], "text": "..."}
+and `pitch`: the dialogue's pitch every 10 ms (audio/pitch.npy, see aidub.pitch),
+which tells singing from speech and whose voice a short line is.
 """
 
 from __future__ import annotations
@@ -26,6 +28,9 @@ def run(job: Job) -> None:
             res = w.call("tag", {"input": str(job.path("audio", "dialogue16k.wav")), "segments": spans[i:i + 64]})
             out.extend(res["results"])
             job.status(f"{min(i + 64, len(spans))}/{len(spans)} turns", progress=min(1.0, (i + 64) / max(1, len(spans))))
+        res = w.call("pitch", {"input": str(job.path("audio", "dialogue16k.wav")), "output": str(job.path("audio", "pitch.npy"))})
+        job.set("pitch", {"path": res["output"], "hop": res["hop"]})
+        job.models["pitch"] = "FCPE (torchfcpe 0.0.4)"
     job.set("events", out)
     langs = {}
     for r in out:
