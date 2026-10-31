@@ -65,12 +65,26 @@ IS_CONTRACTED = {"who", "what", "where", "when", "why", "how", "that", "there", 
 SUFFIXES = (("n't", " not"), ("'re", " are"), ("'ll", " will"), ("'ve", " have"), ("'m", " am"))
 
 
+CLIPPED_FULL = {"bout": "about", "em": "them", "cause": "because", "cos": "because", "til": "until",
+                "round": "around", "fraid": "afraid", "nother": "another"}
+CLIPPED = re.compile(r"(?<![A-Za-z])['’](" + "|".join(CLIPPED_FULL) + r")\b", re.I)
+INTERJECTIONS = set("ah ahh ahhh aah oh ohh ooh uh uhh um umm hm hmm huh eh mm mmm ugh whoa wow ha haha heh hey oops "
+                    "phew tsk".split())
+
+
+def _full(word: str) -> str:
+    full = CLIPPED_FULL[word.lower()]
+    return full.capitalize() if word[0].isupper() else full
+
+
 def said_as(text: str) -> str:
     """Symbols and numbers as words, the way the voice should read them and the
     back-check should compare them: "84%" is "84 percent" (the voice read a bare "84%"
     in Chinese), "9.0" is "9 point 0" (it said "nine point"), "12.75" is "12 point 7 5"
     (not "twelve point seventy-five"), "$4.99" is "4 dollars 99", "1,000" is "1000",
-    "No. 12" is "Number 12"."""
+    "No. 12" is "Number 12". Clipped words are said in full ("How 'bout it?" is read
+    "How about it?", and recognition hears "about")."""
+    text = CLIPPED.sub(lambda m: _full(m.group(1)), text)
     text = re.sub(r"(?<=\d),(?=\d{3}\b)", "", text)
     text = re.sub(r"\$(\d+)\.(\d\d)\b", r"\1 dollars \2", text)
     text = re.sub(r"\$(\d+)\b", lambda m: m.group(1) + (" dollar" if m.group(1) == "1" else " dollars"), text)
@@ -151,6 +165,16 @@ def wer(ref: str, hyp: str) -> float:
         k = next((i for i, h in enumerate(b) if pronounce.same_sound(joined, h) or pronounce.near(joined, h)), None)
         if k is not None:
             b[k:k + 1] = parts
+    # A name and the word next to it heard as one word ("Erect Ohki's" as "Erectokey's").
+    if pronounce.LEXICON:
+        for i in range(len(a) - 1):
+            x, y = a[i], a[i + 1]
+            if x in pronounce.LEXICON and y.removesuffix("'s") in pronounce.LEXICON:
+                continue
+            joined = (x + y).removesuffix("'s")
+            k = next((j for j, h in enumerate(b) if h not in a and pronounce.near(joined, h.removesuffix("'s"))), None)
+            if k is not None:
+                b[k:k + 1] = [x, y]
     if any(w[0].isdigit() for w in a):
         return min(_wer(_numbers(a, d), _numbers(b, d)) for d in (False, True))
     return _wer(a, b)
@@ -227,6 +251,8 @@ def missed_words(text: str, heard: str) -> list[str]:
             joined = f" {' '.join(said)} "
             if not any(f" {' '.join(_numbers([w], d))} " in joined for d in (False, True)) and w not in heard_set:
                 out.append(w)
+            continue
+        if w in INTERJECTIONS:  # "Ahh... Well, I let the ecstasy...": a sigh isn't a word to hear back
             continue
         if len(w) < 3 or base in STOPWORDS or w in names or base in names or w in heard_set or base in heard_set \
                 or pronounce.heard_as(w, heard_words) or pronounce.heard_as(base, heard_words):
@@ -426,7 +452,8 @@ def score_files(job: Job, items: list[tuple[L.Line, str, str]]) -> dict[str, dic
                 out[p] = {"wer": 0.0 if sounds else round(wer(text, r.get("text", "")), 3), "heard": r.get("text", ""),
                           "missed": [] if sounds else missed_words(text, r.get("text", "")), "words": len(ws),
                           "interjection": len(ws) == 1 and len(ws[0]) <= 4,
-                          "seconds": round(media.duration(p), 2)}
+                          "seconds": round(media.duration(p), 2), "own_ref": not ln.voice,
+                          "not_character": "didn't match" in ln.voice_note}
             job.status(f"back-check {min(i + 16, len(items))}/{len(items)}", progress=0.5 * min(1.0, (i + 16) / len(items)))
     with job.worker("speaker") as w:
         w.call("load", {})
@@ -474,7 +501,12 @@ def _passes(s: dict, cfg) -> bool:
     sim, med = s.get("sim"), s.get("sim_median")
     if sim is None or s.get("seconds", 99) < float(cfg.get("speak.min_similarity_seconds", 1.0)):
         return True  # no voiceprint, or too short for a reliable voice embedding
-    if sim < float(cfg.get("speak.min_similarity", 0.10)):
+    if s.get("own_ref") and s.get("not_character"):
+        return True  # voiced from its own audio because it isn't that character: their voiceprint says nothing
+    # The floor is for a borrowed voice that came out as someone else. A line cloned from
+    # its own audio can't be someone else's voice; its likeness to the character's
+    # voiceprint runs low when that print comes from a few noisy clips (0.05 on average).
+    if not s.get("own_ref") and sim < float(cfg.get("speak.min_similarity", 0.10)):
         return False
     return med is None or sim >= med - float(cfg.get("speak.max_similarity_drop", 0.25))
 

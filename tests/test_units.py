@@ -1280,3 +1280,24 @@ def test_a_short_line_as_the_credits_start_is_spoken_without_asking(tmp_path):
     bye = L.Line(id=1, start=20.0, end=20.6, source_text="おやすみなさい", english_ref="Good night everyone.",
                  music_db=-4, sung=0.66)
     assert translate.lyrics_check(job, Never(), [bye], []) == 0 and bye.kind == L.SPEECH
+
+
+def test_back_check_reads_clipped_words_sighs_own_voices_and_run_together_names(monkeypatch):
+    from aidub import pronounce, speak
+    # Clipped words are said and checked in full.
+    assert speak.said_as("Here... How 'bout it?") == "Here... How about it?"
+    assert speak.said_as("'Bout time. Leave 'em.") == "About time. Leave them."
+    assert speak.missed_words("Here... How 'bout it...", "Here, how about it?") == []
+    # A sigh in the script isn't a word to hear back.
+    assert speak.missed_words("Ahh... Well, I let the ecstasy of the moment capture me,",
+                              "Well, I let the ecstasy of the moment capture me.") == []
+    # A line cloned from its own audio isn't held to the voice-likeness floor.
+    cfg = type("C", (), {"get": lambda s, k, d=None: d})()
+    take = {"wer": 0.0, "missed": [], "words": 4, "seconds": 1.3, "sim": 0.05, "sim_median": 0.047}
+    assert not speak._passes(take, cfg) and speak._passes({**take, "own_ref": True}, cfg)
+    assert not speak._passes({**take, "own_ref": True, "sim": -0.3}, cfg)   # still far below the character's own
+    # ... unless it was given its own voice because it isn't that character at all.
+    assert speak._passes({**take, "own_ref": True, "not_character": True, "sim": 0.217, "sim_median": 0.467}, cfg)
+    # A stage name run into one word by recognition.
+    monkeypatch.setattr(pronounce, "LEXICON", {w: [w.upper()] for w in ("erect", "juice", "gushing", "bonanza")})
+    assert speak.wer('"Erect Ohki\'s Juice Gushing Bonanza"', "Erectokey's juice gushing bonanza.") <= 0.2
