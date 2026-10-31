@@ -795,10 +795,19 @@ def lyrics_check(job: Job, llm: "LLM", lines: list[L.Line], cues: list) -> int:
     text to read: the translation model reads them with their neighbours and says
     which are lyrics. Those keep the original voice; a line spoken over a song is
     still dubbed. An answer that can't be read leaves the lines as songs."""
-    from .align import sung_candidate
+    from .align import sung_candidate, sure_sung
+    from .pitch import Pitch
     todo = [ln for ln in lines if sung_candidate(ln)]
-    if not todo or not job.cfg.get("songs.lyrics_check", True):
+    if not todo:
         return 0
+    p, lang = Pitch.load(job), job["subtitles"].get("source_language", "")
+    sure = [ln for ln in todo if p is not None and sure_sung(ln, p, lang)]
+    for ln in sure:
+        ln.kind, ln.check_note = L.SONG, "sung (long held notes, far slower than speech)"
+    todo = [ln for ln in todo if ln.kind == L.SPEECH]
+    if not todo or not job.cfg.get("songs.lyrics_check", True):
+        job.qc["lyrics_check"] = {"sure": len(sure), "sung": 0, "spoken": 0}
+        return len(sure)
     runs: list[list[L.Line]] = []
     for ln in sorted(todo, key=lambda l: l.start):
         if runs and ln.start - runs[-1][-1].end <= LYRICS_RUN_GAP_S:
@@ -825,9 +834,9 @@ def lyrics_check(job: Job, llm: "LLM", lines: list[L.Line], cues: list) -> int:
                 sung += 1
             else:
                 spoken += 1
-    job.qc["lyrics_check"] = {"sung": sung, "spoken": spoken}
-    job.log(f"lyrics check: {sung} lines are lyrics, {spoken} spoken over music")
-    return sung
+    job.qc["lyrics_check"] = {"sure": len(sure), "sung": sung, "spoken": spoken}
+    job.log(f"lyrics check: {len(sure)} lines sung beyond doubt; of the rest {sung} are lyrics, {spoken} spoken over music")
+    return len(sure) + sung
 
 
 def run(job: Job) -> None:

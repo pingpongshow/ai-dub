@@ -1094,7 +1094,7 @@ def test_lyrics_check_keeps_lyrics_and_dubs_lines_spoken_over_a_song():
                                                (14, "もしもし", "Ahh, are you there? Just a moment."),
                                                (100, "迷い猫", "was the stray cat.")], 1)]
         return out + [L.Line(id=9, start=5, end=7, source_text="ね", english_ref="Isn't it?")]
-    job = _StubJob({}, {})
+    job = _StubJob({}, {"subtitles": {"source_language": "ja"}})
     job.qc, job.log = {}, lambda m: None
     ls = lines()
     llm = FakeLLM('{"lines": [{"id": 1, "sung": true}, {"id": 2, "sung": false}, {"id": 3, "sung": true}]}')
@@ -1157,3 +1157,24 @@ def test_lyric_subtitles_are_not_given_to_the_next_spoken_line():
             Cue(start=810.9, end=815.0, text="Today we feature the hit singer.", raw="", kind=DIALOGUE)]
     lines = [L.Line(id=1, start=805.6, end=810.5, kind=L.SONG), L.Line(id=2, start=810.7, end=815.4)]
     assert [q.text for q in translate.outside_songs(cues, lines)] == ["Today we feature the hit singer."]
+
+
+def test_long_slow_held_lines_are_songs_without_asking(tmp_path):
+    from aidub import translate
+
+    class Quiet:
+        def chat_many(self, prompts, max_tokens=4096):
+            return ['{"lines": []}'] * len(prompts)
+    # 10 s of held notes over "膝に抱かれて聴いている" (1 character a second): sung, even if the
+    # model would call it narration; a spoken line over the same song is still asked about.
+    np.save(tmp_path / "pitch.npy", _f0((30, "sing", 20)))
+    job = _StubJob({}, {"pitch": {"path": str(tmp_path / "pitch.npy"), "hop": 0.01},
+                        "subtitles": {"source_language": "ja"}})
+    job.qc, job.log = {}, lambda m: None
+    verse = L.Line(id=1, start=2, end=12.6, source_text="膝に抱かれて聴いている", english_ref="it listened, in her lap",
+                   music_db=-2, sung=0.75)
+    talk = L.Line(id=2, start=14, end=18.7, source_text="猫どんな曲ですか迷い猫がヒット中の千鳥みゆきさんです",
+                  english_ref="Today we feature the hit singer", music_db=-2, sung=0.59)
+    translate.lyrics_check(job, Quiet(), [verse, talk], [])
+    assert verse.kind == L.SONG and job.qc["lyrics_check"]["sure"] == 1
+    assert talk.kind == L.SONG  # the model gave no answer for it: songs are never dubbed

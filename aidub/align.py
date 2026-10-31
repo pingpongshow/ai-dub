@@ -702,6 +702,25 @@ SUNG_SHARE = 0.4        # ... this much of it on held notes ...
 SUNG_MUSIC_DB = -12.0   # ... with music under the line
 
 
+SURE_HELD = 0.6        # a line itself this much on held notes ...
+SURE_RATE = {"cjk": 2.0, "other": 0.8}  # ... drawn out this slowly (characters / words a second) ...
+SURE_MIN_S = 2.0       # ... over this long is sung, whatever its words say
+
+
+def sure_sung(ln: L.Line, p: Pitch, lang: str) -> bool:
+    """Singing beyond doubt: a long line held on notes and drawn out far slower than anyone
+    talks ("膝に抱かれて聴いている" over 10.6 s). The lyrics check isn't asked; a verse can
+    read like narration."""
+    if ln.duration < SURE_MIN_S:
+        return False
+    held = p.held_share(ln.start, ln.end)
+    if held is None or held < SURE_HELD:
+        return False
+    if lang in CJK:
+        return len(clean_norm(ln.source_text)) / ln.duration < SURE_RATE["cjk"]
+    return len(ln.source_text.split()) / ln.duration < SURE_RATE["other"]
+
+
 def sung_candidate(ln: L.Line) -> bool:
     """Held notes over music: a song, unless the words say it is spoken (the lyrics check)."""
     return ln.kind == L.SPEECH and ln.sung >= SUNG_SHARE and ln.music_db >= SUNG_MUSIC_DB
