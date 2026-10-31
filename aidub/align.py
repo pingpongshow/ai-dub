@@ -724,10 +724,13 @@ SPOKEN_HELD = 0.4      # a subtitled line itself held less than this is spoken, 
 
 
 def clearly_spoken(ln: L.Line, p: Pitch) -> bool:
-    """A line next to a song but not sung itself (narration starting as the theme ends):
-    every subtitled lyric of three episodes held at least 0.44 of its own voice."""
+    """A subtitled line next to a song that isn't sung itself: it holds little of its own
+    voice on notes (narration starting as the theme ends; every subtitled lyric of three
+    episodes held 0.44 or more), or too little of its voice can be heard to say it is
+    sung at all ("Good night everyone." in 0.6 s as the end credits start). The words
+    of the lines around it don't make it a lyric."""
     own = p.held_share(ln.start, ln.end)
-    return own is not None and own < SPOKEN_HELD
+    return own is None or own < SPOKEN_HELD
 
 
 def sure_sung(ln: L.Line, p: Pitch, lang: str) -> bool:

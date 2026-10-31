@@ -1265,3 +1265,18 @@ def test_a_subtitled_line_over_a_song_recording_is_not_carried_into_the_song():
     lines = [lines[0], verse]
     align.extend_songs(lines, "ja", subtitled={5})
     assert verse.kind == L.SONG
+
+
+def test_a_short_line_as_the_credits_start_is_spoken_without_asking(tmp_path):
+    from aidub import translate
+
+    class Never:
+        def chat_many(self, prompts, max_tokens=4096):
+            raise AssertionError("asked")
+    np.save(tmp_path / "pitch.npy", _f0((20, "sing", 20), (0.6, "speak", 22), (10, "sing", 20)))
+    job = _StubJob({}, {"pitch": {"path": str(tmp_path / "pitch.npy"), "hop": 0.01},
+                        "subtitles": {"source_language": "ja"}})
+    job.qc, job.log = {}, lambda m: None
+    bye = L.Line(id=1, start=20.0, end=20.6, source_text="おやすみなさい", english_ref="Good night everyone.",
+                 music_db=-4, sung=0.66)
+    assert translate.lyrics_check(job, Never(), [bye], []) == 0 and bye.kind == L.SPEECH

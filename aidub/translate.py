@@ -842,12 +842,17 @@ def lyrics_check(job: Job, llm: "LLM", lines: list[L.Line], cues: list) -> int:
     from .align import clearly_spoken, sung_candidate, sure_sung
     from .pitch import Pitch
     p, lang = Pitch.load(job), job["subtitles"].get("source_language", "")
-    todo = [ln for ln in lines if sung_candidate(ln) and not (p is not None and clearly_spoken(ln, p))]
-    if not todo:
-        return 0
-    sure = [ln for ln in todo if (p is not None and sure_sung(ln, p, lang)) or quoted_lyric(ln, cues)]
+    todo = [ln for ln in lines if sung_candidate(ln)]
+    quoted = [ln for ln in todo if quoted_lyric(ln, cues)]
+    todo = [ln for ln in todo if ln not in quoted and not (p is not None and clearly_spoken(ln, p))]
+    sure = [ln for ln in todo if p is not None and sure_sung(ln, p, lang)]
+    for ln in quoted:
+        ln.kind, ln.check_note = L.SONG, "lyrics (in italics and quotation marks, over held notes)"
     for ln in sure:
         ln.kind, ln.check_note = L.SONG, "sung (long held notes, far slower than speech)"
+    sure = quoted + sure
+    if not sure and not todo:
+        return 0
     todo = [ln for ln in todo if ln.kind == L.SPEECH]
     if not todo or not job.cfg.get("songs.lyrics_check", True):
         job.qc["lyrics_check"] = {"sure": len(sure), "sung": 0, "spoken": 0}
