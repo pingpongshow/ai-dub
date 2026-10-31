@@ -264,7 +264,7 @@ function rvSync(force) {
     if (!a) continue;
     if (RV.hear !== k) { if (!a.paused) a.pause(); continue; }
     a.playbackRate = v.playbackRate;
-    if (force || Math.abs(a.currentTime - v.currentTime) > 0.25) a.currentTime = v.currentTime;
+    if (force || Math.abs(a.currentTime - v.currentTime) > 0.12) a.currentTime = v.currentTime;
     if (v.paused && !a.paused) a.pause();
     if (!v.paused && a.paused) a.play().catch(() => {});
   }
@@ -285,7 +285,7 @@ function rvClock() {
       row.classList.toggle("cur", on);
       if (on && !cur) cur = row;
     });
-    if (cur && !RV.listHover) cur.scrollIntoView({ block: "nearest" });
+    if (cur && !RV.listHover && Date.now() > (RV.holdList || 0)) cur.scrollIntoView({ block: "nearest" });
   }
 }
 function rvKeepInView(t) {
@@ -310,6 +310,8 @@ function rvZoom(span) {
 function rvList() {
   const box = $("#rvList");
   const tab = RV.tab;
+  const keepScroll = RV.listTab === tab ? box.scrollTop : 0;
+  RV.listTab = tab;
   if (tab === "subs") box.innerHTML = rvSubRows();
   else if (tab === "voices") box.innerHTML = rvVoiceRows();
   else if (tab === "look") box.innerHTML = RV.data.flags.length ? RV.data.flags.map((f, i) => `
@@ -325,8 +327,24 @@ function rvList() {
           <span class="d">${esc((r.reasons || ["marked by you"]).join(" · "))}</span></div></div>`).join("")
       : `<div class="rv-empty">Nothing keeps the original in this episode.</div>`;
   } else if (tab === "rules") box.innerHTML = rvRulesHtml();
+  box.scrollTop = keepScroll;
   rvListWire();
   rvClock();
+  rvShowSelected();
+}
+function rvShowSelected() {
+  // A row chosen from the timeline or "Needs a look" is brought into view, and the list
+  // stops following the video for a moment so it stays there.
+  const s = RV.sel;
+  if (!s || !RV.pendingShow) return;
+  RV.pendingShow = false;
+  const row = s.type === "cue" ? document.querySelector(`#rvList .srow[data-key="${CSS.escape(String(s.id))}"]`)
+    : s.type === "speaker" ? document.querySelector(`#rvList .vrow[data-spk="${CSS.escape(String(s.id))}"]`)
+    : s.type === "line" ? (document.querySelector(`#rvList .who[data-line="${s.id}"]`) || {}).parentElement : null;
+  if (row) {
+    row.scrollIntoView({ block: "center" });
+    RV.holdList = Date.now() + 4000;
+  }
 }
 function rvSubRows() {
   const d = RV.data, q = RV.search.toLowerCase();
@@ -358,7 +376,8 @@ function rvVoiceRows() {
     const sel = RV.sel && RV.sel.type === "speaker" && RV.sel.id === s.id;
     const sex = s.age === "child" ? "Child" : s.gender === "male" ? "Man" : s.gender === "female" ? "Woman" : "Man or woman unsure";
     const borrowed = /^voice of|^generic voice/.test(s.voice);
-    const initials = s.name.replace(/^Character\s+/, "").split(/\s+/).map((w) => w[0]).join("").slice(0, 2);
+    const num = s.name.match(/^Character\s+(\d+)$/);
+    const initials = num ? num[1] : s.name.split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase();
     return `<div class="vrow ${sel ? "sel" : ""}" data-spk="${esc(s.id)}">
       <span class="vav" style="background:${rvColor(s.id)}">${esc(initials)}</span>
       <div><div class="vname">${esc(s.name)}</div><div class="vmeta"><span>${sex}${s.age && s.age !== "child" ? ` · ${esc(s.age)}` : ""}</span>
@@ -447,10 +466,12 @@ function rvGoFlag(i) {
   RV.sel = f.kind === "voice" && f.lines.length ? { type: "line", id: f.lines[0] }
     : reg ? { type: "region", id: reg.id } : cue ? { type: "cue", id: cue.key } : { type: "flag", id: i };
   RV.selFlag = i;
+  RV.pendingShow = true;
+  if (RV.sel.type === "cue" || RV.sel.type === "line") { RV.tab = "subs"; rvTabs(); }
   rvSeek(Math.max(0, f.start - 1));
   const pos = $("#rvFlagPos");
   if (pos) pos.textContent = `Needs a look ${i + 1} of ${RV.data.flags.length}`;
-  if (RV.tab !== "look") { rvList(); }
+  rvList();
   rvInspector();
 }
 
@@ -478,9 +499,13 @@ function rvWhoMenu(ev, lineId) {
     } else RV.dec.lines[String(lineId)] = { character: w };
     setDirty(); rvClosePop(); rvList(); rvInspector(); rvDraw();
   }));
-  setTimeout(() => document.addEventListener("click", rvClosePop, { once: true }), 0);
 }
 function rvClosePop() { document.querySelectorAll(".rv-pop").forEach((p) => p.remove()); }
+document.addEventListener("click", (ev) => {
+  // A click anywhere but in a menu or on what opened it closes the menu.
+  if (!ev.target.closest || ev.target.closest(".rv-pop, .who, #rvSpSame")) return;
+  rvClosePop();
+});
 
 // Inspector ------------------------------------------------------------------------------------------------
 function rvInspector() {
@@ -532,8 +557,7 @@ function rvInspector() {
         ${ln ? `<span class="lab">Heard</span><span>${esc(ln.source || "—")}</span>
         <span class="lab">Voice</span><span><button class="who" id="rvWho"><span class="vdot" style="background:${rvColor(who)}"></span>${esc(whoLabel(who))}</button>
           ${ln.voice_note ? `<span class="muted small">${esc(ln.voice_note)}</span>` : ""}</span>
-        <span class="lab">Why</span><span class="muted small">${esc(ln.kind === "song" ? (ln.kept_why || "kept as a song") : flaggedLine(ln.id)
-          ? `held notes over music (${ln.sung.toFixed(2)}): the lyrics check decides unless you choose` : "spoken line, dubbed")}</span>` : ""}
+        <span class="lab">Why</span><span class="muted small">${esc(rvWhy(q, ln))}</span>` : ""}
       </div>
       ${ed && q ? `<div class="row"><button class="btn-keep ${RV.dec.cues[q.key] === "keep" ? "on" : ""}" id="rvCKeep">Keep original</button>
         <button class="btn-dub ${RV.dec.cues[q.key] === "dub" ? "on" : ""}" id="rvCDub">Dub it</button>
@@ -597,7 +621,6 @@ function rvInspector() {
         if (!confirm(`Merge ${other.name} into ${sp.name}? Their voice clips join ${sp.name}'s, for every episode of this show.`)) return;
         act({ action: "merge", other: other.id }, `${other.name} is now ${sp.name}`);
       }));
-      setTimeout(() => document.addEventListener("click", rvClosePop, { once: true }), 0);
     };
     return;
   }
@@ -605,6 +628,21 @@ function rvInspector() {
     const f = d.flags[s.id];
     box.innerHTML = `<h4>${esc(f.title)}</h4><div class="muted small">${esc(f.detail)}</div>`;
   }
+}
+
+function rvWhy(q, ln) {
+  // What will happen to this line, and why, in the same terms as its chip.
+  const span = q || ln;
+  if (q && RV.dec.cues[q.key]) return RV.dec.cues[q.key] === "keep" ? "You set this subtitle to keep the original." : "You set this subtitle to be dubbed.";
+  const r = regionsNow().find((x) => overlap(x.start, x.end, span.start, span.end) > 0.5 * (span.end - span.start));
+  if (r) {
+    const who = r.source === "user" ? "your" : r.edited ? "Ai Dub's (changed by you)" : "Ai Dub's";
+    return r.action === "dub" ? `Inside ${who} ${(RV_KINDS[r.kind] || "song").toLowerCase()} region, which you set to be dubbed.`
+      : `Inside ${who} ${(RV_KINDS[r.kind] || "song").toLowerCase()} region: keeps the original.`;
+  }
+  if (ln.kind === "song") return ln.kept_why || "Kept as a song.";
+  if (flaggedLine(ln.id)) return `Held notes over music (${ln.sung.toFixed(2)}): the lyrics check decides unless you choose.`;
+  return ln.kind === "speech" ? "Spoken line: dubbed." : "Kept in the original (no words to dub).";
 }
 
 // Timeline ---------------------------------------------------------------------------------------------------
@@ -634,9 +672,11 @@ function rvDraw() {
   g.fillStyle = C.muted; g.font = "10.5px system-ui, sans-serif"; g.textAlign = "center";
   for (let t = Math.ceil(v0 / step) * step; t <= v1; t += step) {
     const x = X(t);
+    g.textAlign = x < 18 ? "left" : x > W - 18 ? "right" : "center";
     g.fillText(fmtT(t, step < 1), x, 11);
     g.fillRect(x, 13, 1, 5);
   }
+  g.textAlign = "center";
   const regs = regionsNow();
   const keptAt = (t) => regs.some((r) => r.action === "keep" && t >= r.start && t <= r.end);
   // Waveform
@@ -777,7 +817,8 @@ function rvWire() {
     $("#rvSave").onclick = () => rvSave(false);
     $("#rvStart").onclick = () => rvSave(true);
     $("#rvDiscard").onclick = async () => {
-      if (!confirm("Discard your changes to this episode? (Speaker names and merges are already saved.)")) return;
+      if (!confirm("Go back to Ai Dub's own decisions for this episode? Your marks and choices here are cleared. (Speaker names and merges are kept: they belong to the show.)")) return;
+      await api(`/jobs/${RV.id}/review`, { method: "PUT", body: { regions: [], cues: {}, lines: {} } });
       const fresh = await api(`/jobs/${RV.id}/review`);
       RV.dec = rvClone(fresh.decisions); RV.dirty = false; RV.data = fresh;
       rvShell(); rvMedia(); rvList(); rvInspector(); rvDraw();
@@ -855,7 +896,7 @@ function rvTimelineWire() {
     }
     if (p.lane === 3) {
       const q = RV.data.cues.find((c) => p.t >= c.start - 0.05 && p.t <= c.end + 0.05);
-      if (q) { RV.sel = { type: "cue", id: q.key }; RV.tab = "subs"; rvTabs(); rvList(); rvInspector(); }
+      if (q) { RV.sel = { type: "cue", id: q.key }; RV.pendingShow = true; RV.tab = "subs"; rvTabs(); rvList(); rvInspector(); }
     }
     if (p.lane === 4) {
       const ln = RV.data.lines.find((l) => p.t >= l.start && p.t <= l.end && (l.kind === "speech" || l.kind === "song"));
@@ -933,7 +974,7 @@ function rvDrawDragged(r) {
 }
 document.addEventListener("keydown", (ev) => {
   if (!RV || !location.hash.startsWith("#review/")) return;
-  if (ev.target.closest("input, select, textarea") || ev.metaKey || ev.ctrlKey || ev.altKey) return;
+  if ((ev.target.closest && ev.target.closest("input, select, textarea")) || ev.metaKey || ev.ctrlKey || ev.altKey) return;
   const v = $("#rvv"), ed = RV.data.editable, k = ev.key;
   const sel = RV.sel;
   const act = (action) => {

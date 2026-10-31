@@ -16,6 +16,7 @@ Files, in the job's working folder under review/:
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 import threading
@@ -33,6 +34,8 @@ MODES = ("off", "unsure", "always")
 MEDIA = {"preview.mp4": "video/mp4", "voices.m4a": "audio/mp4", "music.m4a": "audio/mp4",
          "peaks.json": "application/json", "subs.en.vtt": "text/vtt", "subs.ja.vtt": "text/vtt"}
 REGION_GAP_S = 3.0      # kept lines this close together are one region
+FLAG_GAP_S = 15.0       # flags of one kind this close together are one thing to check
+QUOTED_RUN = 3          # this many quoted subtitles in a row may be a song's lyrics
 PEAK_S = 0.05
 EDGE_S = 0.3            # a region edge this far inside a dialogue subtitle cuts through it
 _building: set[str] = set()
@@ -136,7 +139,7 @@ def needs_look(job, lines: list[L.Line]) -> list[dict]:
                 f"Held notes over music ({ln.sung:.2f}). The lyrics check decides unless you choose.", [ln.id])
         elif ln.kind == L.SONG and ln.kept_why.startswith("held notes") and 180 < ln.start < duration - 180:
             add("song", ln, "Kept as singing, with no subtitle",
-                f"{ln.kept_why}. Nothing to read, so the sound alone decided.", [ln.id])
+                f"{ln.kept_why[:1].upper()}{ln.kept_why[1:]}. Nothing to read, so the sound alone decided.", [ln.id])
         if ln.voice_note == "moved by pitch":
             add("voice", ln, "Moved to another voice", "Pitch put this short line far from its speaker's usual voice.",
                 [ln.id])
@@ -153,6 +156,21 @@ def needs_look(job, lines: list[L.Line]) -> list[dict]:
                 if q.start + EDGE_S < edge < q.end - EDGE_S:
                     add("edge", (q.start, q.end), "A kept region cuts through a subtitle",
                         f"“{q.text[:60]}” is partly inside a {r['kind']}.", [])
+    # Lyrics subtitled in quotation marks (a song sung on screen): flagged, never kept by this alone,
+    # since quotes also mark titles and quoted speech.
+    run: list = []
+    for q in talk + [None]:
+        quoted = q is not None and translate.QUOTED.match(q.text or "") is not None
+        if quoted and (not run or q.start - run[-1].end <= FLAG_GAP_S):
+            run.append(q)
+            continue
+        if len(run) >= QUOTED_RUN:
+            ls = [ln for ln in lines if ln.kind == L.SPEECH and any(_overlap(ln, x.start, x.end) > 0.3 for x in run)]
+            if ls:
+                add("quoted", (run[0].start, run[-1].end), "Subtitles in quotation marks: maybe a song",
+                    f"{len(run)} subtitles in a row are quoted, as lyrics often are. They will be dubbed unless you "
+                    "keep them.", [ln.id for ln in ls])
+        run = [q] if quoted else []
     sub = (job.get("subtitles") or {}).get("english")
     if sub and lines:
         try:
@@ -163,7 +181,24 @@ def needs_look(job, lines: list[L.Line]) -> list[dict]:
             add("subtitles", (0.0, min(5.0, duration or 5.0)), "English subtitles won't be the script",
                 f"{why}. The episode would be translated from the speech instead.", [])
     out.sort(key=lambda f: f["start"])
-    return out
+    # One thing to check per stretch: ten lines of one unsubtitled song are one flag.
+    merged: list[dict] = []
+    for f in out:
+        last = merged[-1] if merged else None
+        if last and last["kind"] == f["kind"] and f["kind"] in ("song", "lyrics", "voice", "edge") \
+                and last["title"] == f["title"] and f["start"] - last["end"] <= FLAG_GAP_S:
+            last["end"] = max(last["end"], f["end"])
+            last["lines"] = sorted(set(last["lines"]) | set(f["lines"]))
+            n = len(last["lines"])
+            last["detail"] = f["detail"] if n <= 1 else (f"{n} lines, {_t(last['start'])}–{_t(last['end'])}. "
+                                                          + re.sub(r" \([0-9.]+\)", "", f["detail"]))
+        else:
+            merged.append(dict(f))
+    return merged
+
+
+def _t(t: float) -> str:
+    return f"{int(t // 60)}:{int(t % 60):02d}"
 
 
 # Regions ---------------------------------------------------------------------------------------
@@ -179,7 +214,7 @@ def regions(lines: list[L.Line], duration: float) -> list[dict]:
     out = []
     for group in spans:
         a, b = group[0].start, max(x.end for x in group)
-        why = Counter(x.kept_why or "song" for x in group)
+        why = Counter(re.sub(r" \([0-9.]+\)", "", x.kept_why or "song") for x in group)
         text = " ".join(why)
         kind = ("opening" if a < 0.2 * duration and ("opening" in text or "credits" in text or "shared" in text
                                                     or "show rule" in text)

@@ -1336,3 +1336,7 @@ def test_review_decisions_go_into_the_lines(cfg, tmp_path):
     assert not align.sung_candidate(lines[0])                              # the lyrics check can't overrule it
     regs = review.regions(lines, 100.0)
     assert [(r["start"], r["kind"]) for r in regs] == [(50, "song")]
+    # Reasons are grouped without each line's own score.
+    many = [L.Line(10 + i, 60 + 2 * i, 61.5 + 2 * i, kind=L.SONG, kept_why=f"held notes over music (0.5{i}), no subtitle")
+            for i in range(4)]
+    assert review.regions(many, 100.0)[0]["reasons"] == ["held notes over music, no subtitle (4 lines)"]
