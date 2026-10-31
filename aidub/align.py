@@ -710,6 +710,16 @@ SURE_RATE = {"cjk": 2.0, "other": 0.8}  # ... drawn out this slowly (characters 
 SURE_MIN_S = 2.0       # ... over this long is sung, whatever its words say
 
 
+SPOKEN_HELD = 0.4      # a subtitled line itself held less than this is spoken, whatever is sung around it
+
+
+def clearly_spoken(ln: L.Line, p: Pitch) -> bool:
+    """A line next to a song but not sung itself (narration starting as the theme ends):
+    every subtitled lyric of three episodes held at least 0.44 of its own voice."""
+    own = p.held_share(ln.start, ln.end)
+    return own is not None and own < SPOKEN_HELD
+
+
 def sure_sung(ln: L.Line, p: Pitch, lang: str) -> bool:
     """Singing beyond doubt: a long line held on notes and drawn out far slower than anyone
     talks ("膝に抱かれて聴いている" over 10.6 s). The lyrics check isn't asked; a verse can

@@ -1203,3 +1203,20 @@ def test_opening_run_stops_at_the_narration_and_quoted_italics_are_lyrics(tmp_pa
     assert not align._in_ranges(57.3, 59.0, ranges) and align._in_ranges(30, 40, ranges)
     assert translate.quoted_lyric(L.Line(id=1, start=884.0, end=888.6), cues)
     assert not translate.quoted_lyric(L.Line(id=2, start=57.3, end=59.0), cues)   # narration: italic, no quotes
+
+
+def test_a_spoken_line_right_after_a_song_is_not_asked_about(tmp_path):
+    from aidub import translate
+
+    class Never:
+        def chat_many(self, prompts, max_tokens=4096):
+            raise AssertionError("asked")
+    # The theme ends as the narration starts: the window around the line is mostly song,
+    # the line itself is speech.
+    np.save(tmp_path / "pitch.npy", _f0((20, "sing", 20), (10, "speak", 12)))
+    job = _StubJob({}, {"pitch": {"path": str(tmp_path / "pitch.npy"), "hop": 0.01},
+                        "subtitles": {"source_language": "ja"}})
+    job.qc, job.log = {}, lambda m: None
+    narration = L.Line(id=1, start=20.5, end=22.5, source_text="一日が終わり", english_ref="As the day comes to an end,",
+                       music_db=-8, sung=0.44)
+    assert translate.lyrics_check(job, Never(), [narration], []) == 0 and narration.kind == L.SPEECH

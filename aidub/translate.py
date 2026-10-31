@@ -805,12 +805,12 @@ def lyrics_check(job: Job, llm: "LLM", lines: list[L.Line], cues: list) -> int:
     text to read: the translation model reads them with their neighbours and says
     which are lyrics. Those keep the original voice; a line spoken over a song is
     still dubbed. An answer that can't be read leaves the lines as songs."""
-    from .align import sung_candidate, sure_sung
+    from .align import clearly_spoken, sung_candidate, sure_sung
     from .pitch import Pitch
-    todo = [ln for ln in lines if sung_candidate(ln)]
+    p, lang = Pitch.load(job), job["subtitles"].get("source_language", "")
+    todo = [ln for ln in lines if sung_candidate(ln) and not (p is not None and clearly_spoken(ln, p))]
     if not todo:
         return 0
-    p, lang = Pitch.load(job), job["subtitles"].get("source_language", "")
     sure = [ln for ln in todo if (p is not None and sure_sung(ln, p, lang)) or quoted_lyric(ln, cues)]
     for ln in sure:
         ln.kind, ln.check_note = L.SONG, "sung (long held notes, far slower than speech)"
