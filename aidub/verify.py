@@ -20,6 +20,7 @@ from pathlib import Path
 from . import lines as L
 from . import media, originals, review
 from .jobs import Store
+from .speak import UNCLEAR
 
 MEDIA = {"preview.mp4": "video/mp4", "dub.m4a": "audio/mp4", "subs.en.vtt": "text/vtt"}
 LATE_S = 1.0
@@ -81,6 +82,9 @@ def moments(lines: list[L.Line], duration: float) -> list[dict]:
             continue
         if ln.fallback:
             out.append({"t": ln.start, "kind": "kept", "title": "Left in Japanese", "detail": ln.fallback})
+        elif UNCLEAR in ln.check_note:
+            out.append({"t": ln.start, "kind": "unclear", "title": "One word may be unclear",
+                        "detail": f"“{ln.en[:60]}”: " + ln.check_note.split(UNCLEAR + ": ", 1)[-1]})
         elif ln.voice_note in ("moved by pitch", "your choice") or ln.voice_note.endswith("(your choice)"):
             out.append({"t": ln.start, "kind": "voice", "title": "Voice changed",
                         "detail": f"{ln.voice_note}: “{ln.en[:60]}”"})

@@ -401,7 +401,8 @@ def view(cfg, row: dict, prof) -> dict:
                      for q in cues],
             "lines": [{"id": ln.id, "start": round(ln.start, 2), "end": round(ln.end, 2), "kind": ln.kind,
                        "character": ln.character, "english": ln.english_ref, "source": ln.source_text,
-                       "sung": ln.sung, "voice_note": ln.voice_note, "kept_why": ln.kept_why, "decided": ln.decided}
+                       "sung": ln.sung, "voice_note": ln.voice_note, "kept_why": ln.kept_why, "decided": ln.decided,
+                       "fallback": ln.fallback if redub else ""}
                       for ln in lines],
             "regions": regions(lines, duration), "flags": flags, "speakers": speakers,
             "decisions": load_decisions(work), "media": media_status(work),

@@ -556,6 +556,25 @@ def test_backcheck_hears_the_same_sound_spelled_differently(tmp_path):
     assert speak.missed_words("Brakes!", "Breaks.") == ["brakes"]  # without it, only exact spellings
 
 
+def test_backcheck_takes_from_e07_that_were_right():
+    from aidub import speak
+    from aidub.config import Config
+    # "Dammit" heard as "Damn it", a quick "you'd let" heard as "you let", "Nah" heard as "No".
+    assert speak.missed_words("Dammit. As if any of you losers are any", "Damn it! As if any of you losers are any.") == []
+    assert speak.wer("Dammit. As if any of you losers are any", "Damn it! As if any of you losers are any.") == 0
+    assert speak.missed_words("It's obvious you'd let another man steal her under your eyes!",
+                              "It is obvious you let another man steal her under your eyes.") == []
+    assert speak.missed_words("Nah.", "No.") == []
+    assert speak.missed_words("You'd better hurry.", "Better hurry.") == ["you'd"]   # gone entirely: still missed
+    # No take passed, but one is nearly right: it is used rather than keeping the original.
+    cfg = Config({}, None, {})
+    near = {"wer": 0.2, "missed": ["sandwich"], "sim": 0.4, "sim_median": 0.35, "seconds": 2.4, "words": 9}
+    assert not speak._passes(near, cfg) and speak._rescue(near, cfg)
+    assert not speak._rescue({**near, "wer": 0.4}, cfg) and not speak._rescue({**near, "missed": ["a1", "b2"]}, cfg)
+    assert not speak._rescue({**near, "sim": 0.02}, cfg)                       # someone else's voice: no
+    assert speak._passes({**near, "rescued": True}, cfg)
+
+
 def test_voice_model_reads_hyphenated_words_as_two():
     from aidub import speak
     assert speak.spoken("Build self-esteem, Ga-yeong.") == "Build self esteem, Ga yeong."

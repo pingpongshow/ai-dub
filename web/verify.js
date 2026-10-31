@@ -114,7 +114,7 @@ function vfDraw() {
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, W, H);
   g.fillStyle = rvCss("--bg"); rr(g, 0, 0, W, H, 5); g.fill();
-  const col = { song: rvCss("--keep") || rvCss("--warn"), kept: rvCss("--bad"), voice: rvCss("--accent"), late: rvCss("--muted") };
+  const col = { song: rvCss("--keep") || rvCss("--warn"), kept: rvCss("--bad"), voice: rvCss("--accent"), unclear: rvCss("--warn"), late: rvCss("--muted") };
   const ms = VF.d.moments;
   for (let i = 0; i + 1 < ms.length; i++) {  // song stretches as bands between their start and end marks
     if (ms[i].kind === "song" && /starts/.test(ms[i].title)) {

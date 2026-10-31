@@ -58,7 +58,7 @@ CONTRACTIONS = {"it's": "it is", "i'm": "i am", "you're": "you are", "we're": "w
                 "we'll": "we will", "i've": "i have", "you've": "you have", "i'd": "i would", "let's": "let us",
                 "gonna": "going to", "wanna": "want to", "gotta": "got to", "outta": "out of", "kinda": "kind of",
                 "sorta": "sort of", "lemme": "let me", "gimme": "give me", "dunno": "do not know",
-                "alright": "all right", "ok": "okay"}
+                "alright": "all right", "ok": "okay", "dammit": "damn it", "goddammit": "god damn it", "c'mon": "come on"}
 
 
 IS_CONTRACTED = {"who", "what", "where", "when", "why", "how", "that", "there", "here", "it", "he", "she", "this"}
@@ -69,7 +69,8 @@ CLIPPED_FULL = {"bout": "about", "em": "them", "cause": "because", "cos": "becau
                 "round": "around", "fraid": "afraid", "nother": "another"}
 CLIPPED = re.compile(r"(?<![A-Za-z])['’](" + "|".join(CLIPPED_FULL) + r")\b", re.I)
 INTERJECTIONS = set("ah ahh ahhh aah oh ohh ooh uh uhh um umm hm hmm huh eh mm mmm ugh whoa wow ha haha heh hey oops "
-                    "phew tsk".split())
+                    "phew tsk nah yeah yep nope".split())
+REDUCED = re.compile(r"^([a-z]+)'(d|ll|ve)$")  # "you'd let" said quickly is heard "you let"
 
 
 SOUND_ALIKE = {"we're": ("were",), "you're": ("your", "yore"), "they're": ("their", "there"), "it's": ("its",),
@@ -255,6 +256,8 @@ def missed_words(text: str, heard: str) -> list[str]:
     out = []
     for w in _words(text):
         base = re.sub(r"'s$", "", w)  # "West's" heard as "West", "how's" as "how is"
+        if REDUCED.match(w) and REDUCED.match(w).group(1) in heard_set:
+            continue  # the 'd, 'll or 've of a quick contraction is barely voiced
         if w.isdigit() or ORDINAL_RE.fullmatch(w):  # a number must be heard whole, as a number or digit by digit
             said = [x for i, x in enumerate(heard_words) if not (x == "and" and i and heard_words[i - 1] in ("hundred", "thousand"))]
             said = ["zero" if x == "oh" and i and said[i - 1] == "point" else x for i, x in enumerate(said)]
@@ -501,12 +504,23 @@ def short_text(text: str) -> bool:
     return len(_words(text)) <= 2
 
 
+def _rescue(s: dict, cfg) -> bool:
+    """No take passed, but this one is nearly right: at most one key word unclear and
+    the rest heard back ("Dammit" heard as "Damn it" failed both takes and left the
+    line in Japanese). Nearly right English beats keeping the original."""
+    if s.get("wer", 1) > float(cfg.get("speak.rescue_wer", 0.25)) or len(s.get("missed", [])) > 1:
+        return False
+    return _passes({**s, "missed": []}, cfg)
+
+
 def _passes(s: dict, cfg) -> bool:
     """Intelligible, and the voice isn't clearly someone else's. Cross-lingual
     similarity runs low (about 0.2-0.4), so a take is only rejected when it falls
     well below that character's own takes or under an absolute floor; clips under
     a second are too short to embed reliably, so only the back-check applies. A single
     interjection ("Huh?", "Hm.") is hard to recognise back, so it gets more slack."""
+    if s.get("rescued"):
+        return True  # chosen by _rescue when no take passed
     max_wer = float(cfg.get("speak.max_wer", 0.35))
     if s.get("interjection"):
         max_wer = max(max_wer, 0.7)
@@ -528,6 +542,7 @@ def _passes(s: dict, cfg) -> bool:
     return med is None or sim >= med - float(cfg.get("speak.max_similarity_drop", 0.25))
 
 
+UNCLEAR = "voiced with one word unclear"
 FIT_FILES = (("fit1_0.wav", "en"), ("fit0_0.wav", "en"), ("short_0.wav", "en_short"), ("shortfit_0.wav", "en_short"))
 
 
@@ -548,7 +563,7 @@ def run_check(job: Job) -> None:
     scores = score_files(job, items + fitted)
     for ln, _, p in fitted:
         ln.fit.setdefault("scores", {})[p] = scores.get(p, {})
-    failed = 0
+    failed = rescued = 0
     for ln in lines:
         mine = {p: s for (l, _, p), s in ((it, scores.get(it[2], {})) for it in items) if l.id == ln.id}
         if not mine:
@@ -561,8 +576,16 @@ def run_check(job: Job) -> None:
         # one missed word must not hide a clean one with a weaker voice match.
         passing = [p for p in mine if _passes(mine[p], job.cfg)]
         best = max(passing or mine, key=lambda p: mine[p].get("score", 0))
+        rescue = [] if passing else [p for p in mine if _rescue(mine[p], job.cfg)]
         if passing:
             ln.take, ln.fallback = best, ""  # (a resumed job may carry an earlier run's verdict)
+        elif rescue:
+            best = max(rescue, key=lambda p: mine[p].get("score", 0))
+            mine[best]["rescued"] = True
+            ln.take, ln.fallback = best, ""
+            note = f"{UNCLEAR}: “{', '.join(mine[best].get('missed', [])) or '?'}” (heard “{mine[best].get('heard', '')}”)"
+            ln.check_note = f"{ln.check_note}; {note}" if ln.check_note else note
+            rescued += 1
         else:
             ln.take = ""
             ln.fallback = f"every take failed the back-check (best: WER {mine[best].get('wer')}, " \
@@ -570,6 +593,8 @@ def run_check(job: Job) -> None:
             failed += 1
     L.save(lines, job.path("lines.json"))
     job.qc["failed_takes"] = failed
+    if rescued:
+        job.qc["nearly_right_takes"] = rescued
     job.status(f"{failed} lines with no usable take" if failed else "all lines have a usable take")
 
 

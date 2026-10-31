@@ -406,9 +406,10 @@ function rvSubRows() {
     const who = ln ? lineWho(ln) : "";
     const sel = RV.sel && RV.sel.type === "cue" && RV.sel.id === c.key;
     const text = c.italic ? `<i>${esc(c.text)}</i>` : esc(c.text);
-    const why = ln ? `<span class="why"><button class="who" data-line="${ln.id}" title="${RV.data.editable ? "Change whose voice" : ""}"><span class="vdot" style="background:${rvColor(who)}"></span>${esc(whoLabel(who))}</button>
+    const why = ln ? `<span class="why"><button class="who" data-line="${ln.id}" title="${RV.data.editable ? "Change whose voice says this line" : "Speakers can't be changed right now"}"><span class="vdot" style="background:${rvColor(who)}"></span>${esc(whoLabel(who))}${RV.data.editable ? ` <span class="faint">▾</span>` : ""}</button>
       ${ln.kept_why && ln.kind === "song" ? `<span>· ${esc(ln.kept_why)}</span>` : ""}${flaggedLine(ln.id) ? `<span>· sounds sung</span>` : ""}
-      ${ln.voice_note === "moved by pitch" ? `<span>· moved by pitch</span>` : ""}</span>` : "";
+      ${ln.voice_note === "moved by pitch" ? `<span>· moved by pitch</span>` : ""}
+      ${ln.fallback && ln.kind === "speech" ? `<span style="color:var(--bad)" title="${esc(ln.fallback)}">· left in Japanese in the dub</span>` : ""}</span>` : "";
     return `<div class="srow ${sel ? "sel" : ""}" data-key="${esc(c.key)}" data-a="${c.start}" data-b="${c.end}">
       <span class="t">${fmtT(c.start, false)}</span><div class="x">${text}${why}</div>
       ${c.cue && d.editable ? `<button class="chip ${cls}" data-cycle="${esc(c.key)}" title="Click: keep original / dub / Ai Dub decides">${esc(label)}</button>`
@@ -465,7 +466,7 @@ function rvListWire() {
     if (!now) RV.dec.cues[k] = "keep"; else if (now === "keep") RV.dec.cues[k] = "dub"; else delete RV.dec.cues[k];
     setDirty(); rvList(); rvInspector(); rvDraw();
   }));
-  box.querySelectorAll(".who").forEach((b) => (b.onclick = (ev) => { if (d.editable) rvWhoMenu(ev, Number(b.dataset.line)); }));
+  box.querySelectorAll(".who").forEach((b) => (b.onclick = (ev) => { if (d.editable) rvWhoMenu(ev, Number(b.dataset.line)); else toast(RV_READONLY); }));
   const all = $("#rvAll");
   if (all) all.onclick = (e) => { e.preventDefault(); RV.spk = null; rvList(); };
   box.querySelectorAll(".vrow").forEach((row) => (row.onclick = (ev) => {
@@ -532,7 +533,7 @@ function rvWhoMenu(ev, lineId) {
     + `<hr><button data-who="own">Its own voice (this line's audio)</button><button data-who="new">New speaker…</button>`
     + (RV.dec.lines[String(lineId)] ? `<button data-who="undo">Back to Ai Dub's choice</button>` : "");
   document.body.appendChild(pop);
-  const r = ev.target.getBoundingClientRect();
+  const r = (ev.currentTarget || ev.target).getBoundingClientRect();
   pop.style.left = `${Math.min(window.innerWidth - 240, r.left)}px`;
   pop.style.top = `${Math.min(window.innerHeight - 330, r.bottom + 4)}px`;
   pop.querySelectorAll("button").forEach((b) => (b.onclick = () => {
@@ -546,10 +547,11 @@ function rvWhoMenu(ev, lineId) {
     setDirty(); rvClosePop(); rvList(); rvInspector(); rvDraw();
   }));
 }
+const RV_READONLY = "Speakers can be changed while an episode waits for review, or once it's dubbed and not yet checked (then redub it).";
 function rvClosePop() { document.querySelectorAll(".rv-pop").forEach((p) => p.remove()); }
 document.addEventListener("click", (ev) => {
   // A click anywhere but in a menu or on what opened it closes the menu.
-  if (!ev.target.closest || ev.target.closest(".rv-pop, .who, #rvSpSame")) return;
+  if (!ev.target.closest || ev.target.closest(".rv-pop, .who, .rv-who-btn, #rvSpSame")) return;
   rvClosePop();
 });
 
@@ -596,20 +598,29 @@ function rvInspector() {
     const q = s.type === "cue" ? d.cues.find((x) => x.key === s.id) : null;
     const ln = s.type === "line" ? d.lines.find((l) => l.id === s.id) : q && cueLine(q);
     const [cls, label] = q ? cueState(q) : [ln && ln.kind === "speech" ? "dub" : "keep", ln && ln.kind === "speech" ? "Dub" : "Kept"];
-    const who = ln ? lineWho(ln) : "";
+    // Every line spoken under the subtitle, each with its own speaker: a subtitle two
+    // people share needs both changeable.
+    const lns = q ? linesIn(q.start, q.end).filter((l) => l.kind === "speech" || l.kind === "song") : ln ? [ln] : [];
+    const voice = (l) => {
+      const who = lineWho(l);
+      const name = `<span class="vdot" style="background:${rvColor(who)}"></span>${esc(whoLabel(who))}`;
+      return `${ed ? `<button class="sm rv-who-btn" data-wl="${l.id}" title="Change whose voice says this line">${name} <span class="faint">▾</span></button>`
+        : `<span class="row" style="gap:5px">${name}</span>`}${RV.dec.lines[String(l.id)] ? ` <span class="chip mine">your choice</span>` : ""}
+        ${l.voice_note ? `<span class="muted small">${esc(l.voice_note)}</span>` : ""}`;
+    };
     box.innerHTML = `<h4>${q ? "Subtitle" : "Line"} ${fmtT((q || ln).start)} <span class="chip ${cls}">${esc(label)}</span></h4>
       <div class="grid">
         ${q ? `<span class="lab">Subtitle</span><span>${q.italic ? `<i>${esc(q.text)}</i>` : esc(q.text)}</span>` : ""}
-        ${ln ? `<span class="lab">Heard</span><span>${esc(ln.source || "—")}</span>
-        <span class="lab">Voice</span><span><button class="who" id="rvWho"><span class="vdot" style="background:${rvColor(who)}"></span>${esc(whoLabel(who))}</button>
-          ${ln.voice_note ? `<span class="muted small">${esc(ln.voice_note)}</span>` : ""}</span>
-        <span class="lab">Why</span><span class="muted small">${esc(rvWhy(q, ln))}</span>` : ""}
+        ${lns.map((l) => `<span class="lab">${lns.length > 1 ? `Heard ${fmtT(l.start, false)}` : "Heard"}</span><span>${esc(l.source || "—")}</span>
+          <span class="lab">Speaker</span><span class="row" style="gap:6px">${voice(l)}</span>`).join("")}
+        ${ln ? `<span class="lab">Why</span><span class="muted small">${esc(rvWhy(q, ln))}</span>` : ""}
       </div>
+      ${!ed && lns.length ? `<p class="muted small" style="margin:8px 0 0">${RV_READONLY}</p>` : ""}
       ${ed && q ? `<div class="row"><button class="btn-keep ${RV.dec.cues[q.key] === "keep" ? "on" : ""}" id="rvCKeep">Keep original</button>
         <button class="btn-dub ${RV.dec.cues[q.key] === "dub" ? "on" : ""}" id="rvCDub">Dub it</button>
         ${RV.dec.cues[q.key] ? `<button id="rvCAuto">Let Ai Dub decide</button>` : ""}</div>` : ""}`;
     if (!ed) return;
-    if ($("#rvWho") && ln) $("#rvWho").onclick = (ev) => rvWhoMenu(ev, ln.id);
+    box.querySelectorAll("[data-wl]").forEach((b) => (b.onclick = (ev) => rvWhoMenu(ev, Number(b.dataset.wl))));
     if (q) {
       $("#rvCKeep").onclick = () => { RV.dec.cues[q.key] = "keep"; setDirty(); rvList(); rvInspector(); rvDraw(); };
       $("#rvCDub").onclick = () => { RV.dec.cues[q.key] = "dub"; setDirty(); rvList(); rvInspector(); rvDraw(); };
@@ -658,7 +669,7 @@ function rvInspector() {
       pop.innerHTML = `<div class="muted small" style="padding:4px 8px">${esc(sp.name)} is the same person as:</div>` + d.speakers.filter((x) => x.id !== sp.id)
         .map((x) => `<button data-other="${esc(x.id)}"><span class="vdot" style="background:${rvColor(x.id)}"></span>${esc(x.name)}</button>`).join("");
       document.body.appendChild(pop);
-      const r = ev.target.getBoundingClientRect();
+      const r = (ev.currentTarget || ev.target).getBoundingClientRect();
       pop.style.left = `${Math.min(window.innerWidth - 240, r.left)}px`;
       pop.style.top = `${Math.max(8, r.top - 330)}px`;
       pop.querySelectorAll("[data-other]").forEach((b) => (b.onclick = () => {
@@ -687,6 +698,7 @@ function rvWhy(q, ln) {
       : `Inside ${who} ${(RV_KINDS[r.kind] || "song").toLowerCase()} region: keeps the original.`;
   }
   if (ln.kind === "song") return ln.kept_why || "Kept as a song.";
+  if (ln.kind === "speech" && ln.fallback) return `Meant to be dubbed, but left in Japanese in the finished dub: ${ln.fallback}.`;
   if (flaggedLine(ln.id)) return `Held notes over music (${ln.sung.toFixed(2)}): the lyrics check decides unless you choose.`;
   if (ln.kind === "speech" && RV.data.flags.some((f) => f.kind === "nosub" && f.lines.includes(ln.id)))
     return "No English subtitle here: translated from what was heard.";
