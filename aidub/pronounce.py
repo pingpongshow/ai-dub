@@ -210,6 +210,13 @@ def near(a: str, b: str) -> bool:
     return min(len(x), len(y)) >= 5 and _one_apart(x, y)
 
 
+def near_name(a: str, b: str) -> bool:
+    """A made-up name heard one sound off ("Kat-chan" said as Japanese "Kacchan" is heard
+    "Kachan"): skeletons one sound apart, the same first sound."""
+    x, y = skeleton(a), skeleton(b)
+    return min(len(x), len(y)) >= 3 and x[0] == y[0] and _one_apart(x, y)
+
+
 def only_sounds(words: list[str]) -> bool:
     """A line that is only sounds ("Shh.", "Mm-hmm.")."""
     return bool(words) and all(w in NON_WORDS for w in words)

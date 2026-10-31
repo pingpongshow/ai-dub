@@ -547,6 +547,8 @@ def test_backcheck_hears_the_same_sound_spelled_differently(tmp_path):
         assert speak.wer("Daikaiju in Sumida!", "Dai Kajou in Sumida.") == 0
         assert speak.wer("Brakes, now!", "Bray kess now.") > 0      # dictionary words: no such slack
         assert speak.wer("It's useless, Kikoru-chan.", "It is useless, Kikorichan.") == 0   # hyphenated name, one word
+        assert speak.wer("Down! Kat-chan!", "Down. Kachan.") == 0   # said as Japanese "Kacchan"
+        assert speak.wer("Down! Kat-chan!", "Down. Mochan.") > 0.35
         assert pronounce.only_sounds(speak._words("Mm-hmm.")) and pronounce.only_sounds(speak._words("Shh."))
         assert not pronounce.only_sounds(speak._words("Oh, no."))
     finally:
@@ -558,6 +560,9 @@ def test_voice_model_reads_hyphenated_words_as_two():
     from aidub import speak
     assert speak.spoken("Build self-esteem, Ga-yeong.") == "Build self esteem, Ga yeong."
     assert speak.spoken("Ten-20 at 3-4.") == "Ten-20 at 3-4."  # only between letters
+    # A count is said in words, a long run of dots is one pause.
+    assert speak.spoken("3..... 4....") == "Three... Four..." and speak.spoken("Wait..... what?") == "Wait... what?"
+    assert speak.spoken("Room 12.") == "Room 12."
 
 
 def test_misheard_lines_follow_their_subtitle():
@@ -698,7 +703,32 @@ def test_subtitles_as_script_share_cues_and_leave_short_unsubtitled_lines():
     # A short line just before its own cue is covered, so its neighbour never voices it.
     six, seven = L.Line(6, 3.0, 5.4, source_text="任せて"), L.Line(7, 5.45, 5.65, source_text="ミナ")
     assert T.covered_ids([six, seven], [Cue(start=5.66, end=6.0, text="Mina!")]) == {7}
-    assert T.short_reaction(roger) and not T.short_reaction(speech)
+    # Only a sound the subtitles left out keeps the original; a short line with words is dubbed.
+    assert T.short_reaction(L.Line(9, 1.0, 1.4, source_text="ええ。"), "ja")
+    assert not T.short_reaction(roger, "ja") and not T.short_reaction(speech, "ja")
+    assert not T.short_reaction(L.Line(9, 1.0, 2.5, source_text="すごいね"), "ja")
+    # The rest of a speaker's sentence, said just before or after a subtitle too long for
+    # their subtitled line, shares that subtitle and gets some of its words.
+    s1 = L.Line(224, 1019.365, 1020.165, source_text="今度の試合", character="c1")
+    s2 = L.Line(225, 1021.125, 1021.925, source_text="応援に行くんだろう", character="c1")
+    s3 = L.Line(226, 1024.155, 1024.955, source_text="どうしようかな", character="c2")
+    qs = [{"start": 1018.64, "end": 1020.7, "text": "You'll go support him, right?"},
+          {"start": 1024.0, "end": 1025.0, "text": "Don't know."}]
+    assert T.line_subtitles([s1, s2, s3], qs) == {224: [0], 225: [0], 226: [1]}
+    got = {224: {"en": "You'll go support him, right?"}, 225: {"en": ""}}
+    T.verbatim_lines([s1, s2, s3], qs, got)
+    assert got[225]["en"] and f"{got[224]['en']} {got[225]['en']}" == "You'll go support him, right?"
+    e1 = L.Line(254, 1292.98, 1293.94, source_text="皆さんこれまで", character="c1")
+    e2 = L.Line(255, 1295.92, 1298.38, source_text="応援ありがとうございました", character="c1")
+    assert T.line_subtitles([e1, e2], [{"start": 1294.6, "end": 1298.5,
+                                        "text": "Everyone, thank you for supporting me all this time."}]) == {254: [0], 255: [0]}
+    # ... but not another character's line, a sound, or a subtitle that fits its own line.
+    other = L.Line(225, 1021.125, 1021.925, source_text="応援に行くんだろう", character="c2")
+    assert T.line_subtitles([s1, other], qs[:1]) == {224: [0], 225: []}
+    fits = [{"start": 1018.64, "end": 1020.7, "text": "Next match?"}]
+    assert T.line_subtitles([s1, s2], fits) == {224: [0], 225: []}
+    oh = L.Line(225, 1021.125, 1021.925, source_text="ああ", character="c1")
+    assert T.line_subtitles([s1, oh], qs[:1]) == {224: [0], 225: []}
     user = T.script_prompt([a1, a2], shares[0], [], "", 4.3, {})[1]["content"]
     assert "Hey! Sorry, can I pass through?" in user and '"from_subtitle"' in user and '"matches"' in user
     # Each line gets the subtitles shown while it is spoken, by time; a shared one is marked.

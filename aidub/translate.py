@@ -229,7 +229,7 @@ SCRIPT_SYSTEM_FREE = SCRIPT_SYSTEM.replace(
     "that fits the time the character speaks (aim for the target syllable count)",
     "that starts with the character but may run longer, so keep each line's full meaning")
 NO_SUBTITLE = "no subtitle: translated from the speech"
-SHORT_KEPT = "no subtitle: a short line keeps the original"
+SHORT_KEPT = "no subtitle: a sound keeps the original"
 
 
 def led(ln: L.Line) -> bool:
@@ -377,7 +377,14 @@ def verbatim_lines(batch: list[L.Line], cues: list[dict], drafts: dict[int, dict
     for group, ks in subtitle_groups(batch, cues):
         whole = spoken_form(" ".join(cues[k]["text"] for k in ks))
         parts = [spoken_form(drafts.get(ln.id, {}).get("en", "")) for ln in group]
-        if len(group) > 1 and _tokens(" ".join(parts)) != _tokens(whole):
+        # A line that shares a subtitle only as the rest of its neighbour's sentence (it
+        # isn't under it) always gets some of its words.
+        joined = len(group) > 1 and any(not p.strip() and not any(
+            min(cues[k]["end"], ln.end) > max(cues[k]["start"], ln.start) for k in ks) for ln, p in zip(group, parts))
+        if joined:
+            parts = split_words(whole, [ln.duration for ln in group])
+            by_time += 1
+        elif len(group) > 1 and _tokens(" ".join(parts)) != _tokens(whole):
             aligned = align_split(whole, parts)
             if aligned is None:
                 aligned = split_words(whole, [ln.duration for ln in group])
@@ -455,9 +462,12 @@ def covered_ids(lines: list[L.Line], cues: list) -> set[int]:
     return {lid for lid, ks in line_subtitles(lines, as_dicts).items() if ks}
 
 
-def short_reaction(ln: L.Line) -> bool:
-    """A short line ("Roger!", a shout) the subtitles left out keeps the original."""
-    return ln.duration < 1.2 or len(re.sub(r"[\W_]+", "", ln.source_text)) <= 4
+def short_reaction(ln: L.Line, lang: str) -> bool:
+    """A sound ("Ah!", "Hm?") the subtitles left out keeps the original. A short line
+    with words ("すごいね", "Amazing.") is translated from the speech: kept, it was
+    Japanese in the middle of the dub."""
+    from .align import is_interjection
+    return is_interjection(ln.source_text, lang)
 
 
 NEAR_CUE_S = 0.3  # a subtitle shown just after its line ("Mina!" 0.04 s after it) still belongs to it
@@ -507,7 +517,38 @@ def line_subtitles(batch: list[L.Line], cues: list[dict]) -> dict[int, list[int]
                 hits = [near]
         for ln in hits:
             out[ln.id].append(k)
+    _join_neighbours(batch, cues, out)
     return out
+
+
+JOIN_GAP_S = 2.0    # a speaker's line this close before or after their own subtitled line ...
+JOIN_CUE_S = 1.0    # ... and this close to that subtitle shares it when the subtitle is too long
+SUB_RATE = 4.3      # for that line alone (syllables a second): one sentence said in two breaths
+
+
+def _join_neighbours(batch: list[L.Line], cues: list[dict], out: dict[int, list[int]]) -> None:
+    """A line with no subtitle of its own, next to the same character's subtitled line,
+    is the rest of that subtitle's sentence when the subtitle is too long for its line:
+    "今度の試合 / 応援に行くんだろう" under "You'll go support him, right?", or
+    "皆さんこれまで" said before "Everyone, thank you for supporting me all this time."
+    appears. Left alone, the second half kept the original."""
+    from .align import is_interjection
+    order = sorted(batch, key=lambda ln: ln.start)
+    for i, ln in enumerate(order):
+        if out[ln.id] or not ln.character or any(is_interjection(ln.source_text, x) for x in ("ja", "ko", "zh")):
+            continue
+        for nb in (order[i - 1] if i else None, order[i + 1] if i + 1 < len(order) else None):
+            if nb is None or nb.character != ln.character or not out[nb.id] or _gap_lines(ln, nb) > JOIN_GAP_S:
+                continue
+            ks = [k for k in out[nb.id] if not _sign(cues[k]["text"])
+                  and max(ln.start - cues[k]["end"], cues[k]["start"] - ln.end, 0.0) <= JOIN_CUE_S]
+            if ks and syllables(" ".join(cues[k]["text"] for k in out[nb.id])) > SUB_RATE * nb.duration + 1:
+                out[ln.id] = ks
+                break
+
+
+def _gap_lines(a: L.Line, b: L.Line) -> float:
+    return max(a.start - b.end, b.start - a.end, 0.0)
 
 
 VERBATIM_TASK = (
@@ -1007,13 +1048,13 @@ def run(job: Job) -> None:
             if n:
                 job.qc["subtitled_reactions_dubbed"] = n
                 job.log(f"{n} short subtitled lines kept as sounds are dubbed (\"Yes.\", \"Thank you.\")")
-        # Speech the subtitles leave out: a short reaction keeps the original, a longer
-        # line is translated from the speech and flagged.
+        # Speech the subtitles leave out: a sound keeps the original, a line with words
+        # is translated from the speech and flagged.
         speech = [ln for ln in lines if ln.kind == L.SPEECH]
         under = covered_ids(speech, cues) if cues else set()
         for ln in speech:
             if cues and ln.id not in under:
-                if short_reaction(ln) and ln.decided != "dub":
+                if short_reaction(ln, lang) and ln.decided != "dub":
                     ln.fallback = ln.check_note = SHORT_KEPT
                 else:
                     ln.check_note = NO_SUBTITLE

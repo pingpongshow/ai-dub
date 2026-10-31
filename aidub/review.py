@@ -180,12 +180,22 @@ def needs_look(job, lines: list[L.Line]) -> list[dict]:
         if not ok:
             add("subtitles", (0.0, min(5.0, duration or 5.0)), "English subtitles won't be the script",
                 f"{why}. The episode would be translated from the speech instead.", [])
+        elif talk:
+            # Speech no subtitle covers: translated from what was heard, so worth a listen
+            # (a sound like "Ah!" keeps the original and isn't flagged).
+            speech = [ln for ln in lines if ln.kind == L.SPEECH and ln.decided != "keep"]
+            under = translate.covered_ids(speech, talk)
+            for ln in speech:
+                if ln.id not in under and not translate.short_reaction(ln, lang):
+                    add("nosub", ln, "Speech with no subtitle",
+                        f"“{ln.source_text[:40]}” has no English subtitle, so it will be translated from what was "
+                        "heard. Listen to check it is speech worth dubbing.", [ln.id])
     out.sort(key=lambda f: f["start"])
     # One thing to check per stretch: ten lines of one unsubtitled song are one flag.
     merged: list[dict] = []
     for f in out:
         last = merged[-1] if merged else None
-        if last and last["kind"] == f["kind"] and f["kind"] in ("song", "lyrics", "voice", "edge") \
+        if last and last["kind"] == f["kind"] and f["kind"] in ("song", "lyrics", "voice", "edge", "nosub") \
                 and last["title"] == f["title"] and f["start"] - last["end"] <= FLAG_GAP_S:
             last["end"] = max(last["end"], f["end"])
             last["lines"] = sorted(set(last["lines"]) | set(f["lines"]))

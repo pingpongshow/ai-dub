@@ -463,7 +463,7 @@ function rvGoFlag(i) {
   RV.flag = i;
   const reg = regionsNow().find((r) => f.lines.some((id) => r.lines && r.lines.includes(id)));
   const cue = RV.data.cues.find((q) => overlap(q.start, q.end, f.start, f.end) > 0);
-  RV.sel = f.kind === "voice" && f.lines.length ? { type: "line", id: f.lines[0] }
+  RV.sel = (f.kind === "voice" || f.kind === "nosub") && f.lines.length ? { type: "line", id: f.lines[0] }
     : reg ? { type: "region", id: reg.id } : cue ? { type: "cue", id: cue.key } : { type: "flag", id: i };
   RV.selFlag = i;
   RV.pendingShow = true;
@@ -642,6 +642,8 @@ function rvWhy(q, ln) {
   }
   if (ln.kind === "song") return ln.kept_why || "Kept as a song.";
   if (flaggedLine(ln.id)) return `Held notes over music (${ln.sung.toFixed(2)}): the lyrics check decides unless you choose.`;
+  if (ln.kind === "speech" && RV.data.flags.some((f) => f.kind === "nosub" && f.lines.includes(ln.id)))
+    return "No English subtitle here: translated from what was heard.";
   return ln.kind === "speech" ? "Spoken line: dubbed." : "Kept in the original (no words to dub).";
 }
 

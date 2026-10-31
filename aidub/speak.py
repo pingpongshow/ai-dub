@@ -171,7 +171,8 @@ def wer(ref: str, hyp: str) -> float:
         joined = "".join(parts)
         if joined in pronounce.LEXICON:
             continue
-        k = next((i for i, h in enumerate(b) if pronounce.same_sound(joined, h) or pronounce.near(joined, h)), None)
+        k = next((i for i, h in enumerate(b) if pronounce.same_sound(joined, h) or pronounce.near(joined, h)
+                  or pronounce.near_name(joined, h)), None)
         if k is not None:
             b[k:k + 1] = parts
     # A name and the word next to it heard as one word ("Erect Ohki's" as "Erectokey's").
@@ -306,11 +307,18 @@ def _orig_clip(job: Job, ln: L.Line, dlg: np.ndarray, sr: int) -> Path:
     return p
 
 
+COUNT = re.compile(r"[\d\s.,!?…-]+")
+
+
 def spoken(text: str) -> str:
     """The line as the voice model should read it: it garbles hyphenated words
     ("self-esteem" came out as "self in Spain" in 4 of 4 takes, right in 4 of 4 as
-    "self esteem"), so hyphens between letters become spaces."""
-    return said_as(re.sub(r"(?<=[A-Za-z])-(?=[A-Za-z])", " ", text))
+    "self esteem"), so hyphens between letters become spaces. A long run of dots is
+    one pause, and a count ("3..... 4....", a referee) is said in words."""
+    text = re.sub(r"\.{4,}", "...", re.sub(r"(?<=[A-Za-z])-(?=[A-Za-z])", " ", text))
+    if re.search(r"\d", text) and COUNT.fullmatch(text):
+        text = re.sub(r"\d{1,3}", lambda m: " ".join(number_words(int(m.group(0)))).capitalize(), text)
+    return said_as(text)
 
 
 def _requests(job: Job, ln: L.Line, text: str, takes: int, tag: str, dlg, sr, factor: float | None = None,
