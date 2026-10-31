@@ -169,6 +169,8 @@ async function pageHistory() {
     return `<div class="panel" data-id="${j.id}">
       <div class="row"><span class="grow path">${esc(j.path.split("/").pop())}</span><span class="tag ${tag}">${esc(j.status)}</span></div>
       <div class="small muted">${esc(j.message)} · ${when(j.finished)} · profile ${esc(j.profile)}</div>
+      ${qc.subtitle_track && qc.subtitle_track.trusted === false && qc.subtitle_track.why !== "no English subtitle"
+        ? `<div class="tag warn" style="margin-top:6px">English subtitles not used as the script: ${esc(qc.subtitle_track.why)}. Dubbed from the speech instead.</div>` : ""}
       ${j.status === "failed" ? `<div class="row small" style="margin-top:6px"><span class="muted">Working files kept: ${gb(j.work_bytes || 0)}</span>
         <button data-act="retry">Retry from the failed step</button><button data-act="remove" class="danger">Remove</button></div>` :
         `<div class="row" style="margin-top:6px"><button data-act="remove">Remove from history</button></div>`}

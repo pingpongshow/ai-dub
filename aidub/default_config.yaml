@@ -79,7 +79,8 @@ translate:
                             # (the speech checks meaning and sets timing; a doubtful track falls back to audio);
                             # subtitle_verbatim: the same, word for word (shared subtitles divided by their own
                             # words; a long line is sped up or runs on first, then only trimmed)
-  script_track: { content: 0.8, total: 0.75, agree: 0.75 }  # subtitle_only: what the track must score
+  script_track: { content: 0.8, agree: 0.75 }  # what the track must score to be the script (total: subtitles.min_score);
+                                                # 0.1 easier when the show's last episodes' tracks were trusted
   syllables_per_second: 4.3 # voice model's measured pace (plus ~0.25 s per line), used to size lines
 
 songs:                      # songs keep the original voice; never translated

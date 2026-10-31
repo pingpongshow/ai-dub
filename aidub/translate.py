@@ -393,12 +393,38 @@ def verbatim_lines(batch: list[L.Line], cues: list[dict], drafts: dict[int, dict
     return by_time
 
 
+TRUSTED_BEFORE = 2        # a show whose last episodes used their subtitles as the script ...
+TRUSTED_EASIER = 0.1      # ... gives the next track this much leeway on meaning and agreement
+
+
+def _trusted_before(job: Job) -> bool:
+    """The show's recent episodes (others than this one) had their English subtitles
+    trusted as the script: the releases come from one source, so the next one likely
+    is as good, and a borderline score is the episode, not the track."""
+    prof, src = getattr(job, "profile", None), getattr(job, "src", None)
+    seen = (prof.data.get("subtitle_trust") or {}) if prof else {}
+    me = src.name if src else ""
+    recent = [v for k, v in sorted(seen.items(), key=lambda kv: kv[1].get("at", 0)) if k != me][-3:]
+    return len(recent) >= TRUSTED_BEFORE and all(v.get("trusted") for v in recent)
+
+
+def remember_trust(job: Job, trusted: bool, why: str) -> None:
+    if not getattr(job, "profile", None):
+        return
+    seen = job.profile.data.setdefault("subtitle_trust", {})
+    seen[job.src.name] = {"trusted": trusted, "why": why, "at": time.time()}
+    job.profile.save()
+
+
 def subtitles_trusted(job: Job) -> tuple[bool, str]:
     """Whether the English subtitle track is good enough to be the script: its meaning
     follows the speech across the episode (content score: true pairs against shuffled
-    ones), its timing follows the speech, and nearly all of the lines checked one by
-    one against the speech agree. A machine-made, fan or other-cut track fails as a
-    whole; then the episode is translated from the speech."""
+    ones) and nearly all of the lines checked one by one against the speech agree. Its
+    overall score (which also counts timing and how much of the speech it covers) only
+    has to be what chose the track: a show with long silences scores lower there with
+    every word right, and S01E04 of Midnight Diner fell back to translating the speech
+    at 0.74 of a required 0.75. A machine-made, fan or other-cut track fails on meaning;
+    then the episode is translated from the speech."""
     from .subtitles.step import candidate
     cid = job["subtitles"].get("english")
     if not cid:
@@ -406,14 +432,20 @@ def subtitles_trusted(job: Job) -> tuple[bool, str]:
     sc = (candidate(job, cid) or {}).get("score", {})
     checked = int(job.qc.get("subtitle_lines_checked", 0))
     agree = 1 - int(job.qc.get("subtitle_lines_disagreeing_with_speech", 0)) / checked if checked else 1.0
-    need = {"content": 0.8, "total": 0.75, "agree": 0.75}
+    need = {"content": 0.8, "total": float(job.cfg.get("subtitles.min_score", 0.65)), "agree": 0.75}
     need.update(job.cfg.get("translate.script_track") or {})
+    before = _trusted_before(job)
+    if before:
+        for k in ("content", "agree"):
+            need[k] = float(need[k]) - TRUSTED_EASIER
     if not checked:  # too few lines to check one by one: the track scores decide
         need.pop("agree", None)
     got = {"content": float(sc.get("content", 0)), "total": float(sc.get("total", 0)), "agree": agree}
-    bad = [f"{k} {got[k]:.2f} below {float(v):.2f}" for k, v in need.items() if got[k] < float(v)]
+    names = {"content": "meaning", "total": "score", "agree": "lines agreeing"}
+    bad = [f"{names[k]} {got[k]:.2f} below {float(v):.2f}" for k, v in need.items() if got[k] < float(v)]
     return not bad, "; ".join(bad) or (f"meaning {got['content']:.2f}, score {got['total']:.2f}, " +
-                                       (f"{agree:.0%} of checked lines agree" if checked else "no lines checked"))
+                                       (f"{agree:.0%} of checked lines agree" if checked else "no lines checked") +
+                                       ("; earlier episodes' subtitles were trusted" if before else ""))
 
 
 def covered_ids(lines: list[L.Line], cues: list) -> set[int]:
@@ -865,12 +897,15 @@ def run(job: Job) -> None:
         from .subtitles.step import load_chosen
         trusted, why = subtitles_trusted(job)
         job.qc["subtitle_track"] = {"trusted": trusted, "why": why}
+        if job["subtitles"].get("english"):
+            remember_trust(job, trusted, why)
         if trusted:
             cues = [q for q in load_chosen(job, "english") if q.kind == DIALOGUE and q.text]
             job.log(f"subtitles are the script ({why})")
         else:
             lead_by = "audio"
-            job.log(f"subtitle track not trusted as the script ({why}): translating the speech")
+            job.log(f"WARNING: the English subtitles are not used as the script ({why}); "
+                    "the episode is translated from the speech instead")
         # Speech the subtitles leave out: a short reaction keeps the original, a longer
         # line is translated from the speech and flagged.
         speech = [ln for ln in lines if ln.kind == L.SPEECH]

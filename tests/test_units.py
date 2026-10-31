@@ -722,7 +722,7 @@ def test_subtitle_track_must_be_trusted_to_be_the_script():
         return j
     assert T.subtitles_trusted(job(1.0, 8))[0]
     ok, why = T.subtitles_trusted(job(0.5, 8))       # meaning doesn't follow the speech: another cut, machine-made
-    assert not ok and "content" in why
+    assert not ok and "meaning" in why
     assert not T.subtitles_trusted(job(1.0, 90))[0]  # too many lines disagree one by one
 
 
@@ -1220,3 +1220,28 @@ def test_a_spoken_line_right_after_a_song_is_not_asked_about(tmp_path):
     narration = L.Line(id=1, start=20.5, end=22.5, source_text="一日が終わり", english_ref="As the day comes to an end,",
                        music_db=-8, sung=0.44)
     assert translate.lyrics_check(job, Never(), [narration], []) == 0 and narration.kind == L.SPEECH
+
+
+def test_a_good_track_is_trusted_whatever_its_coverage_and_shows_remember(tmp_path):
+    from aidub import translate as T
+    prof = profiles.Profiles(tmp_path).get_or_create("Diner")
+
+    def job(name, content, total, disagree):
+        j = _StubJob({}, {"subtitles": {"english": "e", "candidates": [
+            {"id": "e", "score": {"content": content, "total": total}}]}})
+        j.qc = {"subtitle_lines_checked": 200, "subtitle_lines_disagreeing_with_speech": disagree}
+        j.profile, j.src = prof, tmp_path / name
+        return j
+    # S01E04: every word right, long silences: overall 0.74. Meaning and lines decide.
+    ok, why = T.subtitles_trusted(job("E04.mkv", 0.86, 0.74, 14))
+    assert ok, why
+    assert not T.subtitles_trusted(job("E04.mkv", 0.86, 0.60, 14))[0]   # under what chose the track at all
+    # A borderline track (meaning 0.75) on a show whose last episodes' tracks were trusted.
+    assert not T.subtitles_trusted(job("E05.mkv", 0.75, 0.80, 30))[0]
+    for n in ("E01.mkv", "E02.mkv", "E03.mkv"):
+        T.remember_trust(job(n, 1.0, 0.83, 10), True, "ok")
+    ok, why = T.subtitles_trusted(job("E05.mkv", 0.75, 0.80, 30))
+    assert ok and "earlier episodes" in why
+    assert not T.subtitles_trusted(job("E05.mkv", 0.5, 0.80, 30))[0]   # a wrong track still fails
+    T.remember_trust(job("E04.mkv", 0.5, 0.7, 10), False, "meaning 0.50 below 0.80")
+    assert not T.subtitles_trusted(job("E05.mkv", 0.75, 0.80, 30))[0]  # the last episode's track failed
