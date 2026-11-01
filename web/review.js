@@ -55,6 +55,8 @@ function regionAt(t, user) {
 }
 function flaggedLine(id) { return RV.data.flags.some((f) => f.lines.includes(id) && f.kind === "lyrics"); }
 function cueState(q) {
+  // A finished dub shows what came out: a line meant to be dubbed that stayed in Japanese.
+  if (RV.data.redub && linesIn(q.start, q.end).some((l) => l.kind === "speech" && l.fallback)) return ["look", "Left in Japanese"];
   const d = RV.dec.cues[q.key];
   if (d) return d === "keep" ? ["mine", "Keep (you)"] : ["mine", "Dub (you)"];
   if (q.kind === "sign") return ["sign", "Sign"];

@@ -1451,3 +1451,11 @@ def test_backcheck_knows_the_shows_names():
     assert speak.missed_words("Alois, are you all right", "Alwa, are you all right?") == ["alois"]  # without the names
     # Calls and sounds.
     assert speak.missed_words("Ouch", "Uh.") == [] and speak.missed_words("Yo ho~", "Yeah.") == []
+
+
+def test_backcheck_two_words_heard_as_one():
+    from aidub import speak
+    # Dog of Flanders E02 7:41 stayed Japanese: "some time" heard as "sometime".
+    assert speak.missed_words("The flowers turn into fruits some time", "The flowers turn into fruits sometimes.") == []
+    assert speak.wer("The flowers turn into fruits some time", "The flowers turn into fruit sometime.") <= 0.15
+    assert speak.missed_words("Any way you like", "Anyway you like.") == []

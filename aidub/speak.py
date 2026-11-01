@@ -191,6 +191,9 @@ def wer(ref: str, hyp: str, names: frozenset = frozenset()) -> float:
     if names and a and all(w.removesuffix("'s") in names for w in a):
         # Only names ("Nello!", "Alois?"): heard as about as many words, roughly alike.
         return 0.0 if 1 <= len(b) <= len(a) + 1 and _name_heard("".join(a), "".join(b)) else 1.0
+    # Two script words heard as one ("some time" as "sometime[s]") are those words.
+    joined = {a[i] + a[i + 1]: [a[i], a[i + 1]] for i in range(len(a) - 1)}
+    b = [x for h in b for x in (joined.get(h) or joined.get(h.removesuffix("s")) or [h])] if joined else b
     # A show's name heard with another spelling ("Alwa, are you all right?") is that name.
     b = [next((n for n in a if n in names and n not in b and _name_heard(n, h)), h) if h not in a else h for h in b]
     b = [w for i, w in enumerate(b) if not (w == "and" and i and b[i - 1] in ("hundred", "thousand"))]
@@ -283,8 +286,10 @@ def missed_words(text: str, heard: str, names: frozenset = frozenset()) -> list[
             heard_set.update(parts)
         elif any(pronounce.near(joined, h) or pronounce.same_sound(joined, h) for h in heard_pairs):
             heard_set.update(p for p in parts if p not in pronounce.LEXICON)
+    said = _words(text)
+    pairs = {x for a, b in zip(said, said[1:]) if (a + b) in heard_set or (a + b) + "s" in heard_set for x in (a, b)}
     out = []
-    for w in _words(text):
+    for w in said:
         base = re.sub(r"'s$", "", w)  # "West's" heard as "West", "how's" as "how is"
         if REDUCED.match(w) and REDUCED.match(w).group(1) in heard_set:
             continue  # the 'd, 'll or 've of a quick contraction is barely voiced
@@ -300,6 +305,9 @@ def missed_words(text: str, heard: str, names: frozenset = frozenset()) -> list[
         if len(w) < 3 or base in STOPWORDS or w in names or base in names or w in heard_set or base in heard_set \
                 or w in show or base in show \
                 or pronounce.heard_as(w, heard_words) or pronounce.heard_as(base, heard_words):
+            continue
+        # Two words heard as one ("some time" as "sometime", "any way" as "anyway").
+        if w in pairs:
             continue
         # Plural, possessive and simple tense endings still count as heard.
         if any(h.rstrip("s") == w.rstrip("s") or h.rstrip("ed") == w.rstrip("ed") for h in heard_set):
