@@ -359,6 +359,11 @@ def test_browser_tracks_and_language_filter(client, cfg, media_root):
     assert [f["name"] for f in r["files"]] == [ja.name] and r["filtered"] == 1
     assert c.get("/api/expand", params={"path": str(show), "audio": "ko"}).json()["filtered"] == 2
     assert c.get("/api/browse/tracks", params={"path": "/etc"}).status_code == 403
+    # One level up, the show's folder is filtered by the videos inside it (a film's
+    # folder or a show's seasons), read in the background the first time.
+    up = c.get("/api/browse/tracks", params={"path": str(media_root)}).json()
+    assert up["pending"] == 0 and up["folders"][str(show)] == [str(ja), str(both)]
+    assert set(up["files"]) >= {str(ja), str(both)}
 
 
 def test_pause_events_episodes_originals_and_bazarr_test(client, cfg, media_root):

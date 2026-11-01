@@ -203,14 +203,22 @@ async function loadBrowser(path) {
   loadBrowser.entries = data.entries;
   loadBrowser.data = data;
   loadBrowser.tracks = null;
+  loadBrowser.folders = {};
+  loadBrowser.pending = 0;
   renderBrowser();
-  if (!data.path || !data.entries.some((e) => !e.dir)) return;
-  // Reading every file's tracks can take a few seconds the first time; the list shows meanwhile.
-  const t = await api("/browse/tracks?path=" + encodeURIComponent(data.path)).catch(() => null);
-  if (t && loadBrowser.data === data) {
+  if (!data.path || !data.entries.length) return;
+  // Every video here and in the folders just below (a film's folder, a show's seasons).
+  // The first time, a big library is read in the background: the list fills in as it goes.
+  for (let round = 0; loadBrowser.data === data; round++) {
+    const t = await api("/browse/tracks?path=" + encodeURIComponent(data.path)).catch(() => null);
+    if (!t || loadBrowser.data !== data) return;
     loadBrowser.tracks = t.files;
+    loadBrowser.folders = t.folders || {};
+    loadBrowser.pending = t.pending || 0;
     langNames = { ...langNames, ...t.names };
     renderBrowser();
+    if (!t.pending) return;
+    await new Promise((r) => setTimeout(r, 1500));
   }
 }
 
@@ -220,6 +228,29 @@ const langName = (c) => (c ? langNames[c] || c.toUpperCase() : "Unknown");
 // Which of a file's own dialogue tracks are in which languages ("und": untagged).
 function audioLangs(info) {
   return new Set((info.audio || []).filter((a) => !a.aidub && !a.commentary).map((a) => a.lang || "und"));
+}
+
+// A folder passes when any video in it does (a film's folder: its film).
+function folderPasses(e) {
+  const vids = (loadBrowser.folders || {})[e.path];
+  if (!loadBrowser.tracks || !vids || !vids.length) return true;
+  return vids.some((v) => passesFilter(loadBrowser.tracks[v]));
+}
+function folderLine(e) {
+  const vids = (loadBrowser.folders || {})[e.path];
+  if (!vids) return "";
+  if (!vids.length) return `<div class="tracks faint">No videos directly inside</div>`;
+  const infos = vids.map((v) => (loadBrowser.tracks || {})[v]);
+  if (vids.length === 1) return trackLine(infos[0]);
+  const read = infos.filter(Boolean);
+  if (!read.length) return `<div class="tracks faint">${vids.length} videos · reading tracks…</div>`;
+  const langs = new Set();
+  read.forEach((i) => audioLangs(i).forEach((l) => langs.add(l)));
+  const on = trackFilter.audio || trackFilter.hide.length;
+  const match = read.filter((i) => passesFilter(i)).length;
+  return `<div class="tracks"><span class="tk">${vids.length} videos</span><span class="tk">Audio</span>
+    ${[...langs].map((l) => `<span class="tl">${esc(l === "und" ? "Unknown" : langName(l))}</span>`).join("")}
+    ${on ? `<span class="tk">${match} match${read.length < vids.length ? ` (${vids.length - read.length} still reading)` : ""}</span>` : ""}</div>`;
 }
 
 function passesFilter(info) {
@@ -249,13 +280,13 @@ function renderFilter() {
   const bar = $("#tfilter");
   if (!bar) return;
   const data = loadBrowser.data;
-  const hasFiles = data && data.path && data.entries.some((e) => !e.dir);
+  const hasFiles = data && data.path && data.entries.length;
   const on = trackFilter.audio || trackFilter.hide.length;
   if (!hasFiles && !on) { bar.hidden = true; return; }
   bar.hidden = false;
   // Languages offered: the common ones, what this folder has, and what the filter already uses.
   const seen = new Set(["ja", "zh", "ko", "en"]);
-  Object.values(loadBrowser.tracks || {}).forEach((i) => audioLangs(i).forEach((l) => seen.add(l)));
+  Object.values(loadBrowser.tracks || {}).forEach((i) => i && audioLangs(i).forEach((l) => seen.add(l)));
   if (trackFilter.audio) seen.add(trackFilter.audio);
   trackFilter.hide.forEach((l) => seen.add(l));
   const order = (a, b) => (a === "und") - (b === "und") || langName(a).localeCompare(langName(b));
@@ -301,23 +332,26 @@ function renderBrowser() {
   renderFilter();
   const box = $("#browser");
   const tracks = loadBrowser.tracks;
-  const info = (e) => (tracks ? tracks[e.path] || { error: "not read" } : null);
-  const shown = data.entries.map((e, i) => [e, i]).filter(([e]) => e.dir || passesFilter(info(e)));
+  const info = (e) => (tracks ? tracks[e.path] || null : null);
+  const shown = data.entries.map((e, i) => [e, i]).filter(([e]) => (e.dir ? folderPasses(e) : passesFilter(info(e))));
   renderBrowser.visible = shown.map(([e]) => e);
-  const files = data.entries.filter((e) => !e.dir);
-  const hidden = files.length - shown.filter(([e]) => !e.dir).length;
-  if ($("#tfcount")) $("#tfcount").textContent = hidden ? `${plural(hidden, "file")} hidden by the filter` : "";
+  const hidden = data.entries.length - shown.length;
+  const left = loadBrowser.pending;
+  if ($("#tfcount")) $("#tfcount").textContent = [hidden ? `${hidden} hidden by the filter` : "",
+    left ? `reading tracks: ${left} left` : ""].filter(Boolean).join(" · ");
+  const keep = box.scrollTop;  // refreshes while tracks are read shouldn't jump the list
   $("#selall").hidden = !renderBrowser.visible.some((e) => !e.dir && !e.queued);
   box.innerHTML = shown.length ? shown.map(([e, i]) => e.dir
-    ? `<div class="entry dir" data-i="${i}"><span class="ico">${ICON.folder}</span><span class="name">${esc(e.name)}</span>
+    ? `<div class="entry dir" data-i="${i}"><span class="ico">${ICON.folder}</span><span class="name">${esc(e.name)}${data.path ? folderLine(e) : ""}</span>
         <span>${data.path ? `<button class="sm ghost" data-addall="${i}" title="Every episode in this folder and its season folders that isn't queued or dubbed yet (and matches the language filter)">Add all…</button>` : ""}</span><span class="size"></span></div>`
     : `<div class="entry ${selected.has(e.path) ? "on" : ""} ${e.queued ? "disabled" : ""}" data-i="${i}">
         <input type="checkbox" ${selected.has(e.path) ? "checked" : ""} ${e.queued ? "disabled" : ""} aria-label="Select ${esc(e.name)}">
         <span class="name">${esc(e.name)}${data.path ? trackLine(info(e)) : ""}</span>
         <span>${e.queued ? `<span class="tag accent">in the queue</span>` : ""}${e.set_aside || e.dubbed ? `<span class="tag ok" title="${e.set_aside ? "Dubbed; its original is set aside next to it" : "Dubbed by Ai Dub"}">dubbed</span>` : ""}</span>
         <span class="size">${gb(e.size)}</span></div>`).join("")
-    : hidden ? `<div class="empty"><b>Nothing matches the filter</b>${plural(hidden, "file")} here ${hidden === 1 ? "is" : "are"} hidden by the language filter.</div>`
+    : hidden ? `<div class="empty"><b>Nothing matches the filter</b>${hidden} here ${hidden === 1 ? "is" : "are"} hidden by the language filter.</div>`
     : `<div class="empty"><b>This folder is empty</b>No video files here.</div>`;
+  box.scrollTop = keep;
   box.querySelectorAll(".entry").forEach((div) => {
     const e = data.entries[Number(div.dataset.i)];
     if (e.dir) {

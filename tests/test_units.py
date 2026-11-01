@@ -1482,3 +1482,19 @@ def test_track_filter_matches():
     assert matches(en_comment, set(), {"en"})      # nor does an English commentary
     assert matches(untagged, {"und"}, set()) and not matches(untagged, {"ja"}, set())
     assert matches({"error": "x"}, set(), {"en"}) and not matches({"error": "x"}, {"ja"}, set())
+
+
+def test_tracks_read_in_background_and_cached(tmp_path):
+    import synth
+    from aidub.tracks import Tracks, videos_in
+    show = tmp_path / "Show" / "Season 1"
+    show.mkdir(parents=True)
+    ep = synth.episode(show / "Show - S01E01.mkv")
+    assert videos_in(tmp_path / "Show") == [ep]  # a show's seasons
+    t = Tracks(tmp_path)
+    first, left = t.lookup([ep], wait=0)          # returns at once; read in the background
+    assert left in (0, 1) and (left == 1 or first[str(ep)]["audio"][0]["lang"] == "ja")
+    info, left = t.lookup([ep])                   # waits until read
+    assert left == 0 and info[str(ep)]["audio"][0]["lang"] == "ja"
+    again, left = Tracks(tmp_path).lookup([ep], wait=0)   # from tracks.json, no reading
+    assert left == 0 and again[str(ep)]["audio"][0]["lang"] == "ja"

@@ -129,16 +129,28 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
 
     @app.get("/api/browse/tracks")
     def browse_tracks(path: str):
-        """The audio and subtitle tracks of every video in a folder (cached; slow only once)."""
+        """The audio and subtitle tracks of every video in a folder and in the folders just
+        below it (cached). Files not read yet are read in the background: `pending` says
+        how many are left, and asking again returns what's been read since."""
         try:
             p = svc.check_path(path)
         except PermissionError:
             bad(403, "outside the media folders")
         if not p.is_dir():
             bad(404, "not a folder")
-        files = [e for e in p.iterdir() if not e.name.startswith(".") and e.is_file()
-                 and e.suffix.lower() in media.VIDEO_EXT]
-        return {"files": tracks.many(files), "names": {c: tracks_mod.language_name(c) for c in media.LANGUAGES}}
+        files, folders = [], {}
+        for e in sorted(p.iterdir()):
+            if e.name.startswith("."):
+                continue
+            if e.is_dir():
+                # A film's folder or a show's seasons: filtered by the videos inside.
+                folders[str(e)] = [str(v) for v in tracks_mod.videos_in(e)]
+            elif e.suffix.lower() in media.VIDEO_EXT:
+                files.append(e)
+        every = files + [Path(v) for vs in folders.values() for v in vs]
+        info, pending = tracks.lookup(every, wait=3.0)
+        return {"files": info, "folders": folders, "pending": pending,
+                "names": {c: tracks_mod.language_name(c) for c in media.LANGUAGES}}
 
     @app.post("/api/inspect")
     def inspect(path: str = Body(..., embed=True)):
