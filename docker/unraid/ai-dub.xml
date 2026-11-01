@@ -14,8 +14,8 @@
   <ExtraParams>--runtime=nvidia</ExtraParams>
   <Config Name="Web UI" Target="8790" Default="8790" Mode="tcp" Type="Port" Display="always" Required="true"/>
   <Config Name="App data" Target="/config" Default="/mnt/user/appdata/ai-dub/appdata" Mode="rw" Type="Path" Display="always" Required="true" Description="Settings, keys, job database, show profiles"/>
-  <Config Name="Models" Target="/models" Default="/mnt/user/appdata/ai-dub/models" Mode="rw" Type="Path" Display="always" Required="true" Description="Model weights and environments (tens of GB)"/>
-  <Config Name="Work" Target="/work" Default="/mnt/user/appdata/ai-dub/work" Mode="rw" Type="Path" Display="always" Required="true" Description="Temporary per-job files, deleted when a job completes"/>
+  <Config Name="Models" Target="/models" Default="/mnt/user/appdata/ai-dub/models" Mode="rw" Type="Path" Display="always" Required="true" Description="Model weights and environments (about 95 GB installed)"/>
+  <Config Name="Work" Target="/work" Default="/mnt/user/appdata/ai-dub/work" Mode="rw" Type="Path" Display="always" Required="true" Description="Temporary per-job files; trimmed when a job finishes and deleted once you check the dub (several GB per job while it runs)"/>
   <Config Name="Movies" Target="/media/movies" Default="/mnt/user/media/movies" Mode="rw" Type="Path" Display="always" Required="false" Description="Read-write so tracks can be added"/>
   <Config Name="Shows" Target="/media/shows" Default="/mnt/user/media/shows" Mode="rw" Type="Path" Display="always" Required="false"/>
   <Config Name="Anime" Target="/media/anime" Default="/mnt/user/media/anime" Mode="rw" Type="Path" Display="always" Required="false"/>

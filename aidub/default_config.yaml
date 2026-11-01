@@ -5,7 +5,7 @@
 paths:
   appdata: /config          # job database, profiles, logs, settings
   models: /models           # model weights and the per-worker Python environments
-  work: /work               # per-job working folders (deleted when a job completes)
+  work: /work               # per-job working folders (trimmed when a job finishes; the rest goes once its dub is checked)
 
 # Folders the queue's file browser shows. Only these are visible to Ai Dub.
 media:
