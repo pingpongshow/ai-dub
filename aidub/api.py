@@ -142,13 +142,28 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
     def list_jobs(view: str = "queue"):
         statuses = J.ACTIVE if view == "queue" else {J.DONE, J.SKIPPED, J.FAILED, J.CANCELLED}
         rows = svc.store.list(statuses)
+        if view == "queue":
+            # Time left, from earlier jobs' step times (a pause for review isn't counted).
+            from . import eta
+            per, every = eta.rates(svc.store.list({J.DONE}))
+            out = []
+            for j in rows:
+                v = _job_view(j)
+                if j["status"] != J.REVIEW:
+                    try:
+                        v["eta"] = eta.remaining(j, svc.live.get(j["id"], {}), cfg.work / f"job-{j['id']}", per, every)
+                    except Exception:
+                        v["eta"] = None
+                out.append(v)
+            return out
         if view != "queue":
             rows.sort(key=lambda j: -(j.get("finished") or j.get("created") or 0))
         return [_job_view(j) for j in rows]
 
     @app.post("/api/jobs")
     def add_jobs(paths: list[str] = Body(...), profile: str | None = Body(None), audio_stream: int | None = Body(None),
-                 language: str | None = Body(None), redo: bool = Body(False), review: str | None = Body(None)):
+                 language: str | None = Body(None), redo: bool = Body(False), review: str | None = Body(None),
+                 show_review: bool = Body(False)):
         added, errors = [], []
         if review is not None and review not in ("off", "unsure", "always"):
             bad(400, "review must be off, unsure or always")
@@ -159,7 +174,45 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
                 added.append(svc.add(p, profile or None, opts))
             except Exception as exc:
                 errors.append({"path": p, "error": str(exc)})
+        if show_review and review:
+            # "Use for every episode of this show": the show's own review setting.
+            for slug in {svc.store.get(jid)["profile"] for jid in added}:
+                prof = svc.profiles.get(slug)
+                if prof:
+                    prof.data.setdefault("rules", {})["review"] = review
+                    prof.save()
         return {"added": added, "errors": errors}
+
+    @app.get("/api/expand")
+    def expand(path: str):
+        """Every video under a folder (a show's seasons too) that isn't queued or dubbed yet."""
+        try:
+            root = svc.check_path(path)
+        except PermissionError:
+            bad(403, "outside the media folders")
+        if not root.is_dir():
+            bad(404, "not a folder")
+        queued = {j["path"] for j in svc.store.list(J.ACTIVE)}
+        dubbed = {j["path"] for j in svc.store.list({J.DONE})
+                  if (j.get("record") or {}).get("delivered") and (j.get("record") or {}).get("verify") not in ("restored", "redo")}
+        out, skipped = [], 0
+        for f in sorted(root.rglob("*"), key=lambda x: str(x).lower()):
+            if f.name.startswith(".") or not f.is_file() or f.suffix.lower() not in media.VIDEO_EXT:
+                continue
+            if str(f) in queued or str(f) in dubbed or originals.aside_name(f).exists():
+                skipped += 1
+                continue
+            out.append({"path": str(f), "name": f.name, "size": f.stat().st_size})
+        return {"files": out, "skipped": skipped}
+
+    @app.post("/api/jobs/{jid}/lines/redo")
+    def redo_lines(jid: int, lines: dict = Body(..., embed=True)):
+        try:
+            return {"ok": True, "message": svc.redo_lines(jid, {int(k): (v or {}) for k, v in lines.items()})}
+        except KeyError:
+            bad(404, "no such job")
+        except (ValueError, OSError) as exc:
+            bad(409, str(exc))
 
     @app.post("/api/jobs/{jid}/cancel")
     def cancel(jid: int):

@@ -282,3 +282,53 @@ def test_stop_for_review_with_nothing_flagged(client, cfg, media_root):
     svc.run_one(svc.store.next_queued())
     assert svc.store.get(jid)["status"] == J.REVIEW
     assert c.post(f"/api/jobs/{jid}/review/hold", json={}).status_code == 409    # already there
+
+
+def test_redo_a_few_lines_of_a_finished_dub(client, cfg, media_root):
+    import json
+    from aidub import jobs as J, lines as L, originals
+    c, svc = client
+    ep = synth.episode(media_root / "Redo Show - S01E01.mkv")
+    jid = c.post("/api/jobs", json={"paths": [str(ep)], "review": "off"}).json()["added"][0]
+    svc.run_one(svc.store.next_queued())
+    work = cfg.work / f"job-{jid}"
+    r = c.get(f"/api/jobs/{jid}/review").json()
+    assert r["redo_lines"] and (work / "lines").is_dir()
+    spoken = [ln for ln in r["lines"] if ln["kind"] == "speech" and ln["en"]]
+    assert spoken and all(ln["outcome"] in ("dubbed", "unclear", "japanese") for ln in spoken)
+    one, other = spoken[0], spoken[-1]
+    assert sorted((work / "lines" / f"{other['id']:05d}").glob("take_*.wav"))
+    res = c.post(f"/api/jobs/{jid}/lines/redo", json={"lines": {str(one["id"]): {"en": "A brand new line."}}})
+    assert res.status_code == 200, res.text
+    j = svc.store.get(jid)
+    assert j["status"] == J.QUEUED and not originals.aside_name(ep).exists()
+    state = json.loads((work / "state.json").read_text())
+    assert "translate" in state["done"] and "speak" not in state["done"]
+    assert not (work / "lines" / f"{one['id']:05d}").exists()
+    svc.run_one(svc.store.next_queued())
+    j = svc.store.get(jid)
+    assert j["status"] == J.DONE, j["message"]
+    lines = {ln.id: ln for ln in L.load(work / "lines.json")}
+    assert lines[one["id"]].en == "A brand new line." and lines[one["id"]].en_from == "user"
+    # Only that line was voiced again (its two takes); every other take was reused.
+    voiced = [x for x in (work / "job.log").read_text().splitlines() if "] takes: " in x]
+    assert voiced[-1].endswith("takes: 2/2"), voiced[-1]
+    assert originals.aside_name(ep).exists() and j["record"]["verify"] == "pending"
+    # The English is remembered for a later redub of the whole episode.
+    assert c.get(f"/api/jobs/{jid}/review").json()["decisions"]["lines"][str(one["id"])]["en"] == "A brand new line."
+
+
+def test_add_a_whole_season_with_the_shows_setting(client, cfg, media_root):
+    c, svc = client
+    season = media_root / "Season Show" / "Season 1"
+    season.mkdir(parents=True)
+    eps = [synth.episode(season / f"Season Show - S01E0{n}.mkv") for n in (1, 2)]
+    got = c.get("/api/expand", params={"path": str(media_root / "Season Show")}).json()
+    assert [f["name"] for f in got["files"]] == [e.name for e in eps]
+    res = c.post("/api/jobs", json={"paths": [f["path"] for f in got["files"]], "review": "always", "show_review": True}).json()
+    assert len(res["added"]) == 2
+    slug = svc.store.get(res["added"][0])["profile"]
+    assert c.get(f"/api/profiles/{slug}/rules").json()["review"] == "always"
+    # Queued episodes aren't offered again.
+    assert c.get("/api/expand", params={"path": str(season)}).json() == {"files": [], "skipped": 2}
+    assert c.get("/api/expand", params={"path": "/etc"}).status_code == 403

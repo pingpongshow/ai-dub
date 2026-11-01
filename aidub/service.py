@@ -166,6 +166,38 @@ class Service:
         self._wake.set()
         return "the original is back; dubbing again with your changes"
 
+    def redo_lines(self, jid: int, changes: dict[int, dict]) -> str:
+        """Voice a few lines of a finished dub again (with new English or speaker), keeping
+        every other take: the original goes back, the job returns to just before voicing
+        and only these lines are voiced; the check, mix and delivery run as before."""
+        from . import review, verify
+        j = self.store.get(jid)
+        if not j:
+            raise KeyError(jid)
+        work = self.cfg.work / f"job-{jid}"
+        rec = j.get("record") or {}
+        if j["status"] != J.DONE or rec.get("verify") != "pending" or not review.can_redo_lines(work):
+            raise ValueError("this dub's takes aren't kept any more: redub it from its review instead")
+        if not changes:
+            raise ValueError("choose the lines to redo")
+        if self.store.active_for(j["path"]):
+            raise ValueError("this file is already in the queue")
+        # Remember the English and speakers for any later redub of the whole episode.
+        dec = review.load_decisions(work)
+        for lid, ch in changes.items():
+            mine = dec.setdefault("lines", {}).setdefault(str(lid), {})
+            mine.update({k: v for k, v in ch.items() if k in ("en", "character") and v})
+        review.save_decisions(work, {**dec, "started": True})
+        verify.put_back(self.store, jid)
+        done = review.reset_for_lines(work, Path(j["path"]), changes, self.profiles.get(j["profile"]))
+        rec["verify"] = ""
+        self.store.update(jid, record=rec, finished=None, progress=0)
+        self.store.requeue_front(jid)
+        msg = f"voicing {len(done)} line{'s' if len(done) != 1 else ''} again"
+        self.store.update(jid, message=msg)
+        self._wake.set()
+        return f"the original is back; {msg}, then the dub is put together again"
+
     def review_hold(self, jid: int) -> str:
         """Stop a queued or running job at its review step, even with nothing flagged."""
         from . import review

@@ -56,7 +56,8 @@ async function pageVerify(id) {
         <div class="rv-tabs"><button class="on">Moments to check<span class="n">${d.moments.length}</span></button></div>
         <div class="rv-list" id="vfList">${d.moments.length ? d.moments.map((m, i) => `
           <div class="frow" data-m="${i}"><span class="rv-time muted">${fmtT(m.t, false)}</span>
-            <div><b>${esc(m.title)}</b>${m.detail ? `<span class="d">${esc(m.detail)}</span>` : ""}</div></div>`).join("")
+            <div><b>${esc(m.title)}</b>${m.detail ? `<span class="d">${esc(m.detail)}</span>` : ""}
+              ${m.line != null && d.can_redub ? `<a class="button sm" style="margin-top:6px" href="#review/${id}/${m.line}" title="Open this line on the review page: new English, another speaker, or just voice it again">Fix this line…</a>` : ""}</div></div>`).join("")
           : `<div class="rv-empty">Nothing stood out. Play a few scenes to be sure.</div>`}</div>
         <div class="rv-ins">
           <h4>When you're happy with it</h4>

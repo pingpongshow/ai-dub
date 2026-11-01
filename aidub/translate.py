@@ -1169,6 +1169,14 @@ def run(job: Job) -> None:
             if k in by_id:
                 by_id[k].en = v["en"]
                 by_id[k].en_short = v.get("short", "")
+        # English the user wrote on the review page wins over any translation.
+        from .review import load_decisions, user_english
+        for k, text in user_english(load_decisions(job.work)).items():
+            if k in by_id:
+                ln = by_id[k]
+                ln.en, ln.en_short, ln.en_from, ln.fallback = text, "", "user", ""
+                if ln.kind != L.SPEECH:
+                    ln.kind, ln.kept_why, ln.decided = L.SPEECH, "", "dub"
         if script:
             _check_shorts(job, llm, [l for b in batches for l in b if l.en_short and l.en_short != l.en], lang)
         untranslated = [ln for ln in lines if ln.kind == L.SPEECH and not ln.en and not ln.fallback]

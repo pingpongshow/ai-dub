@@ -102,3 +102,11 @@ button.chip { border: 0; cursor: pointer; font: inherit; font-size: 12px; font-w
 .rv *:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 @media (max-width: 980px) { .rv-body { grid-template-columns: 1fr; } .rv-left { border-right: 0; border-bottom: 1px solid var(--line); } .rv-right { max-height: none; } }
 @media (prefers-reduced-motion: reduce) { .rv * { scroll-behavior: auto !important; } }
+.rv-pop .pop-row { display: flex; align-items: center; gap: 2px; }
+.rv-pop .pop-row > button[data-who] { flex: 1; min-width: 0; }
+.rv-pop .pop-play { width: 30px !important; flex: none; justify-content: center; color: var(--accent); }
+.said { display: block; font-size: 12.5px; color: var(--ok); margin-top: 2px; }
+.said.unclear { color: var(--warn); }
+.said.japanese { color: var(--bad); font-weight: 600; }
+.said-box { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.said-box textarea, .rv-ins textarea { width: 100%; font-family: inherit; font-size: 13px; }

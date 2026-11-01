@@ -63,6 +63,7 @@ def record(job: Job) -> dict:
         "text_source": deliver.text_source(job) if job.get("subtitles") else "",
         "profile": job.profile.slug if job.profile else "",
         "source_language": (job.get("subtitles") or {}).get("source_language", ""),
+        "duration": float((job.get("ingest") or {}).get("duration", 0) or 0),
     }
 
 

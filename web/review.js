@@ -5,6 +5,9 @@
 const RV_COLORS = ["#7d9bff", "#f0a35e", "#5fb3d9", "#e889b5", "#7fc8a9", "#c49bff", "#d9b44a", "#ff8a7a", "#62c3c3", "#b9a17a"];
 const RV_KINDS = { song: "Song", opening: "Opening", ending: "Ending", credits: "Credits", ignore: "Don't dub" };
 const RV_LANES = [["", 18], ["Voices", 46], ["Keep original", 26], ["Subtitles", 22], ["Speakers", 22], ["Your marks", 24]];
+// A finished dub adds what came out of each line: dubbed, one word unclear, left in Japanese, kept.
+function rvLanes() { return RV && RV.data && RV.data.redub ? [...RV_LANES, ["Dub result", 22]] : RV_LANES; }
+const RV_OUTCOME = { dubbed: "Dubbed", unclear: "Dubbed, one word may be unclear", japanese: "Left in Japanese", kept: "Kept the original" };
 const RV_GAP = 6;
 let RV = null;
 
@@ -116,7 +119,7 @@ function addRegion(a, b, kind = "song") {
 }
 
 // Page --------------------------------------------------------------------------------------------
-async function pageReview(id) {
+async function pageReview(id, lineId) {
   main.classList.add("wide");
   const data = await api(`/jobs/${id}/review`);
   if (!data.ready) {
@@ -129,13 +132,18 @@ async function pageReview(id) {
     id: Number(id), data, dec: keep && keep.dirty ? keep.dec : rvClone(data.decisions || {}),
     dirty: keep ? keep.dirty : false, tab: keep ? keep.tab : "subs", sel: keep ? keep.sel : null, hear: "orig",
     search: "", spk: null, follow: true, view: keep ? keep.view : [0, Math.min(240, data.duration)], markIn: null, flag: -1,
+    redo: keep && keep.redo ? keep.redo : {},
   };
   for (const k of ["regions", "cues", "lines"]) if (!RV.dec[k]) RV.dec[k] = k === "regions" ? [] : {};
+  // Opened at a line (the check page's Fix): that line selected, the video just before it.
+  const at = lineId && data.lines.find((l) => l.id === Number(lineId));
+  if (at) { RV.sel = { type: "line", id: at.id }; RV.tab = "subs"; RV.pendingShow = true; RV.t = Math.max(0, at.start - 1); RV.view = [Math.max(0, at.start - 20), Math.max(0, at.start - 20) + 60]; }
   rvShell();
   rvMedia();
   rvList();
   rvInspector();
   rvDraw();
+  if (at) { const v = $("#rvv"); const go = () => rvSeek(Math.max(0, at.start - 1)); if (v.readyState) go(); else v.addEventListener("loadedmetadata", go, { once: true }); }
 }
 
 function rvShell() {
@@ -150,7 +158,8 @@ function rvShell() {
       ${statusChip}${nLook ? `<span class="chip look">${nLook} to check</span>` : `<span class="chip dub">Nothing flagged</span>`}
       <span class="grow"></span>
       ${d.editable ? `<button id="rvDiscard">Discard my changes</button><button id="rvSave">${RV.dirty ? "Save" : "Saved"}</button>
-        ${d.redub ? `<a class="button" href="#verify/${RV.id}">Check page</a><button class="primary" id="rvRedub" title="Put the original back and dub again from here with your changes">Redub with these changes ›</button>`
+        ${d.redub ? `<a class="button" href="#verify/${RV.id}">Check page</a><button class="primary" id="rvRedo" hidden title="Voice just these lines again; every other line keeps its voice"></button>
+          <button id="rvRedub" title="Put the original back and dub again from here with your changes">Redub with these changes ›</button>`
           : `<button class="primary" id="rvStart">Start dubbing ›</button>`}` : ""}
       ${d.can_hold ? `<button class="primary" id="rvHold" title="The job stops here before anything is translated">Stop for review</button>` : ""}
     </div>
@@ -198,7 +207,7 @@ function rvShell() {
         ${d.editable ? `<button id="rvMarkCancel" hidden>Cancel</button><button class="primary" id="rvMark" title="Press at the song's start, play or seek to its end, press again (keys I and O)">♪ Mark a song</button>` : ""}
       </div>
       <div class="rv-lanes">
-        <div class="rv-lane-names">${RV_LANES.map(([n, h], i) => `<span style="height:${h}px;margin-bottom:${i < RV_LANES.length - 1 ? RV_GAP : 0}px">${n}</span>`).join("")}</div>
+        <div class="rv-lane-names">${rvLanes().map(([n, h], i, all) => `<span style="height:${h}px;margin-bottom:${i < all.length - 1 ? RV_GAP : 0}px">${n}</span>`).join("")}</div>
         <div class="rv-canvas-wrap"><canvas id="rvTl"></canvas></div>
       </div>
       <div class="rv-overview"><canvas id="rvOv" title="The whole episode: drag the box to move"></canvas></div>
@@ -417,12 +426,16 @@ function rvSubRows() {
     const who = ln ? lineWho(ln) : "";
     const sel = RV.sel && RV.sel.type === "cue" && RV.sel.id === c.key;
     const text = c.italic ? `<i>${esc(c.text)}</i>` : esc(c.text);
+    const said = RV.data.redub ? linesIn(c.start, c.end).filter((l) => l.kind === "speech") : [];
+    const saidCls = said.some((l) => l.outcome === "japanese") ? "japanese" : said.some((l) => l.outcome === "unclear") ? "unclear" : "";
+    const saidText = said.map((l) => l.en).filter(Boolean).join(" ");
+    const dubSays = said.length ? `<span class="said ${saidCls}">${saidCls === "japanese" ? "Left in Japanese" : `🔊 ${esc(saidText)}`}</span>` : "";
     const why = ln ? `<span class="why"><button class="who" data-line="${ln.id}" title="${RV.data.editable ? "Change whose voice says this line" : "Speakers can't be changed right now"}"><span class="vdot" style="background:${rvColor(who)}"></span>${esc(whoLabel(who))}${RV.data.editable ? ` <span class="faint">▾</span>` : ""}</button>
       ${ln.kept_why && ln.kind === "song" ? `<span>· ${esc(ln.kept_why)}</span>` : ""}${flaggedLine(ln.id) ? `<span>· sounds sung</span>` : ""}
       ${ln.voice_note === "moved by pitch" ? `<span>· moved by pitch</span>` : ""}
       ${ln.fallback && ln.kind === "speech" ? `<span style="color:var(--bad)" title="${esc(ln.fallback)}">· left in Japanese in the dub</span>` : ""}</span>` : "";
     return `<div class="srow ${sel ? "sel" : ""}" data-key="${esc(c.key)}" data-a="${c.start}" data-b="${c.end}">
-      <span class="t">${fmtT(c.start, false)}</span><div class="x">${text}${why}</div>
+      <span class="t">${fmtT(c.start, false)}</span><div class="x">${text}${dubSays}${why}</div>
       ${c.cue && d.editable ? `<button class="chip ${cls}" data-cycle="${esc(c.key)}" title="Click: keep original / dub / Ai Dub decides">${esc(label)}</button>`
         : `<span class="chip ${cls}">${esc(label)}</span>`}</div>`;
   }).join("");
@@ -527,7 +540,9 @@ function flagDecisions(f) {
     if (r.source === "hidden" || overlap(r.start, r.end, a, b) <= 0) continue;
     out.push(r.action === "dub" ? "Dub it" : r.kind === "song" ? "Song" : "Keep original");
   }
-  if (f.lines.some((id) => RV.dec.lines[String(id)])) out.push("Speaker");
+  if (f.lines.some((id) => (RV.dec.lines[String(id)] || {}).character)) out.push("Speaker");
+  if (f.lines.some((id) => (RV.dec.lines[String(id)] || {}).en)) out.push("Your English");
+  if (f.lines.some((id) => RV.redo && RV.redo[id])) out.push("Redo");
   return out;
 }
 function flagDecided(f) { return flagDecisions(f).length > 0; }
@@ -557,6 +572,76 @@ function wireSpan(box, a, b) {
   box.querySelectorAll("[data-span]").forEach((x) => (x.onclick = () => setSpan(a, b, x.dataset.span)));
 }
 
+// A line's English: before the dub, your own instead of the translation; after it, what
+// the dub says, with new English and Redo this line.
+function englishRow(l, ed) {
+  if (RV.data.redub) {
+    const pending = RV.redo[l.id];
+    const can = ed && RV.data.redo_lines && (l.kind === "speech" || l.outcome);
+    const cls = { dubbed: "dub", unclear: "keep", japanese: "look", kept: "plain" }[l.outcome] || "plain";
+    return `<span class="lab">Dub says</span><span class="said-box">
+      ${l.outcome ? `<span class="chip ${cls}">${esc(RV_OUTCOME[l.outcome])}</span>` : ""}
+      <span>${l.en ? `“${esc(l.en)}”` : `<i class="muted">nothing: no English was voiced</i>`}</span>
+      ${can ? `<textarea data-redo-en="${l.id}" rows="2" placeholder="New English for this line (optional)">${esc((pending && pending.en) || "")}</textarea>
+        <span class="row"><button class="sm ${pending ? "primary" : ""}" data-redo="${l.id}">${pending ? "✓ Will be redone" : "↻ Redo this line"}</button>
+          ${pending ? `<button class="sm ghost" data-unredo="${l.id}">Don't redo</button>` : ""}</span>` : ""}</span>`;
+  }
+  if (!ed || !(l.kind === "speech" || l.kind === "song" || l.kind === "wordless")) return "";
+  return `<span class="lab">English</span><span><textarea data-en-pre="${l.id}" rows="2"
+    placeholder="Ai Dub translates this line. Type here to use your own English instead.">${esc((RV.dec.lines[String(l.id)] || {}).en || "")}</textarea></span>`;
+}
+function wireEnglish(box) {
+  box.querySelectorAll("[data-en-pre]").forEach((t) => {
+    t.oninput = () => {
+      const key = t.dataset.enPre, mine = { ...(RV.dec.lines[key] || {}) };
+      if (t.value.trim()) mine.en = t.value; else delete mine.en;
+      if (Object.keys(mine).length) RV.dec.lines[key] = mine; else delete RV.dec.lines[key];
+      setDirty();
+    };
+    t.onchange = () => { rvList(); rvDraw(); };
+  });
+  box.querySelectorAll("[data-redo-en]").forEach((t) => (t.oninput = () => {
+    const id = Number(t.dataset.redoEn);
+    if (RV.redo[id]) RV.redo[id].en = t.value.trim();
+  }));
+  box.querySelectorAll("[data-redo]").forEach((b) => (b.onclick = () => {
+    const id = Number(b.dataset.redo), t = box.querySelector(`[data-redo-en="${id}"]`);
+    RV.redo[id] = { en: t ? t.value.trim() : "" };
+    rvRedoButton(); rvInspector(); rvList(); rvDraw();
+  }));
+  box.querySelectorAll("[data-unredo]").forEach((b) => (b.onclick = () => {
+    delete RV.redo[Number(b.dataset.unredo)];
+    rvRedoButton(); rvInspector(); rvList(); rvDraw();
+  }));
+}
+function rvRedoButton() {
+  const b = $("#rvRedo");
+  if (!b) return;
+  const n = Object.keys(RV.redo).length;
+  b.hidden = !n;
+  b.textContent = `↻ Redo ${n} line${n === 1 ? "" : "s"} ›`;
+}
+async function rvRedoLines() {
+  const ids = Object.keys(RV.redo);
+  if (!ids.length) return;
+  const changes = {};
+  for (const id of ids) {
+    const ch = {};
+    if (RV.redo[id].en) ch.en = RV.redo[id].en;
+    const who = (RV.dec.lines[id] || {}).character;
+    if (who) ch.character = who;
+    changes[id] = ch;
+  }
+  if (!confirm(`Voice ${ids.length} line${ids.length === 1 ? "" : "s"} again${Object.values(changes).some((c) => c.en) ? " with your English" : ""}? `
+    + "The original goes back while it's redone; every other line keeps its voice, so this takes minutes, not a whole redub.")) return;
+  try {
+    const r = await api(`/jobs/${RV.id}/lines/redo`, { body: { lines: changes } });
+    RV.redo = {}; RV.dirty = false;
+    toast(r.message || "Redoing");
+    location.hash = "#queue";
+  } catch (e) { toast(e.message); }
+}
+
 function rvGoFlag(i) {
   const f = RV.data.flags[i];
   if (!f) return;
@@ -581,26 +666,48 @@ function rvWhoMenu(ev, lineId) {
   const pop = document.createElement("div");
   pop.className = "rv-pop";
   const now = lineWho(RV.data.lines.find((l) => l.id === lineId));
-  pop.innerHTML = RV.data.speakers.map((s) => `<button data-who="${esc(s.id)}"><span class="vdot" style="background:${rvColor(s.id)}"></span>${esc(s.name)}
-      <span class="muted small">${s.gender === "male" ? "man" : s.gender === "female" ? "woman" : ""}</span>${s.id === now ? " ✓" : ""}</button>`).join("")
+  pop.innerHTML = RV.data.speakers.map((s) => `<div class="pop-row"><button data-who="${esc(s.id)}"><span class="vdot" style="background:${rvColor(s.id)}"></span>${esc(s.name)}
+      <span class="muted small">${s.gender === "male" ? "man" : s.gender === "female" ? "woman" : ""}</span>${s.id === now ? " ✓" : ""}</button>
+      ${s.sample ? `<button class="pop-play" data-play="${esc(s.sample)}" title="Hear ${esc(s.name)}'s voice">▶</button>` : ""}</div>`).join("")
     + `<hr><button data-who="own">Its own voice (this line's audio)</button><button data-who="new">New speaker…</button>`
-    + (RV.dec.lines[String(lineId)] ? `<button data-who="undo">Back to Ai Dub's choice</button>` : "");
+    + ((RV.dec.lines[String(lineId)] || {}).character ? `<button data-who="undo">Back to Ai Dub's choice</button>` : "");
   document.body.appendChild(pop);
   const r = (ev.currentTarget || ev.target).getBoundingClientRect();
   pop.style.left = `${Math.min(window.innerWidth - 240, r.left)}px`;
   pop.style.top = `${Math.min(window.innerHeight - 330, r.bottom + 4)}px`;
-  pop.querySelectorAll("button").forEach((b) => (b.onclick = () => {
+  pop.querySelectorAll("[data-play]").forEach((b) => (b.onclick = (e) => {
+    e.stopPropagation();
+    rvPlaySample(b.dataset.play, b);
+  }));
+  const key = String(lineId);
+  const setWho = (character) => {
+    const mine = { ...(RV.dec.lines[key] || {}) };
+    if (character) mine.character = character; else delete mine.character;
+    if (Object.keys(mine).length) RV.dec.lines[key] = mine; else delete RV.dec.lines[key];
+  };
+  pop.querySelectorAll("[data-who]").forEach((b) => (b.onclick = () => {
     const w = b.dataset.who;
-    if (w === "undo") delete RV.dec.lines[String(lineId)];
+    if (w === "undo") setWho("");
     else if (w === "new") {
       const name = prompt("Name for the new speaker", "");
       if (!name) return rvClosePop();
-      RV.dec.lines[String(lineId)] = { character: `new:${name.trim()}` };
-    } else RV.dec.lines[String(lineId)] = { character: w };
+      setWho(`new:${name.trim()}`);
+    } else setWho(w);
     setDirty(); rvClosePop(); rvList(); rvInspector(); rvDraw();
   }));
 }
 const RV_READONLY = "Speakers can be changed while an episode waits for review, or once it's dubbed and not yet checked (then redub it).";
+let rvSampleAudio = null;
+function rvPlaySample(file, btn) {
+  if (rvSampleAudio) { rvSampleAudio.pause(); if (rvSampleAudio.btn) rvSampleAudio.btn.textContent = "▶"; }
+  if (rvSampleAudio && rvSampleAudio.file === file) { rvSampleAudio = null; return; }
+  const a = new Audio(`/api/profiles/${encodeURIComponent(RV.data.job.profile)}/ref?file=${encodeURIComponent(file)}`);
+  Object.assign(a, { file, btn });
+  a.onended = () => { if (btn) btn.textContent = "▶"; rvSampleAudio = null; };
+  if (btn) btn.textContent = "■";
+  a.play().catch(() => { toast("Couldn't play the sample"); if (btn) btn.textContent = "▶"; });
+  rvSampleAudio = a;
+}
 function rvClosePop() { document.querySelectorAll(".rv-pop").forEach((p) => p.remove()); }
 document.addEventListener("click", (ev) => {
   // A click anywhere but in a menu or on what opened it closes the menu.
@@ -663,14 +770,14 @@ function rvInspector() {
       const who = lineWho(l);
       const name = `<span class="vdot" style="background:${rvColor(who)}"></span>${esc(whoLabel(who))}`;
       return `${ed ? `<button class="sm rv-who-btn" data-wl="${l.id}" title="Change whose voice says this line">${name} <span class="faint">▾</span></button>`
-        : `<span class="row" style="gap:5px">${name}</span>`}${RV.dec.lines[String(l.id)] ? ` <span class="chip mine">your choice</span>` : ""}
+        : `<span class="row" style="gap:5px">${name}</span>`}${(RV.dec.lines[String(l.id)] || {}).character ? ` <span class="chip mine">your choice</span>` : ""}
         ${l.voice_note ? `<span class="muted small">${esc(l.voice_note)}</span>` : ""}`;
     };
     box.innerHTML = `<h4>${q ? "Subtitle" : "Line"} ${fmtT((q || ln).start)} <span class="chip ${cls}">${esc(label)}</span></h4>
       <div class="grid">
         ${q ? `<span class="lab">Subtitle</span><span>${q.italic ? `<i>${esc(q.text)}</i>` : esc(q.text)}</span>` : ""}
         ${lns.map((l) => `<span class="lab">${lns.length > 1 ? `Heard ${fmtT(l.start, false)}` : "Heard"}</span><span>${esc(l.source || "—")}</span>
-          <span class="lab">Speaker</span><span class="row" style="gap:6px">${voice(l)}</span>`).join("")}
+          <span class="lab">Speaker</span><span class="row" style="gap:6px">${voice(l)}</span>${englishRow(l, ed)}`).join("")}
         ${ln ? `<span class="lab">Why</span><span class="muted small">${esc(rvWhy(q, ln))}</span>` : ""}
       </div>
       ${!ed && lns.length ? `<p class="muted small" style="margin:8px 0 0">${RV_READONLY}</p>` : ""}
@@ -682,6 +789,7 @@ function rvInspector() {
     if (!ed) return;
     if (!q && ln) wireSpan(box, +(ln.start - 0.05).toFixed(2), +(ln.end + 0.05).toFixed(2));
     box.querySelectorAll("[data-wl]").forEach((b) => (b.onclick = (ev) => rvWhoMenu(ev, Number(b.dataset.wl))));
+    wireEnglish(box);
     if (q) {
       $("#rvCKeep").onclick = () => { RV.dec.cues[q.key] = "keep"; setDirty(); rvList(); rvInspector(); rvDraw(); };
       $("#rvCDub").onclick = () => { RV.dec.cues[q.key] = "dub"; setDirty(); rvList(); rvInspector(); rvDraw(); };
@@ -778,7 +886,7 @@ function rvWhy(q, ln) {
 function rvLaneY() {
   const ys = [];
   let y = 0;
-  for (const [, h] of RV_LANES) { ys.push([y, h]); y += h + RV_GAP; }
+  for (const [, h] of rvLanes()) { ys.push([y, h]); y += h + RV_GAP; }
   return { ys, height: y - RV_GAP };
 }
 function rvDraw() {
@@ -878,6 +986,19 @@ function rvDraw() {
     const a = Math.min(RV.drag.t0, RV.drag.t1), b = Math.max(RV.drag.t0, RV.drag.t1);
     g.fillStyle = C.mineBg; g.fillRect(X(a), my + 3, X(b) - X(a), mh - 6);
   }
+  // Dub result (a finished dub)
+  if (ys[6]) {
+    const [oy, oh] = ys[6];
+    const col = { dubbed: C.dub, unclear: rvCss("--warn"), japanese: C.look, kept: C.keep };
+    for (const ln of RV.data.lines) {
+      if (!ln.outcome) continue;
+      const x0 = X(ln.start), x1 = X(ln.end);
+      if (x1 < 0 || x0 > W) continue;
+      g.fillStyle = col[ln.outcome] || C.muted; g.globalAlpha = ln.outcome === "kept" ? 0.45 : 0.9;
+      rr(g, x0, oy + 5, Math.max(2, x1 - x0 - 1), oh - 10, 2); g.fill(); g.globalAlpha = 1;
+      if (RV.redo && RV.redo[ln.id]) { g.strokeStyle = C.accent; g.lineWidth = 2; g.stroke(); }
+    }
+  }
   // Playhead
   const xp = X(rvNow());
   if (xp >= 0 && xp <= W) { g.fillStyle = C.text; g.fillRect(xp - 1, 0, 2, height); }
@@ -946,6 +1067,7 @@ function rvWire() {
     $("#rvSave").onclick = () => rvSave(false);
     if ($("#rvStart")) $("#rvStart").onclick = () => rvSave(true);
     if ($("#rvRedub")) $("#rvRedub").onclick = () => rvRedub();
+    if ($("#rvRedo")) { $("#rvRedo").onclick = () => rvRedoLines(); rvRedoButton(); }
     $("#rvDiscard").onclick = async () => {
       if (!confirm("Go back to Ai Dub's own decisions for this episode? Your marks and choices here are cleared. (Speaker names and merges are kept: they belong to the show.)")) return;
       await api(`/jobs/${RV.id}/review`, { method: "PUT", body: { regions: [], cues: {}, lines: {} } });
@@ -1069,7 +1191,7 @@ function rvTimelineWire() {
       const q = RV.data.cues.find((c) => p.t >= c.start - 0.05 && p.t <= c.end + 0.05);
       if (q) { RV.sel = { type: "cue", id: q.key }; RV.pendingShow = true; RV.tab = "subs"; rvTabs(); rvList(); rvInspector(); }
     }
-    if (p.lane === 4) {
+    if (p.lane === 4 || p.lane === 6) {
       const ln = RV.data.lines.find((l) => p.t >= l.start && p.t <= l.end && (l.kind === "speech" || l.kind === "song"));
       if (ln) { RV.sel = { type: "line", id: ln.id }; rvInspector(); }
     }

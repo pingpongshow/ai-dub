@@ -295,7 +295,7 @@ def apply(job, lines: list[L.Line], d: dict | None = None) -> int:
     """Put the review's decisions into the lines (before translation). Returns how many
     lines changed. What each line was before is kept in the job record (qc
     review_changes), to tune the automatic decisions from the user's corrections."""
-    from . import recurring, voicebank
+    from . import recurring
     d = d if d is not None else load_decisions(job.work)
     prof = job.profile
     changed: set[int] = set()
@@ -344,20 +344,8 @@ def apply(job, lines: list[L.Line], d: dict | None = None) -> int:
     by_id = {ln.id: ln for ln in lines}
     for lid, choice in (d.get("lines") or {}).items():
         ln = by_id.get(int(lid))
-        who = str(choice.get("character", ""))
-        if not ln or not who or not prof:
-            continue
-        if who.startswith("new:"):
-            name = who[4:].strip()
-            if name not in new_chars:
-                new_chars[name] = prof.new_character(name, gender=str(choice.get("gender", "")))
-            who = new_chars[name]
-        if who == "own":
-            ln.voice, ln.voice_note = "", "own line as reference (your choice)"
-        elif who in prof.characters:
-            ln.character = who
-            voicebank.voice_for(prof, ln)
-        changed.add(ln.id)
+        if ln and prof and choose_voice(prof, ln, choice, new_chars):
+            changed.add(ln.id)
     if prof:
         prof.save()
     log = []
@@ -377,6 +365,93 @@ def cue_key(q) -> str:
 
 
 # The data for the page -------------------------------------------------------------------------------
+def choose_voice(prof, ln: L.Line, choice: dict, new_chars: dict[str, str] | None = None) -> bool:
+    """The review's speaker choice for a line. True when it changed something."""
+    from . import voicebank
+    who = str(choice.get("character", ""))
+    if not who:
+        return False
+    if who.startswith("new:"):
+        name = who[4:].strip()
+        new_chars = {} if new_chars is None else new_chars
+        if name not in new_chars:
+            new_chars[name] = prof.new_character(name, gender=str(choice.get("gender", "")))
+        who = new_chars[name]
+    if who == "own":
+        ln.voice, ln.voice_note = "", "own line as reference (your choice)"
+    elif who in prof.characters:
+        ln.character = who
+        voicebank.voice_for(prof, ln)
+    else:
+        return False
+    return True
+
+
+def user_english(d: dict) -> dict[int, str]:
+    """English the user wrote for lines on the review page: used instead of a translation."""
+    out = {}
+    for lid, choice in (d.get("lines") or {}).items():
+        text = str((choice or {}).get("en", "")).strip()
+        if text:
+            out[int(lid)] = text
+    return out
+
+
+def outcome(ln: L.Line) -> str:
+    """What a finished dub did with a line, for the review page's result lane."""
+    from .speak import UNCLEAR
+    if ln.kind != L.SPEECH:
+        return "kept" if ln.kind in (L.SONG, L.ENGLISH) else ""
+    if ln.fallback:
+        return "japanese"
+    return "unclear" if UNCLEAR in ln.check_note else "dubbed"
+
+
+def can_redo_lines(work: Path) -> bool:
+    return can_redub(work) and (work / "lines").is_dir() and (work / "lines.json").exists()
+
+
+def reset_for_lines(work: Path, live: Path, changes: dict[int, dict], prof) -> list[int]:
+    """Back to just before voicing, with every take kept but those of the lines to redo;
+    their English and speaker as the user set them. The original is back at `live` by now."""
+    from .pipeline import STEP_NAMES
+    lines = L.load(work / "lines.json")
+    by_id = {ln.id: ln for ln in lines}
+    done = []
+    for lid, ch in changes.items():
+        ln = by_id.get(int(lid))
+        if not ln:
+            continue
+        if ch.get("en"):
+            ln.en, ln.en_short, ln.en_from = str(ch["en"]).strip(), "", "user"
+        if prof:
+            choose_voice(prof, ln, ch)
+        if ln.kind != L.SPEECH:
+            ln.kind, ln.kept_why = L.SPEECH, ""
+        ln.decided, ln.fallback, ln.take, ln.take_scores, ln.fit, ln.check_note = "dub", "", "", {}, {}, ""
+        shutil.rmtree(work / "lines" / f"{ln.id:05d}", ignore_errors=True)
+        done.append(ln.id)
+    if prof:
+        prof.save()
+    L.save(lines, work / "lines.json")
+    keep = (kept_names(work) or set()) | {"review", "lines", "lines.json", "state.json", "job.log"}
+    for p in work.iterdir():
+        if p.name not in keep:
+            shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink(missing_ok=True)
+    f = work / "state.json"
+    st = json.loads(f.read_text())
+    st["done"] = [x for x in st.get("done", []) if x in STEP_NAMES[:STEP_NAMES.index("speak")]]
+    data = st.setdefault("data", {})
+    for k in ("deliver_swap", "delivered"):
+        data.pop(k, None)
+    if data.get("ingest"):
+        data["ingest"]["source"] = str(live)
+    tmp = f.with_suffix(".tmp")
+    tmp.write_text(json.dumps(st, ensure_ascii=False))
+    tmp.replace(f)
+    return done
+
+
 def view(cfg, row: dict, prof) -> dict:
     """Everything the review page shows, read from the job's working folder."""
     work = cfg.work / f"job-{row['id']}"
@@ -386,6 +461,7 @@ def view(cfg, row: dict, prof) -> dict:
         and not (row.get("step") or "") in _after_review()
     base = {"job": {k: row.get(k) for k in ("id", "path", "status", "message", "step", "profile")},
             "name": Path(row["path"]).name, "editable": row["status"] == "review" or redub, "redub": redub,
+            "redo_lines": redub and can_redo_lines(work),
             "can_hold": before}
     if not (work / "lines.json").exists():
         return {**base, "ready": False, "why": "Ai Dub hasn't worked out the lines of this episode yet."}
@@ -408,7 +484,8 @@ def view(cfg, row: dict, prof) -> dict:
             "lines": [{"id": ln.id, "start": round(ln.start, 2), "end": round(ln.end, 2), "kind": ln.kind,
                        "character": ln.character, "english": ln.english_ref, "source": ln.source_text,
                        "sung": ln.sung, "voice_note": ln.voice_note, "kept_why": ln.kept_why, "decided": ln.decided,
-                       "fallback": ln.fallback if redub else ""}
+                       "fallback": ln.fallback if redub else "", "en": ln.en if redub else "",
+                       "outcome": outcome(ln) if redub else "", "unclear": ln.check_note if redub else ""}
                       for ln in lines],
             "regions": regions(lines, duration), "flags": flags, "speakers": speakers,
             "decisions": load_decisions(work), "media": media_status(work),

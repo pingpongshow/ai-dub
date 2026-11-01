@@ -59,10 +59,10 @@ def prepare(job, rec: dict) -> dict:
             "original": str(aside) if aside.name else "", "moments": moments(lines, float(ing.get("duration", 0) or 0))}
     (d / "meta.json").write_text(json.dumps(meta, ensure_ascii=False))
     # What the job had when it reached the review stays until the check, so the review
-    # page can open on the finished dub and dub it again with changes; what was made
-    # after (takes, mixes) goes.
+    # page can open on the finished dub and dub it again with changes; the voiced takes
+    # stay too, so one line can be redone; mixes and the rest go.
     kept = review.kept_names(work)
-    keep = kept | {"review", "verify"} if kept else {"verify"}
+    keep = kept | {"review", "verify", "lines"} if kept else {"verify"}  # lines: the takes, to redo a line
     for p in work.iterdir():
         if p.name not in keep:
             shutil.rmtree(p, ignore_errors=True) if p.is_dir() else p.unlink(missing_ok=True)
@@ -81,9 +81,9 @@ def moments(lines: list[L.Line], duration: float) -> list[dict]:
         if ln.kind != L.SPEECH:
             continue
         if ln.fallback:
-            out.append({"t": ln.start, "kind": "kept", "title": "Left in Japanese", "detail": ln.fallback})
+            out.append({"t": ln.start, "kind": "kept", "title": "Left in Japanese", "detail": ln.fallback, "line": ln.id})
         elif UNCLEAR in ln.check_note:
-            out.append({"t": ln.start, "kind": "unclear", "title": "One word may be unclear",
+            out.append({"t": ln.start, "kind": "unclear", "title": "One word may be unclear", "line": ln.id,
                         "detail": f"“{ln.en[:60]}”: " + ln.check_note.split(UNCLEAR + ": ", 1)[-1]})
         elif ln.voice_note in ("moved by pitch", "your choice") or ln.voice_note.endswith("(your choice)"):
             out.append({"t": ln.start, "kind": "voice", "title": "Voice changed",

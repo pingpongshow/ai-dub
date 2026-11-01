@@ -81,7 +81,8 @@ async function pageQueue() {
     <div class="page-head"><div class="grow"><h1>Queue</h1>
       <p>Pick episodes to dub. Ai Dub works through them one at a time and asks you when it needs a look.</p></div></div>
     <div id="needs"></div>
-    <div class="section-head"><h2>In the queue</h2><span class="grow"></span></div>
+    <div class="section-head"><h2>In the queue</h2><span class="grow"></span><span class="small muted" id="qtotal"
+      title="From how long earlier episodes took for each step; a stop for review isn't counted"></span></div>
     <div id="jobs"></div>
     <div class="section-head"><h2>Add episodes</h2></div>
     <div class="panel flush">
@@ -134,7 +135,8 @@ function renderBrowser() {
   const files = data.entries.filter((e) => !e.dir);
   $("#selall").hidden = !files.some((e) => !e.queued);
   box.innerHTML = data.entries.length ? data.entries.map((e, i) => e.dir
-    ? `<div class="entry dir" data-i="${i}"><span class="ico">${ICON.folder}</span><span class="name">${esc(e.name)}</span><span></span><span class="size"></span></div>`
+    ? `<div class="entry dir" data-i="${i}"><span class="ico">${ICON.folder}</span><span class="name">${esc(e.name)}</span>
+        <span>${data.path ? `<button class="sm ghost" data-addall="${i}" title="Every episode in this folder and its season folders that isn't queued or dubbed yet">Add all…</button>` : ""}</span><span class="size"></span></div>`
     : `<div class="entry ${selected.has(e.path) ? "on" : ""} ${e.queued ? "disabled" : ""}" data-i="${i}">
         <input type="checkbox" ${selected.has(e.path) ? "checked" : ""} ${e.queued ? "disabled" : ""} aria-label="Select ${esc(e.name)}">
         <span class="name">${esc(e.name)}</span>
@@ -143,10 +145,27 @@ function renderBrowser() {
     : `<div class="empty"><b>This folder is empty</b>No video files here.</div>`;
   box.querySelectorAll(".entry").forEach((div) => {
     const e = data.entries[Number(div.dataset.i)];
-    if (e.dir) { div.onclick = () => loadBrowser(e.path).catch(fail); return; }
+    if (e.dir) {
+      div.onclick = (ev) => { if (!ev.target.closest("[data-addall]")) loadBrowser(e.path).catch(fail); };
+      const all = div.querySelector("[data-addall]");
+      if (all) all.onclick = () => addFolder(e).catch(fail);
+      return;
+    }
     if (e.queued) return;
     div.onclick = () => { selected.has(e.path) ? selected.delete(e.path) : selected.add(e.path); renderBrowser(); toggle(); };
   });
+}
+
+async function addFolder(e) {
+  // A whole show or season: every episode under the folder that isn't queued or dubbed yet.
+  const r = await api("/expand?path=" + encodeURIComponent(e.path));
+  if (!r.files.length) return toast(r.skipped ? `Every episode in ${e.name} is already queued or dubbed` : `No video files in ${e.name}`);
+  selected = new Set(r.files.map((f) => f.path));
+  addFolder.from = { name: e.name, n: r.files.length, skipped: r.skipped };
+  toggle();
+  renderBrowser();
+  await showAddForm();
+  $("#addform").scrollIntoView({ block: "center", behavior: "smooth" });
 }
 
 function toggle() {
@@ -177,24 +196,28 @@ async function showAddForm() {
       <label class="opt">Review before dubbing<select id="review"><option value="">Show's setting</option><option value="off">Off</option>
         <option value="unsure">When unsure</option><option value="always">Always</option></select></label>
       <label style="padding-bottom:7px"><input type="checkbox" id="redo"> Redo</label>
+      <label style="padding-bottom:7px" title="Saves the review choice as this show's setting, so later episodes use it too"><input type="checkbox" id="showrev" disabled> Use this review setting for every episode of the show</label>
       <span class="grow"></span>
       <button class="ghost" id="canceladd">Cancel</button>
       <button class="primary" id="confirmadd">Add ${plural(paths.length, "episode")}</button>
     </div>
+    ${addFolder.from && addFolder.from.n === paths.length ? `<div class="callout" style="margin-top:10px">All of <b>${esc(addFolder.from.name)}</b>: ${plural(paths.length, "episode")}${addFolder.from.skipped ? `, leaving out ${addFolder.from.skipped} already queued or dubbed` : ""}. They are dubbed one at a time, in order.</div>` : ""}
     <p class="small muted" style="margin:10px 0 0">The show is guessed from the folder name${paths.length > 1 ? " of the first file; leave it to let each file use its own show" : ""}.
       ${esc(dur(first.duration))} long, ${esc(first.container)}.</p>
     ${note}`;
   $("#canceladd").onclick = () => (form.hidden = true);
+  $("#review").onchange = () => { $("#showrev").disabled = !$("#review").value; if (!$("#review").value) $("#showrev").checked = false; };
   $("#confirmadd").onclick = async () => {
     const prof = $("#prof").value.trim();
     const body = { paths, profile: paths.length > 1 && prof === first.profile_guess ? null : prof || null,
       audio_stream: $("#track") && $("#track").value !== "" ? Number($("#track").value) : null,
-      language: $("#lang").value || null, redo: $("#redo").checked, review: $("#review").value || null };
+      language: $("#lang").value || null, redo: $("#redo").checked, review: $("#review").value || null,
+      show_review: $("#showrev").checked };
     try {
       const res = await api("/jobs", { body });
       toast(`Added ${plural(res.added.length, "episode")}` + (res.errors.length ? `; ${res.errors.length} not added: ${res.errors[0].error}` : ""), !!res.errors.length);
     } catch (e) { return fail(e); }
-    selected.clear(); toggle(); form.hidden = true;
+    selected.clear(); addFolder.from = null; toggle(); form.hidden = true;
     await loadBrowser(browsePath); await loadQueue(); refreshStatus();
   };
 }
@@ -235,6 +258,9 @@ async function loadQueue() {
   const box = $("#jobs");
   if (!box) return;
   const jobs = all.filter((j) => j.status !== "review");
+  const total = jobs.reduce((a, j) => a + (j.eta || 0), 0);
+  const head = $("#qtotal");
+  if (head) head.textContent = total ? `about ${mins(total)} for everything in the queue` : "";
   if (!jobs.length) {
     box.innerHTML = `<div class="panel empty"><b>Nothing is being dubbed</b>${all.length ? "Episodes waiting for your review are above." : "Pick episodes below and add them to the queue."}</div>`;
     return;
@@ -252,9 +278,10 @@ async function loadQueue() {
     return `<div class="panel job" data-id="${j.id}">
       <div><div class="title">${epLabel(j.path)}</div>
         <div class="sub"><span class="ep-show">${esc(episode(j.path).show || j.profile)}</span>${st}
+          ${j.status === "queued" && j.eta != null ? `<span>about ${mins(j.eta)}</span>` : ""}
           ${holding && early ? `<span class="tag accent" title="It pauses for your review before anything is translated">Will stop for review</span>` : ""}</div>
         ${j.status !== "queued" ? `<div class="meta"><span>${step}${j.message ? ` · ${esc(j.message)}` : ""}</span>
-          <span class="num nowrap">${j.started ? `${mins(Date.now() / 1000 - j.started)} · ` : ""}${pct} %</span></div>
+          <span class="num nowrap">${j.eta != null ? `about ${mins(j.eta)} left · ` : ""}${pct} %</span></div>
           <div class="progress"><div style="width:${pct}%"></div></div>` : ""}</div>
       <div class="btn-group">
         ${j.status === "running" ? `<a class="button sm" href="#review/${j.id}" title="See what Ai Dub has decided so far">Look</a>` : ""}
@@ -670,7 +697,7 @@ async function pageSettings() {
 // Routing ------------------------------------------------------------------------------------
 async function route() {
   clearInterval(timer); clearTimeout(timer);
-  const [page, arg] = (location.hash.slice(1) || "queue").split("/");
+  const [page, arg, extra] = (location.hash.slice(1) || "queue").split("/");
   main.classList.remove("wide");
   document.querySelectorAll(".rv-pop").forEach((p) => p.remove());
   document.querySelectorAll("nav a").forEach((a) => a.classList.toggle("active", a.dataset.page === (["review", "verify"].includes(page) ? "queue" : page)));
@@ -678,7 +705,7 @@ async function route() {
   window.scrollTo(0, 0);
   try {
     await ({ queue: pageQueue, history: pageHistory, profiles: () => pageProfiles(arg && decodeURIComponent(arg)),
-      originals: pageOriginals, models: pageModels, settings: pageSettings, review: () => pageReview(arg),
+      originals: pageOriginals, models: pageModels, settings: pageSettings, review: () => pageReview(arg, extra),
       verify: () => pageVerify(arg) }[page] || pageQueue)();
   } catch (e) { main.innerHTML = `<div class="callout bad">Couldn't load this page: ${esc(e.message)}</div>`; }
 }
