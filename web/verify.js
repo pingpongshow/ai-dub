@@ -22,7 +22,7 @@ async function pageVerify(id) {
   const base = `/api/jobs/${id}/verify/media/`;
   const gbs = (n) => (n / 1e9).toFixed(2) + " GB";
   main.innerHTML = `
-  <div class="rv editable">
+  <div class="rv editable vf">
     <div class="rv-title">
       <div class="crumbs"><a href="#queue">Queue</a><span class="faint">›</span><b title="${esc(d.name)}">${epLabel(d.name)}</b>${episode(d.name).show ? `<span class="muted">${esc(episode(d.name).show)}</span>` : ""}</div>
       <span class="chip keep">Dubbed: not checked yet</span>
@@ -236,20 +236,30 @@ function vfActionHtml(lid) {
       <a class="button sm ghost" href="#review/${VF.id}/${lid}" title="Give the line to another speaker on the review page">Other speaker…</a></div>`;
   }
   return `<div class="vf-marked"><span class="chip dub">↻ Will be voiced again${r.en != null ? " with your words" : ""}</span>
-      ${r.en != null ? `<textarea rows="2" data-ven="${lid}">${esc(r.en)}</textarea>` : ""}
+      ${r.en != null ? `<textarea rows="2" data-ven="${lid}" aria-label="English to voice">${esc(r.en)}</textarea>
+        <span class="small muted">Saved as you type. Sent with the others when you press “Voice them again”.</span>` : ""}
       <div class="row" style="gap:6px">${r.en == null ? `<button class="sm ghost" data-vw="${lid}">Change words…</button>` : ""}
-        <button class="sm ghost" data-vx="${lid}">Don't</button></div></div>`;
+        <button class="sm ghost" data-vx="${lid}">Don't voice it again</button></div></div>`;
 }
 function vfActions() {
   document.querySelectorAll(".vf-act[data-line]").forEach((box) => (box.innerHTML = vfActionHtml(Number(box.dataset.line))));
   const root = document.querySelector(".rv");
-  root.querySelectorAll("[data-vo]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); VF.redo[b.dataset.vo] = {}; vfRedoSave(); vfActions(); }));
+  root.querySelectorAll("[data-vo]").forEach((b) => (b.onclick = (e) => {
+    e.stopPropagation();
+    const box = b.closest(".vf-act");
+    VF.redo[b.dataset.vo] = {}; vfRedoSave(); vfActions();
+    box.scrollIntoView({ block: "nearest" });
+  }));
   root.querySelectorAll("[data-vw]").forEach((b) => (b.onclick = (e) => {
     e.stopPropagation();
     VF.redo[b.dataset.vw] = { en: VF.en[b.dataset.vw] || "" };
     vfRedoSave(); vfActions();
     const t = root.querySelector(`[data-ven="${b.dataset.vw}"]`);
-    if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); }
+    if (t) {
+      t.focus({ preventScroll: true });
+      t.setSelectionRange(t.value.length, t.value.length);
+      t.closest(".vf-act").scrollIntoView({ block: "nearest" });  // the box and its buttons in view
+    }
   }));
   root.querySelectorAll("[data-vx]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); delete VF.redo[b.dataset.vx]; vfRedoSave(); vfActions(); }));
   root.querySelectorAll("[data-ven]").forEach((t) => {

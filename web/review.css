@@ -126,3 +126,7 @@ button.chip { border: 0; cursor: pointer; font: inherit; font-size: 12px; font-w
 .vf-now { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); min-height: 44px; }
 .vf-now .said { font-size: 14px; }
 .rv-right > :not(.rv-list):not(.rv-ins) { flex-shrink: 0; }
+/* Check page: the moments list uses the column's full height, level with the player */
+.rv.vf .rv-right { max-height: none; contain: size; min-height: 420px; }
+.rv.vf .rv-ins { max-height: 38%; }
+@media (max-width: 980px) { .rv.vf .rv-right { contain: none; max-height: 75vh; } }
