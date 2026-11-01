@@ -1467,3 +1467,18 @@ def test_sounds_and_fillers_said_over_and_over():
         assert is_interjection(t, "ja"), t
     for t in ("カットカット", "わくわく", "ようやく見つけたぜ", "やはり", "皆さん大丈夫"):   # "Cut, cut!" and real words are speech
         assert not is_interjection(t, "ja"), t
+
+
+def test_track_filter_matches():
+    from aidub.tracks import matches
+    ja = {"audio": [{"lang": "ja", "aidub": False, "commentary": False}]}
+    dubbed = {"audio": ja["audio"] + [{"lang": "en", "aidub": True, "commentary": False}]}
+    with_en = {"audio": ja["audio"] + [{"lang": "en", "aidub": False, "commentary": False}]}
+    en_comment = {"audio": ja["audio"] + [{"lang": "en", "aidub": False, "commentary": True}]}
+    untagged = {"audio": [{"lang": "", "aidub": False, "commentary": False}]}
+    assert matches(ja, {"ja"}, {"en"}) and not matches(ja, {"ko"}, set())
+    assert matches(dubbed, set(), {"en"})          # an Ai Dub track doesn't count as English audio
+    assert not matches(with_en, {"ja"}, {"en"})
+    assert matches(en_comment, set(), {"en"})      # nor does an English commentary
+    assert matches(untagged, {"und"}, set()) and not matches(untagged, {"ja"}, set())
+    assert matches({"error": "x"}, set(), {"en"}) and not matches({"error": "x"}, {"ja"}, set())

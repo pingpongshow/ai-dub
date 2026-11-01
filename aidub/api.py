@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import __version__, gpu, media, originals, workers
 from . import jobs as J
+from . import tracks as tracks_mod
 from .config import Config, check_shape
 from .models import Installer
 from .pipeline import STEP_NAMES, TITLES
@@ -44,6 +45,7 @@ def _is_var(v) -> bool:
 def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
     svc = service or Service(cfg)
     installer = Installer(cfg)
+    tracks = tracks_mod.Tracks(cfg.appdata)
 
     @asynccontextmanager
     async def lifespan(_app):
@@ -122,6 +124,19 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
         parent = None if str(p) in roots else str(p.parent)
         return {"path": str(p), "parent": parent, "entries": entries}
 
+    @app.get("/api/browse/tracks")
+    def browse_tracks(path: str):
+        """The audio and subtitle tracks of every video in a folder (cached; slow only once)."""
+        try:
+            p = svc.check_path(path)
+        except PermissionError:
+            bad(403, "outside the media folders")
+        if not p.is_dir():
+            bad(404, "not a folder")
+        files = [e for e in p.iterdir() if not e.name.startswith(".") and e.is_file()
+                 and e.suffix.lower() in media.VIDEO_EXT]
+        return {"files": tracks.many(files), "names": {c: tracks_mod.language_name(c) for c in media.LANGUAGES}}
+
     @app.post("/api/inspect")
     def inspect(path: str = Body(..., embed=True)):
         try:
@@ -185,8 +200,9 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
         return {"added": added, "errors": errors}
 
     @app.get("/api/expand")
-    def expand(path: str):
-        """Every video under a folder (a show's seasons too) that isn't queued or dubbed yet."""
+    def expand(path: str, audio: str = "", hide: str = ""):
+        """Every video under a folder (a show's seasons too) that isn't queued or dubbed yet.
+        audio / hide (comma-separated language codes) apply the browser's language filter."""
         try:
             root = svc.check_path(path)
         except PermissionError:
@@ -204,7 +220,13 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
                 skipped += 1
                 continue
             out.append({"path": str(f), "name": f.name, "size": f.stat().st_size})
-        return {"files": out, "skipped": skipped}
+        want, drop = ({x for x in v.split(",") if x} for v in (audio, hide))
+        filtered = 0
+        if want or drop:
+            info = tracks.many([Path(f["path"]) for f in out])
+            keep = [f for f in out if tracks_mod.matches(info.get(f["path"], {}), want, drop)]
+            filtered, out = len(out) - len(keep), keep
+        return {"files": out, "skipped": skipped, "filtered": filtered}
 
     @app.post("/api/jobs/{jid}/lines/redo")
     def redo_lines(jid: int, lines: dict = Body(..., embed=True)):

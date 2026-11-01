@@ -112,8 +112,15 @@ Then open `http://<server>:8790`:
 
 ### Queue
 
-Browse the mounted media folders, tick episodes, and add them. Options when
-adding:
+Browse the mounted media folders, tick episodes, and add them. Each file shows
+its audio and subtitle languages, including subtitle files next to it. The
+language filter above the list does two things:
+
+- **Audio in**: shows only files with audio in that language.
+- **Hide if it already has audio in**: hides files that already have, for
+  example, English audio. Tracks Ai Dub added don't count.
+
+**Select all here** and **Add all…** follow the filter. Options when adding:
 
 - **Show**: guessed from the folder name. Episodes of the same show share
   voices, a glossary and rules.

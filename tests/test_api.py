@@ -330,8 +330,29 @@ def test_add_a_whole_season_with_the_shows_setting(client, cfg, media_root):
     slug = svc.store.get(res["added"][0])["profile"]
     assert c.get(f"/api/profiles/{slug}/rules").json()["review"] == "always"
     # Queued episodes aren't offered again.
-    assert c.get("/api/expand", params={"path": str(season)}).json() == {"files": [], "skipped": 2}
+    assert c.get("/api/expand", params={"path": str(season)}).json() == {"files": [], "skipped": 2, "filtered": 0}
     assert c.get("/api/expand", params={"path": "/etc"}).status_code == 403
+
+
+def test_browser_tracks_and_language_filter(client, cfg, media_root):
+    c, _ = client
+    show = media_root / "Lang Show"
+    show.mkdir()
+    ja = synth.episode(show / "Lang Show - S01E01.mkv")
+    both = synth.episode(show / "Lang Show - S01E02.mkv", english_audio=True)
+    (show / "Lang Show - S01E01.en.srt").write_text("1\n00:00:01,000 --> 00:00:02,000\nHi\n")
+    got = c.get("/api/browse/tracks", params={"path": str(show)}).json()
+    files = got["files"]
+    assert [a["lang"] for a in files[str(ja)]["audio"]] == ["ja"]
+    assert [a["lang"] for a in files[str(both)]["audio"]] == ["ja", "en"]
+    assert files[str(ja)]["external"] == [{"lang": "en", "forced": False, "picture": False, "file": "Lang Show - S01E01.en.srt"}]
+    assert got["names"]["ja"] == "Japanese"
+    assert (cfg.appdata / "tracks.json").exists()  # read once, then from the cache
+    # Add all with the filter: Japanese audio, but not if there's English audio already.
+    r = c.get("/api/expand", params={"path": str(show), "audio": "ja", "hide": "en"}).json()
+    assert [f["name"] for f in r["files"]] == [ja.name] and r["filtered"] == 1
+    assert c.get("/api/expand", params={"path": str(show), "audio": "ko"}).json()["filtered"] == 2
+    assert c.get("/api/browse/tracks", params={"path": "/etc"}).status_code == 403
 
 
 def test_pause_events_episodes_originals_and_bazarr_test(client, cfg, media_root):
