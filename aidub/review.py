@@ -315,7 +315,7 @@ def apply(job, lines: list[L.Line], d: dict | None = None) -> int:
             elif action == "dub" and ln.kind in DUBBABLE:
                 ln.kind, ln.kept_why, ln.decided, ln.fallback = L.SPEECH, "", "dub", ""
                 changed.add(ln.id)
-        if action == "keep" and r.get("show_rule") and r.get("kind") in ("opening", "ending") and prof:
+        if action == "keep" and r.get("show_rule") and r.get("kind") in ("opening", "ending", "song") and prof:
             try:
                 recurring.save_rule(job, a, b, r["kind"], r.get("label", ""))
             except Exception as exc:

@@ -103,6 +103,8 @@ function removeRegion(r) {
   if (RV.sel && RV.sel.id === r.id) RV.sel = null;
   setDirty();
 }
+// Show rules are looked for in the first 10 and the last 8 minutes (aidub.recurring).
+function ruleable(r) { return r.start < 600 || r.end > RV.data.duration - 480; }
 function addRegion(a, b, kind = "song") {
   if (b - a < 0.3) return null;
   const r = { id: `u-${Date.now()}`, start: +a.toFixed(2), end: +b.toFixed(2), kind, action: "keep", source: "user" };
@@ -191,7 +193,7 @@ function rvShell() {
         <div class="seg" id="rvZoom"><button data-v="all">Whole episode</button><button data-v="240">4 min</button><button data-v="30">30 s</button></div>
         <span class="grow" style="flex:1"></span>
         ${nLook ? `<span class="chip look" id="rvFlagPos">Needs a look ${nLook}</span><button id="rvPrev">‹ Prev</button><button id="rvNext">Next ›</button>` : ""}
-        ${d.editable ? `<button id="rvMark" title="Mark in (I) and out (O)">+ Mark region</button>` : ""}
+        ${d.editable ? `<button id="rvMarkCancel" hidden>Cancel</button><button class="primary" id="rvMark" title="Press at the song's start, play or seek to its end, press again (keys I and O)">♪ Mark a song</button>` : ""}
       </div>
       <div class="rv-lanes">
         <div class="rv-lane-names">${RV_LANES.map(([n, h], i) => `<span style="height:${h}px;margin-bottom:${i < RV_LANES.length - 1 ? RV_GAP : 0}px">${n}</span>`).join("")}</div>
@@ -200,7 +202,7 @@ function rvShell() {
       <div class="rv-overview"><canvas id="rvOv" title="The whole episode: drag the box to move"></canvas></div>
       <div class="rv-keys">
         <span><kbd>Space</kbd> play / pause</span><span><kbd>←</kbd><kbd>→</kbd> 1 s</span><span><kbd>Shift</kbd>+<kbd>←</kbd><kbd>→</kbd> 5 s</span>
-        ${d.editable ? `<span><kbd>I</kbd> <kbd>O</kbd> mark in / out</span><span><kbd>K</kbd> keep original</span><span><kbd>D</kbd> dub</span><span><kbd>Delete</kbd> remove region</span>` : ""}
+        ${d.editable ? `<span><kbd>I</kbd> <kbd>O</kbd> song starts / ends here</span><span><kbd>K</kbd> keep original</span><span><kbd>D</kbd> dub</span><span><kbd>Delete</kbd> remove region</span>` : ""}
         <span><kbd>N</kbd> <kbd>P</kbd> next / previous to check</span><span><kbd>Z</kbd> zoom</span>
       </div>
     </div>
@@ -579,7 +581,10 @@ function rvInspector() {
       ${ed ? `<div class="row"><button class="btn-keep ${r.action === "keep" ? "on" : ""}" id="rvKeep">Keep original</button>
         <button class="btn-dub ${r.action === "dub" ? "on" : ""}" id="rvDub">Dub it</button>
         ${!ai ? `<button id="rvRemove">Remove region</button>` : ""}</div>
-        ${["opening", "ending"].includes(r.kind) && r.action === "keep" ? `<label class="row small"><input type="checkbox" id="rvRule" ${r.show_rule ? "checked" : ""}> Use for every episode of this show</label>` : ""}` : ""}`;
+        <div class="row" style="margin-top:6px"><span class="muted small">Grow to the</span><button class="sm" id="rvGrowB">‹ previous subtitle</button><button class="sm" id="rvGrowA">next subtitle ›</button></div>
+        ${r.action === "keep" && ["opening", "ending", "song"].includes(r.kind) ? (ruleable(r)
+          ? `<label class="row small" style="margin-top:8px"><input type="checkbox" id="rvRule" ${r.show_rule ? "checked" : ""}> Keep it in every episode of this show (Ai Dub finds the same music)</label>`
+          : `<p class="muted small" style="margin:8px 0 0">Only a song in the first 10 or the last 8 minutes can be kept for every episode.</p>`) : ""}` : ""}`;
     if (!ed) return;
     $("#rvKind").onchange = (e) => { setRegion(r, { kind: e.target.value }); rvInspector(); rvDraw(); };
     const setTimes = () => {
@@ -592,6 +597,8 @@ function rvInspector() {
     $("#rvDub").onclick = () => { setRegion(r, { action: "dub" }); rvInspector(); rvDraw(); rvList(); };
     if ($("#rvRemove")) $("#rvRemove").onclick = () => { removeRegion(r); rvInspector(); rvDraw(); rvList(); };
     if ($("#rvRule")) $("#rvRule").onchange = (e) => { setRegion(r, { show_rule: e.target.checked, label: RV_KINDS[r.kind] }); };
+    $("#rvGrowB").onclick = () => rvGrow(r, -1);
+    $("#rvGrowA").onclick = () => rvGrow(r, 1);
     return;
   }
   if (s.type === "cue" || s.type === "line") {
@@ -618,13 +625,15 @@ function rvInspector() {
       ${!ed && lns.length ? `<p class="muted small" style="margin:8px 0 0">${RV_READONLY}</p>` : ""}
       ${ed && q ? `<div class="row"><button class="btn-keep ${RV.dec.cues[q.key] === "keep" ? "on" : ""}" id="rvCKeep">Keep original</button>
         <button class="btn-dub ${RV.dec.cues[q.key] === "dub" ? "on" : ""}" id="rvCDub">Dub it</button>
-        ${RV.dec.cues[q.key] ? `<button id="rvCAuto">Let Ai Dub decide</button>` : ""}</div>` : ""}`;
+        ${RV.dec.cues[q.key] ? `<button id="rvCAuto">Let Ai Dub decide</button>` : ""}
+        <button id="rvCSong" title="Keep the original for this subtitle as part of a song; grow it to the next ones after">♪ It's a song</button></div>` : ""}`;
     if (!ed) return;
     box.querySelectorAll("[data-wl]").forEach((b) => (b.onclick = (ev) => rvWhoMenu(ev, Number(b.dataset.wl))));
     if (q) {
       $("#rvCKeep").onclick = () => { RV.dec.cues[q.key] = "keep"; setDirty(); rvList(); rvInspector(); rvDraw(); };
       $("#rvCDub").onclick = () => { RV.dec.cues[q.key] = "dub"; setDirty(); rvList(); rvInspector(); rvDraw(); };
       if ($("#rvCAuto")) $("#rvCAuto").onclick = () => { delete RV.dec.cues[q.key]; setDirty(); rvList(); rvInspector(); rvDraw(); };
+      $("#rvCSong").onclick = () => rvSongFromCue(q);
     }
     return;
   }
@@ -872,7 +881,7 @@ function rvWire() {
   search.oninput = () => { RV.search = search.value; rvList(); };
   $("#rvFollow").onclick = (e) => { RV.follow = !RV.follow; e.target.textContent = RV.follow ? "Follow video ✓" : "Follow video"; };
   if ($("#rvNext")) { $("#rvNext").onclick = () => rvGoFlag((RV.flag + 1) % d.flags.length); $("#rvPrev").onclick = () => rvGoFlag((RV.flag - 1 + d.flags.length) % d.flags.length); }
-  if ($("#rvMark")) $("#rvMark").onclick = () => rvMarkKey();
+  if ($("#rvMark")) { $("#rvMark").onclick = () => rvMarkKey(); $("#rvMarkCancel").onclick = () => { RV.markIn = null; rvMarkButton(); rvDraw(); }; rvMarkButton(); }
   if (d.editable) {
     $("#rvSave").onclick = () => rvSave(false);
     if ($("#rvStart")) $("#rvStart").onclick = () => rvSave(true);
@@ -942,13 +951,35 @@ async function rvSave(start) {
 }
 function rvMarkKey() {
   const t = rvNow();
-  if (RV.markIn == null) { RV.markIn = t; toast("Marked in. Press O (or the button again) at the end."); }
+  if (RV.markIn == null) { RV.markIn = t; toast("Song start marked. Play or seek to where it ends, then press “End song here”."); }
   else {
     const r = addRegion(Math.min(RV.markIn, t), Math.max(RV.markIn, t));
     RV.markIn = null;
-    if (r) { RV.sel = { type: "region", id: r.id }; rvInspector(); rvList(); }
+    if (r) { RV.sel = { type: "region", id: r.id }; rvInspector(); rvList(); toast("Song marked: everything in it keeps the original"); }
+    else toast("That's too short for a song: move to where it ends first");
   }
+  rvMarkButton();
   rvDraw();
+}
+function rvMarkButton() {
+  const b = $("#rvMark"), c = $("#rvMarkCancel");
+  if (!b) return;
+  b.textContent = RV.markIn == null ? "♪ Mark a song" : `■ End song here (from ${fmtT(RV.markIn)})`;
+  c.hidden = RV.markIn == null;
+}
+// A song from the subtitles: this one, then grown a subtitle at a time.
+function rvSongFromCue(q) {
+  const r = addRegion(Math.max(0, q.start - 0.3), q.end + 0.3);
+  if (!r) return;
+  RV.sel = { type: "region", id: r.id };
+  rvInspector(); rvList(); rvDraw();
+}
+function rvGrow(r, dir) {
+  const cues = RV.data.cues.filter((c) => c.kind !== "sign" && (dir < 0 ? c.end <= r.start + 0.31 : c.start >= r.end - 0.31));
+  const q = dir < 0 ? cues[cues.length - 1] : cues[0];
+  if (!q) return toast(dir < 0 ? "No subtitle before this" : "No subtitle after this");
+  setRegion(r, dir < 0 ? { start: Math.max(0, q.start - 0.3) } : { end: q.end + 0.3 });
+  rvInspector(); rvDraw(); rvList();
 }
 function rvTimelineWire() {
   const cv = $("#rvTl"), ov = $("#rvOv");
@@ -1066,7 +1097,7 @@ document.addEventListener("keydown", (ev) => {
   };
   if (k === " ") { ev.preventDefault(); $("#rvPlay").click(); }
   else if (k === "ArrowLeft" || k === "ArrowRight") { ev.preventDefault(); rvSeek(rvNow() + (k === "ArrowLeft" ? -1 : 1) * (ev.shiftKey ? 5 : 1)); }
-  else if ((k === "i" || k === "I") && ed) { RV.markIn = rvNow(); rvDraw(); toast("Marked in. Press O at the end."); }
+  else if ((k === "i" || k === "I") && ed) { RV.markIn = null; rvMarkKey(); }
   else if ((k === "o" || k === "O") && ed && RV.markIn != null) rvMarkKey();
   else if (k === "k" || k === "K") act("keep");
   else if (k === "d" || k === "D") act("dub");
