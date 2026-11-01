@@ -400,8 +400,10 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
         return {"episodes": out}
 
     @app.get("/api/profiles/{slug}/similar")
-    def profile_similar(slug: str, small_s: float = 8.0, min_score: float = 0.7):
-        """Small voices (few seconds of audio) that sound like a bigger one: merge suggestions."""
+    def profile_similar(slug: str, small_s: float = 8.0, min_score: float = 0.6):
+        """Small voices (few seconds of audio) that sound like a bigger one: merge suggestions.
+        Voices this alike are linked automatically from about 0.62, so suggestions start just
+        under that; the user listens before merging."""
         from .speakers import cosine
         p = _profile(slug)
         info = {cid: (ch, p.clean_seconds(cid)) for cid, ch in p.characters.items() if ch.get("embedding")}

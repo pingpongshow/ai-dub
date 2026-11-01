@@ -7,7 +7,7 @@ let timer = null;
 let status = null;
 
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const gb = (n) => (n >= 1e9 ? (n / 1e9).toFixed(2) + " GB" : n >= 1e6 ? (n / 1e6).toFixed(1) + " MB" : Math.round((n || 0) / 1e3) + " kB");
+const gb = (n) => (n >= 1e12 ? (n / 1e12).toFixed(1) + " TB" : n >= 1e9 ? (n / 1e9).toFixed(2) + " GB" : n >= 1e6 ? (n / 1e6).toFixed(1) + " MB" : Math.round((n || 0) / 1e3) + " kB");
 const when = (t) => (t ? new Date(t * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }) : "");
 const counts = (o) => Object.entries(o || {}).filter(([, v]) => v).map(([k, v]) => `${v} ${k.replace(/_/g, " ")}`).join(", ") || "none";
 const dur = (s) => { s = Math.round(s || 0); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60; return h ? `${h}h ${m}m` : `${m}m ${s % 60}s`; };
@@ -23,10 +23,16 @@ const ICON = {
 // "Midnight Diner - S01E07 - Egg Sandwich Bluray-1080p.mkv" as its show, episode code and title.
 function episode(path) {
   const file = String(path).split("/").pop();
-  let base = file.replace(/\.[A-Za-z0-9]+$/, "").replace(/\s+(Bluray|BluRay|WEBDL|WEB-DL|WEBRip|HDTV|DVD|Remux)[-\w. ]*$/i, "");
-  const m = base.match(/^(.*?)\s+-\s+(S\d+E\d+(?:-E?\d+)?)\s*(?:-\s+(.*))?$/i);
-  return m ? { show: m[1], code: m[2].toUpperCase(), title: m[3] || "", file } : { show: "", code: "", title: base, file };
+  let base = file.replace(/\.[A-Za-z0-9]+$/, "");
+  const dotted = !/\s/.test(base);
+  if (dotted) base = base.replace(/[._]+/g, " ");  // "ONE.PIECE.S01E01.2023.1080p…"
+  base = base.replace(/\s+(Bluray|BluRay|WEBDL|WEB-DL|WEB|WEBRip|HDTV|DVD|DVDRip|BDRip|Remux|\d{3,4}p)\b.*$/i, "").trim();
+  // "Show - S01E02 - Title", "Show S01E02 Title", "Show.S01E02.Title"
+  const m = base.match(/^(.*?)[\s-]+(S\d+E\d+(?:-?E\d+)?)(?:[\s-]+(.*))?$/i);
+  if (m) return { show: m[1].replace(/[\s-]+$/, ""), code: m[2].toUpperCase(), title: (m[3] || "").replace(/^[\s-]+/, "").replace(/^(19|20)\d{2}$|\s+(19|20)\d{2}$/, ""), file };
+  return { show: "", code: "", title: dotted ? base.replace(/\s+((?:19|20)\d{2})\b.*$/, " ($1)") : base, file };
 }
+const showName = (path, fallback = "") => { const e = episode(path); return e.show || (e.code ? "" : e.title) || fallback; };
 const epLabel = (path) => { const e = episode(path); return e.code ? `${esc(e.code)}${e.title ? ` · ${esc(e.title)}` : ""}` : esc(e.title); };
 
 async function api(path, opts = {}) {
@@ -314,7 +320,7 @@ async function loadNeeds() {
     <div class="needs-list">
     ${reviews.map((j) => `<div class="panel job needs" data-id="${j.id}">
       <div><div class="title">${epLabel(j.path)}</div>
-        <div class="sub"><span class="ep-show">${esc(episode(j.path).show || j.profile)}</span><span class="tag warn">Review before dubbing</span>
+        <div class="sub">${episode(j.path).show ? `<span class="ep-show">${esc(episode(j.path).show)}</span>` : ""}<span class="tag warn">Review before dubbing</span>
           <span>${esc(j.message.replace(/^waiting for review:?\s*/, "") || "nothing flagged")}</span></div></div>
       <div class="btn-group"><button class="ghost sm" data-act="cancel" data-id="${j.id}">Remove</button>
         <button class="sm" data-log="${j.id}" data-name="${esc(j.path)}">Log</button>
@@ -359,7 +365,7 @@ async function loadQueue() {
     const step = live.steps ? `Step ${live.step_index + 1} of ${live.steps}: <b>${esc(j.step_title)}</b>` : j.step_title ? `<b>${esc(j.step_title)}</b>` : "";
     return `<div class="panel job" data-id="${j.id}">
       <div><div class="title">${epLabel(j.path)}</div>
-        <div class="sub"><span class="ep-show">${esc(episode(j.path).show || j.profile)}</span>${st}
+        <div class="sub">${episode(j.path).show ? `<span class="ep-show">${esc(episode(j.path).show)}</span>` : ""}${st}
           ${j.status === "queued" && j.eta != null ? `<span>about ${mins(j.eta)}</span>` : ""}
           ${holding && early ? `<span class="tag accent" title="It pauses for your review before anything is translated">Will stop for review</span>` : ""}</div>
         ${j.status !== "queued" ? `<div class="meta"><span>${step}${j.message ? ` · ${esc(j.message)}` : ""}</span>
@@ -444,7 +450,7 @@ function renderHistory() {
   const shows = new Map();
   for (const j of jobs) {
     const key = j.profile;
-    if (!shows.has(key)) shows.set(key, { name: episode(j.path).show || j.profile, eps: new Map() });
+    if (!shows.has(key)) shows.set(key, { name: showName(j.path, j.profile), eps: new Map() });
     const g = shows.get(key);
     if (!g.eps.has(j.path)) g.eps.set(j.path, []);
     g.eps.get(j.path).push(j);  // newest first: the list comes sorted by finish time
