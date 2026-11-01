@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import shutil
 import threading
@@ -264,9 +265,25 @@ class Service:
         except Exception:
             log.exception("scanning for set-aside files failed")
 
+    # Pausing the queue: the running job finishes, nothing new starts until resumed.
+    def _pause_file(self) -> Path:
+        return self.cfg.appdata / "queue.json"
+
+    @property
+    def paused(self) -> bool:
+        f = self._pause_file()
+        try:
+            return bool(json.loads(f.read_text()).get("paused")) if f.exists() else False
+        except Exception:
+            return False
+
+    def set_paused(self, on: bool) -> None:
+        self._pause_file().write_text(json.dumps({"paused": bool(on), "at": time.time()}))
+        self._wake.set()
+
     def _loop(self) -> None:
         while not self._stop.is_set():
-            j = self.store.next_queued()
+            j = None if self.paused else self.store.next_queued()
             if not j:
                 self._wake.wait(timeout=5)
                 self._wake.clear()
@@ -324,7 +341,7 @@ class Service:
                               message="done", record=rec)
         except Paused as exc:
             job.log(f"paused: {exc}")
-            self.store.update(jid, status=J.REVIEW, message=str(exc), record=pipeline.record(job))
+            self.store.update(jid, status=J.REVIEW, message=str(exc), record={**pipeline.record(job), "paused_at": time.time()})
         except Skipped as exc:
             job.remove_work()
             self.store.update(jid, status=J.SKIPPED, finished=time.time(), message=f"skipped: {exc}",

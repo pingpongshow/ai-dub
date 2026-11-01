@@ -332,3 +332,32 @@ def test_add_a_whole_season_with_the_shows_setting(client, cfg, media_root):
     # Queued episodes aren't offered again.
     assert c.get("/api/expand", params={"path": str(season)}).json() == {"files": [], "skipped": 2}
     assert c.get("/api/expand", params={"path": "/etc"}).status_code == 403
+
+
+def test_pause_events_episodes_originals_and_bazarr_test(client, cfg, media_root):
+    from aidub import jobs as J
+    c, svc = client
+    show = media_root / "Paused Show"
+    show.mkdir()
+    eps = [synth.episode(show / f"Paused Show - S01E0{n}.mkv") for n in (1, 2)]
+    # Paused: nothing new starts until resumed.
+    assert c.post("/api/queue", json={"paused": True}).json() == {"paused": True}
+    assert c.get("/api/status").json()["paused"] is True
+    jid = c.post("/api/jobs", json={"paths": [str(eps[0])], "review": "off"}).json()["added"][0]
+    assert svc.paused and svc.store.next_queued()["id"] == jid      # queued, waiting for the resume
+    c.post("/api/queue", json={"paused": False})
+    svc.run_one(svc.store.next_queued())
+    assert svc.store.get(jid)["status"] == J.DONE
+    # The show's episodes and how far each is.
+    slug = svc.store.get(jid)["profile"]
+    got = {e["name"]: e["state"] for e in c.get(f"/api/profiles/{slug}/episodes").json()["episodes"]}
+    assert got == {eps[0].name: "to check", eps[1].name: "not dubbed"}
+    assert isinstance(c.get(f"/api/profiles/{slug}/similar").json()["suggestions"], list)
+    # The header's events, newest first.
+    ev = c.get("/api/events").json()
+    assert ev[0]["id"] == jid and ev[0]["kind"] == "check"
+    # Originals say which dubs aren't checked yet, and how much room the disks have.
+    o = c.get("/api/originals").json()
+    assert o["items"] and o["items"][0]["check_pending"] and o["disks"] and o["disks"][0]["free"] > 0
+    # Bazarr: no address or key, a plain answer rather than an error.
+    assert c.post("/api/bazarr/test", json={"url": ""}).json()["ok"] is False

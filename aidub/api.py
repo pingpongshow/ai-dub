@@ -10,6 +10,7 @@ import mimetypes
 from contextlib import asynccontextmanager
 import os
 import re
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -74,7 +75,7 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
         return {"version": __version__, "ui": UI_BUILD, "gpu": {"present": g.present, "name": g.name, "total_mb": g.total_mb,
                                                 "used_mb": g.used_mb, "processes": g.processes},
                 "workers": installed, "steps": [{"name": s, "title": TITLES[s]} for s in STEP_NAMES],
-                "counts": _counts()}
+                "counts": _counts(), "paused": svc.paused}
 
     def _counts() -> dict:
         """What the header shows: jobs in the queue, and what waits for the user."""
@@ -362,6 +363,61 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
         return {"slug": p.slug, "name": p.name, "settings": p.settings, "glossary": p.glossary,
                 "characters": chars, "episodes": p.data.get("episodes", []), "size": p.size()}
 
+    @app.get("/api/profiles/{slug}/episodes")
+    def profile_episodes(slug: str):
+        """Every video in the show's folders, with how far each is: not dubbed, queued,
+        waiting for review, dubbed (checked or not), failed."""
+        p = _profile(slug)
+        mine = [j for j in svc.store.list() if j["profile"] == p.slug]
+        folders = set()
+        for j in mine:
+            d = Path(j["path"]).parent
+            if re.fullmatch(r"(?i)(season|series|s)\s*\d+|specials", d.name):
+                d = d.parent
+            folders.add(d)
+        latest: dict[str, dict] = {}
+        for j in sorted(mine, key=lambda x: x["id"]):
+            latest[j["path"]] = j
+        out = []
+        for d in sorted(folders):
+            if not d.is_dir():
+                continue
+            for f in sorted(d.rglob("*"), key=lambda x: str(x).lower()):
+                if f.name.startswith(".") or not f.is_file() or f.suffix.lower() not in media.VIDEO_EXT:
+                    continue
+                j = latest.get(str(f))
+                r = (j or {}).get("record") or {}
+                if not j:
+                    state = "dubbed" if originals.aside_name(f).exists() else "not dubbed"
+                elif j["status"] in J.ACTIVE:
+                    state = {"review": "waiting for review", "queued": "queued"}.get(j["status"], "dubbing")
+                elif j["status"] == J.DONE:
+                    state = {"pending": "to check", "restored": "not dubbed", "redo": "not dubbed"}.get(r.get("verify"), "dubbed")
+                else:
+                    state = j["status"]
+                out.append({"path": str(f), "name": f.name, "folder": str(f.parent.relative_to(d)) if f.parent != d else "",
+                            "state": state, "job": j["id"] if j else None, "size": f.stat().st_size})
+        return {"episodes": out}
+
+    @app.get("/api/profiles/{slug}/similar")
+    def profile_similar(slug: str, small_s: float = 8.0, min_score: float = 0.7):
+        """Small voices (few seconds of audio) that sound like a bigger one: merge suggestions."""
+        from .speakers import cosine
+        p = _profile(slug)
+        info = {cid: (ch, p.clean_seconds(cid)) for cid, ch in p.characters.items() if ch.get("embedding")}
+        out = []
+        for cid, (ch, secs) in info.items():
+            if secs >= small_s:
+                continue
+            best = max(((cosine(ch["embedding"], o["embedding"]), oid) for oid, (o, osecs) in info.items()
+                        if oid != cid and osecs > secs), default=None)
+            if best and best[0] >= min_score:
+                out.append({"small": cid, "small_name": ch.get("name", cid), "small_seconds": round(secs, 1),
+                            "target": best[1], "target_name": p.characters[best[1]].get("name", best[1]),
+                            "score": round(best[0], 2)})
+        out.sort(key=lambda x: -x["score"])
+        return {"suggestions": out}
+
     @app.patch("/api/profiles/{slug}")
     def update_profile(slug: str, body: dict = Body(...)):
         p = _profile(slug)
@@ -465,7 +521,76 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
     # Originals pending deletion ---------------------------------------------------------------
     @app.get("/api/originals")
     def originals_list():
-        return originals.listing(svc.store)
+        out = originals.listing(svc.store)
+        # An original whose dub hasn't been checked yet: listen before deleting it.
+        pending = {j["id"] for j in svc.store.list({J.DONE}) if (j.get("record") or {}).get("verify") == "pending"}
+        for o in out["items"]:
+            o["check_pending"] = o.get("job_id") in pending
+        # Free space on the media shares (one entry per disk).
+        seen, free = set(), []
+        for m in cfg.media_roots:
+            try:
+                st = os.stat(m["path"])
+                if st.st_dev in seen:
+                    continue
+                seen.add(st.st_dev)
+                du = shutil.disk_usage(m["path"])
+                free.append({"name": m["name"], "free": du.free, "total": du.total})
+            except OSError:
+                continue
+        out["disks"] = free
+        return out
+
+    # Queue pause ------------------------------------------------------------------------------
+    @app.get("/api/queue")
+    def queue_state():
+        return {"paused": svc.paused}
+
+    @app.post("/api/queue")
+    def queue_set(paused: bool = Body(..., embed=True)):
+        svc.set_paused(paused)
+        return {"paused": svc.paused}
+
+    # Recent events, for the header's notifications -------------------------------------------------
+    @app.get("/api/events")
+    def events(limit: int = 30):
+        out = []
+        for j in svc.store.list():
+            r = j.get("record") or {}
+            name = Path(j["path"]).name
+            if j["status"] == J.REVIEW:
+                out.append({"t": r.get("paused_at") or j.get("started") or j.get("created"), "kind": "review", "id": j["id"],
+                            "name": name, "text": j.get("message") or "waiting for review"})
+            elif j["status"] == J.DONE and j.get("finished"):
+                v = r.get("verify")
+                out.append({"t": j["finished"], "kind": "check" if v == "pending" else "done", "id": j["id"], "name": name,
+                            "text": "dubbed: ready to check" if v == "pending" else (j.get("message") or "dubbed")})
+            elif j["status"] in (J.FAILED, J.SKIPPED) and j.get("finished"):
+                out.append({"t": j["finished"], "kind": j["status"], "id": j["id"], "name": name, "text": j.get("message", "")})
+        out.sort(key=lambda e: -(e["t"] or 0))
+        return out[:limit]
+
+    # Bazarr ------------------------------------------------------------------------------------
+    @app.post("/api/bazarr/test")
+    def bazarr_test(url: str = Body("", embed=True)):
+        from .subtitles.bazarr import Bazarr
+        url = (url or cfg.get("subtitles.providers.bazarr.url", "") or "").strip()
+        key = cfg.get("subtitles.providers.bazarr.api_key", "") or ""
+        if not url:
+            return {"ok": False, "message": "enter Bazarr's address first"}
+        if not key or key.startswith("${"):
+            return {"ok": False, "message": "no Bazarr API key is set (Keys, below)"}
+        bz = Bazarr(url, key, timeout=8)
+        try:
+            st = bz.status()
+            return {"ok": True, "message": f"connected to Bazarr {st.get('bazarr_version', '')}".strip()}
+        except Exception as exc:
+            text = str(exc)
+            if "401" in text or "403" in text:
+                text = "Bazarr refused the API key"
+            return {"ok": False, "message": text[:200]}
+        finally:
+            bz.close()
 
     @app.post("/api/originals/scan")
     def originals_scan():

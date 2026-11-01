@@ -67,13 +67,66 @@ async function refreshStatus() {
     nq.className = "count" + (mine ? " warn" : "");
     nq.title = mine ? `${plural(mine, "thing")} waiting for you` : `${plural(c.queue || 0, "job")} in the queue`;
     $("#nOrig").textContent = c.originals || "";
+    pauseView();
   } catch { $("#gpu").innerHTML = `<span class="tag bad">server unreachable</span>`; }
 }
 
+// Notifications: what finished, failed or waits for you, newest first ---------------------------
+const store = {  // per-browser conveniences; the page works without them
+  get(k, d) { try { const v = localStorage.getItem("aidub." + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("aidub." + k, JSON.stringify(v)); } catch { /* private window */ } },
+};
+const EVENT = { review: ["warn", "Waiting for your review"], check: ["ok", "Dubbed: ready to check"], done: ["", "Dubbed"],
+  failed: ["bad", "Failed"], skipped: ["", "Skipped"] };
+async function refreshEvents() {
+  const ev = await api("/events").catch(() => null);
+  if (!ev) return;
+  refreshEvents.list = ev;
+  const seen = store.get("seen", 0);
+  const n = ev.filter((e) => (e.t || 0) > seen && e.kind !== "done").length;
+  $("#nBell").textContent = n || "";
+  if (!$("#bellpop").hidden) renderBell();
+}
+function renderBell() {
+  const ev = refreshEvents.list || [], seen = store.get("seen", 0);
+  const href = (e) => (e.kind === "review" ? `#review/${e.id}` : e.kind === "check" ? `#verify/${e.id}` : "#history");
+  $("#bellpop").innerHTML = `<div class="bellpop-head"><b>Lately</b></div>` + (ev.length ? ev.map((e) => `
+    <a class="bell-item ${(e.t || 0) > seen ? "new" : ""}" href="${href(e)}"><span class="tag ${EVENT[e.kind][0]}">${EVENT[e.kind][1]}</span>
+      <span class="bell-name">${epLabel(e.name)}</span><span class="small muted">${esc(ago(e.t))}${e.kind === "failed" || e.kind === "skipped" ? ` · ${esc(e.text)}` : ""}</span></a>`).join("")
+    : `<div class="empty"><b>Nothing yet</b>Finished, failed and waiting episodes show up here.</div>`);
+}
+$("#bell").onclick = (ev) => {
+  ev.stopPropagation();
+  const pop = $("#bellpop");
+  pop.hidden = !pop.hidden;
+  if (!pop.hidden) { renderBell(); store.set("seen", Date.now() / 1000); $("#nBell").textContent = ""; }
+};
+document.addEventListener("click", (ev) => { if (!ev.target.closest("#bellpop, #bell")) $("#bellpop").hidden = true; });
+
+// A job's log, in a panel that stays open (and keeps up) until you close it -------------------------
+const LOG = { id: null, timer: null };
+async function openLog(id, name) {
+  LOG.id = id;
+  $("#logtitle").innerHTML = `Log · ${epLabel(name)}`;
+  $("#logpanel").hidden = false;
+  $("#logtext").textContent = "Loading…";
+  clearInterval(LOG.timer);
+  const pull = async () => {
+    if (LOG.id !== id) return;
+    const pre = $("#logtext");
+    const atEnd = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 30;
+    try { pre.textContent = (await api(`/jobs/${id}/log`)) || "Nothing logged yet."; } catch (e) { pre.textContent = e.message; }
+    if ($("#logfollow").checked && atEnd) pre.scrollTop = pre.scrollHeight;
+  };
+  await pull();
+  $("#logtext").scrollTop = $("#logtext").scrollHeight;
+  LOG.timer = setInterval(pull, 4000);
+}
+$("#logclose").onclick = () => { LOG.id = null; clearInterval(LOG.timer); $("#logpanel").hidden = true; };
+
 // Queue ------------------------------------------------------------------------------------
-let browsePath = "";
+let browsePath = store.get("browse", "");
 let selected = new Set();
-const openLogs = new Map();  // job id -> log text, kept while the list refreshes
 let polls = 0;
 
 async function pageQueue() {
@@ -82,10 +135,13 @@ async function pageQueue() {
       <p>Pick episodes to dub. Ai Dub works through them one at a time and asks you when it needs a look.</p></div></div>
     <div id="needs"></div>
     <div class="section-head"><h2>In the queue</h2><span class="grow"></span><span class="small muted" id="qtotal"
-      title="From how long earlier episodes took for each step; a stop for review isn't counted"></span></div>
+      title="From how long earlier episodes took for each step; a stop for review isn't counted"></span>
+      <button class="sm" id="qpause"></button></div>
+    <div id="qpaused"></div>
     <div id="jobs"></div>
-    <div class="section-head"><h2>Add episodes</h2></div>
-    <div class="panel flush">
+    <div class="section-head fold" id="addhead" role="button" tabindex="0"><span class="chev">▸</span><h2>Add episodes</h2>
+      <span class="small muted" id="addhint"></span></div>
+    <div class="panel flush" id="addpanel">
       <div class="browser-bar"><div class="crumbs grow" id="crumbs"></div></div>
       <div class="browser" id="browser"></div>
       <div class="browser-bar">
@@ -96,6 +152,20 @@ async function pageQueue() {
       <div class="addform" id="addform" hidden></div>
     </div>`;
   $("#add").onclick = () => showAddForm();
+  const fold = (open) => {
+    $("#addpanel").hidden = !open; $("#addhead").classList.toggle("open", open); store.set("addOpen", open);
+    $("#addhint").textContent = open ? "" : "Pick episodes, a season or a whole show to dub";
+  };
+  fold(store.get("addOpen", true));
+  $("#addhead").onclick = () => fold($("#addpanel").hidden);
+  $("#addhead").onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fold($("#addpanel").hidden); } };
+  $("#qpause").onclick = async () => {
+    const now = !!(status && status.paused);
+    if (!now && !confirm("Pause the queue? The episode being dubbed now finishes; nothing new starts until you resume.")) return;
+    try { status.paused = (await api("/queue", { body: { paused: !now } })).paused; } catch (e) { return fail(e); }
+    pauseView();
+  };
+  pauseView();
   $("#selall").onclick = () => {
     const free = (loadBrowser.entries || []).filter((e) => !e.dir && !e.queued);
     const all = free.length && free.every((e) => selected.has(e.path));
@@ -107,9 +177,20 @@ async function pageQueue() {
   timer = setInterval(() => { loadQueue(); if (++polls % 4 === 0) loadNeeds(); }, 2500);
 }
 
+function pauseView() {
+  const on = !!(status && status.paused), b = $("#qpause");
+  if (!b) return;
+  b.textContent = on ? "▶ Resume the queue" : "⏸ Pause the queue";
+  b.classList.toggle("primary", on);
+  $("#qpaused").innerHTML = on ? `<div class="callout warn" style="margin-bottom:12px"><b>The queue is paused.</b> The episode being dubbed
+    finishes; nothing new starts until you resume.</div>` : "";
+}
+
 async function loadBrowser(path) {
-  const data = await api("/browse?path=" + encodeURIComponent(path));
+  const data = await api("/browse?path=" + encodeURIComponent(path)).catch((e) => (path ? null : Promise.reject(e)));
+  if (!data) return loadBrowser("");  // a remembered folder that's gone
   browsePath = data.path;
+  store.set("browse", data.path);
   loadBrowser.entries = data.entries;
   loadBrowser.data = data;
   renderBrowser();
@@ -236,6 +317,7 @@ async function loadNeeds() {
         <div class="sub"><span class="ep-show">${esc(episode(j.path).show || j.profile)}</span><span class="tag warn">Review before dubbing</span>
           <span>${esc(j.message.replace(/^waiting for review:?\s*/, "") || "nothing flagged")}</span></div></div>
       <div class="btn-group"><button class="ghost sm" data-act="cancel" data-id="${j.id}">Remove</button>
+        <button class="sm" data-log="${j.id}" data-name="${esc(j.path)}">Log</button>
         <a class="button primary" href="#review/${j.id}">Review</a></div></div>`).join("")}
     ${items.map((x) => `<div class="panel job needs">
       <div><div class="title">${epLabel(x.name)}</div>
@@ -244,6 +326,7 @@ async function loadNeeds() {
       <div class="btn-group"><a class="button" href="#review/${x.id}" title="The full review page: change anything and redub">Review &amp; change</a>
         <a class="button primary" href="#verify/${x.id}">Check the dub</a></div></div>`).join("")}
     </div>`;
+  box.querySelectorAll("[data-log]").forEach((b) => (b.onclick = () => openLog(Number(b.dataset.log), b.dataset.name)));
   box.querySelectorAll("[data-act=cancel]").forEach((b) => (b.onclick = async () => {
     if (!confirm("Remove this episode from the queue? Its working files are deleted.")) return;
     await api(`/jobs/${b.dataset.id}`, { method: "DELETE" }).catch(fail);
@@ -265,7 +348,6 @@ async function loadQueue() {
     box.innerHTML = `<div class="panel empty"><b>Nothing is being dubbed</b>${all.length ? "Episodes waiting for your review are above." : "Pick episodes below and add them to the queue."}</div>`;
     return;
   }
-  if (++loadQueue.n % 4 === 0) for (const id of openLogs.keys()) api(`/jobs/${id}/log`).then((t) => openLogs.set(id, t)).catch(() => {});
   let qpos = 0;
   box.innerHTML = jobs.map((j, i) => {
     const live = j.live || {}, pct = Math.round((j.progress || 0) * 100);
@@ -287,12 +369,11 @@ async function loadQueue() {
         ${j.status === "running" ? `<a class="button sm" href="#review/${j.id}" title="See what Ai Dub has decided so far">Look</a>` : ""}
         ${early && !holding ? `<button class="sm" data-act="hold" title="Pause this episode at its review step, even if nothing is flagged">Stop for review</button>` : ""}
         ${j.status === "queued" ? `<button class="sm" data-act="up" title="Move up" ${i === 0 || jobs[i - 1].status !== "queued" ? "disabled" : ""}>↑</button><button class="sm" data-act="down" title="Move down" ${i === jobs.length - 1 ? "disabled" : ""}>↓</button>` : ""}
-        <button class="sm ${openLogs.has(j.id) ? "on" : ""}" data-act="log">${openLogs.has(j.id) ? "Hide log" : "Log"}</button>
+        <button class="sm" data-act="log">Log</button>
         <button class="sm ghost" data-act="cancel" style="color:var(--bad)">${j.status === "queued" ? "Remove" : "Cancel"}</button>
       </div>
-      ${openLogs.has(j.id) ? `<pre class="log">${esc(openLogs.get(j.id) || "Loading…")}</pre>` : ""}</div>`;
+      </div>`;
   }).join("");
-  box.querySelectorAll("pre.log").forEach((p) => (p.scrollTop = p.scrollHeight));
   box.querySelectorAll("button[data-act]").forEach((b) => {
     const id = Number(b.closest(".job").dataset.id);
     b.onclick = async () => {
@@ -304,10 +385,7 @@ async function loadQueue() {
           await api(`/jobs/${id}`, { method: "DELETE" });
         }
         if (act === "hold") { await api(`/jobs/${id}/review/hold`, { body: {} }); toast("It will stop for review before anything is translated"); }
-        if (act === "log") {
-          if (openLogs.has(id)) openLogs.delete(id);
-          else { openLogs.set(id, ""); openLogs.set(id, await api(`/jobs/${id}/log`)); }
-        }
+        if (act === "log") { openLog(id, (jobs.find((x) => x.id === id) || {}).path || ""); return; }
       } catch (e) { fail(e); }
       loadQueue(); refreshStatus();
     };
@@ -316,23 +394,40 @@ async function loadQueue() {
 loadQueue.n = 0;
 
 // History ------------------------------------------------------------------------------------
-const HIST = { filter: "all", q: "", open: new Set() };
+const HIST = { filter: "all", q: "", open: new Set(), shut: new Set(store.get("histShut", [])), older: new Set() };
 
 async function pageHistory() {
   const jobs = await api("/jobs?view=history");
   pageHistory.jobs = jobs;
   const n = (f) => jobs.filter(f).length;
+  const junk = jobs.filter((j) => j.status === "skipped" || j.status === "cancelled");
   main.innerHTML = `
-    <div class="page-head"><div class="grow"><h1>History</h1><p>Every episode Ai Dub has finished, skipped or stopped.</p></div>
+    <div class="page-head"><div class="grow"><h1>History</h1><p>Every episode Ai Dub has finished, skipped or stopped, by show.</p></div>
       <div class="filters">
         <div class="seg" id="hfilter">${[["all", "All", jobs.length], ["check", "To check", n((j) => (j.record || {}).verify === "pending")],
           ["done", "Done", n((j) => j.status === "done")], ["failed", "Failed", n((j) => j.status === "failed")]]
           .map(([k, t, c]) => `<button data-v="${k}" class="${HIST.filter === k ? "on" : ""}">${t} <span class="faint">${c}</span></button>`).join("")}</div>
-        <input type="search" id="hsearch" placeholder="Search episodes…" value="${esc(HIST.q)}"></div></div>
-    <div class="panel flush tablewrap"><table class="hist" id="htable"></table></div>`;
+        <input type="search" id="hsearch" placeholder="Search episodes…" value="${esc(HIST.q)}">
+        ${junk.length ? `<button class="sm ghost" id="hclear" title="Remove skipped and cancelled episodes from the list">Clear ${junk.length} skipped / cancelled</button>` : ""}</div></div>
+    <div id="hgroups"></div>`;
   $("#hfilter").querySelectorAll("button").forEach((b) => (b.onclick = () => { HIST.filter = b.dataset.v; pageHistory(); }));
   $("#hsearch").oninput = (e) => { HIST.q = e.target.value; renderHistory(); };
+  if ($("#hclear")) $("#hclear").onclick = async () => {
+    if (!confirm(`Remove ${plural(junk.length, "skipped or cancelled episode")} from the history? Nothing was dubbed for them.`)) return;
+    for (const j of junk) await api(`/jobs/${j.id}`, { method: "DELETE" }).catch(() => {});
+    toast(`Cleared ${plural(junk.length, "entry", "entries")}`);
+    pageHistory();
+  };
   renderHistory();
+}
+
+function historyResult(j) {
+  const r = j.record || {};
+  const v = { pending: `<span class="tag warn">Not checked yet</span>`, good: `<span class="tag ok">Kept · original deleted</span>`,
+    restored: `<span class="tag">Original put back</span>`, redo: `<span class="tag">Replaced by a redo</span>` }[r.verify];
+  const st = { done: `<span class="tag ok">Dubbed</span>`, failed: `<span class="tag bad">Failed</span>`, skipped: `<span class="tag">Skipped</span>`,
+    cancelled: `<span class="tag">Cancelled</span>` }[j.status] || `<span class="tag">${esc(j.status)}</span>`;
+  return v && j.status === "done" ? v : st;
 }
 
 function renderHistory() {
@@ -343,39 +438,44 @@ function renderHistory() {
     if (HIST.filter === "failed" && j.status !== "failed") return false;
     return !HIST.q || j.path.toLowerCase().includes(HIST.q.toLowerCase());
   });
-  const table = $("#htable");
-  if (!jobs.length) { table.innerHTML = `<tr><td><div class="empty"><b>Nothing here</b>${HIST.q || HIST.filter !== "all" ? "No episode matches." : "Finished episodes appear here."}</div></td></tr>`; return; }
-  const result = (j) => {
-    const r = j.record || {};
-    const v = { pending: `<span class="tag warn">Not checked yet</span>`, good: `<span class="tag ok">Kept · original deleted</span>`,
-      restored: `<span class="tag">Original put back</span>`, redo: `<span class="tag">Redone</span>` }[r.verify];
-    const s = { done: `<span class="tag ok">Dubbed</span>`, failed: `<span class="tag bad">Failed</span>`, skipped: `<span class="tag">Skipped</span>`,
-      cancelled: `<span class="tag">Cancelled</span>` }[j.status] || `<span class="tag">${esc(j.status)}</span>`;
-    return v && j.status === "done" ? v : s;
-  };
-  table.innerHTML = `<thead><tr><th>Episode</th><th>Result</th><th>Dub</th><th>Finished</th><th></th></tr></thead><tbody>` + jobs.map((j) => {
-    const r = j.record || {}, qc = r.qc || {};
-    const took = j.started && j.finished ? mins(j.finished - j.started) : "";
-    const stats = j.status === "done" && qc.dubbed_lines != null
-      ? `<div class="stats"><span><b>${qc.dubbed_lines}</b> lines</span><span><b>${((qc.fallback_rate || 0) * 100).toFixed(1)} %</b> left in original</span>${took ? `<span>took <b>${took}</b></span>` : ""}</div>` : "";
-    const open = HIST.open.has(j.id);
-    return `<tr data-id="${j.id}"><td><div class="ep">${epLabel(j.path)}</div><div class="msg">${esc(episode(j.path).show || j.profile)}${
-        j.status !== "done" || r.verify === "redo" ? ` · ${esc(j.message)}` : ""}</div>
-        ${qc.subtitle_track && qc.subtitle_track.trusted === false && qc.subtitle_track.why !== "no English subtitle"
-          ? `<div class="msg" style="color:var(--warn)">Dubbed from the speech: the English subtitles weren't good enough (${esc(qc.subtitle_track.why)})</div>` : ""}</td>
-      <td>${result(j)}</td><td>${stats}</td><td class="small muted nowrap">${esc(when(j.finished))}</td>
-      <td class="actions"><div class="btn-group">
-        ${r.verify === "pending" ? `<a class="button sm primary" href="#verify/${j.id}">Check</a>` : ""}
-        ${j.status === "failed" ? `<button class="sm" data-act="retry" title="Continue from the step that failed">Retry</button>` : ""}
-        <button class="sm ghost" data-act="details">${open ? "Hide" : "Details"}</button>
-        <button class="sm ghost" data-act="remove" title="Remove from history (deletes any working files)">✕</button></div></td></tr>
-      ${open ? `<tr class="detail"><td colspan="5">${historyDetail(j)}</td></tr>` : ""}`;
-  }).join("") + "</tbody>";
-  table.querySelectorAll("button[data-act]").forEach((b) => {
+  const box = $("#hgroups");
+  if (!jobs.length) { box.innerHTML = `<div class="panel empty"><b>Nothing here</b>${HIST.q || HIST.filter !== "all" ? "No episode matches." : "Finished episodes appear here."}</div>`; return; }
+  // By show; within a show, one row per episode (its latest attempt) with earlier attempts folded under it.
+  const shows = new Map();
+  for (const j of jobs) {
+    const key = j.profile;
+    if (!shows.has(key)) shows.set(key, { name: episode(j.path).show || j.profile, eps: new Map() });
+    const g = shows.get(key);
+    if (!g.eps.has(j.path)) g.eps.set(j.path, []);
+    g.eps.get(j.path).push(j);  // newest first: the list comes sorted by finish time
+  }
+  box.innerHTML = [...shows.entries()].map(([key, g]) => {
+    const latest = [...g.eps.values()].map((a) => a[0]);
+    const done = latest.filter((j) => j.status === "done" && (j.record || {}).qc);
+    const avgLeft = done.length ? done.reduce((a, j) => a + ((j.record.qc.fallback_rate) || 0), 0) / done.length : null;
+    const timed = latest.filter((j) => j.started && j.finished);
+    const avgTook = timed.length ? timed.reduce((a, j) => a + (j.finished - j.started), 0) / timed.length : null;
+    const shut = HIST.shut.has(key);
+    return `<div class="panel flush hgroup">
+      <div class="hgroup-head ${shut ? "" : "open"}" data-show="${esc(key)}" role="button" tabindex="0"><span class="chev">▸</span>
+        <b>${esc(g.name)}</b><span class="tag">${plural(g.eps.size, "episode")}</span>
+        <span class="stats grow">${avgTook ? `<span>about <b>${mins(avgTook)}</b> each</span>` : ""}${avgLeft != null ? `<span><b>${(avgLeft * 100).toFixed(1)} %</b> left in original on average</span>` : ""}</span>
+        <a class="button sm ghost" href="#profiles/${encodeURIComponent(key)}" title="The show's page">Show page</a></div>
+      ${shut ? "" : `<div class="tablewrap"><table class="hist"><thead><tr><th>Episode</th><th>Result</th><th>Dub</th><th>Finished</th><th></th></tr></thead><tbody>
+        ${[...g.eps.values()].map((attempts) => attempts.map((j, i) => historyRow(j, i, attempts.length)).join("")).join("")}</tbody></table></div>`}
+    </div>`;
+  }).join("");
+  box.querySelectorAll(".hgroup-head").forEach((h) => {
+    const flip = (e) => { if (e.target.closest("a")) return; const k = h.dataset.show; HIST.shut.has(k) ? HIST.shut.delete(k) : HIST.shut.add(k); store.set("histShut", [...HIST.shut]); renderHistory(); };
+    h.onclick = flip;
+    h.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); flip(e); } };
+  });
+  box.querySelectorAll("button[data-act]").forEach((b) => {
     const id = Number(b.closest("tr").dataset.id);
     b.onclick = async () => {
       const act = b.dataset.act;
       if (act === "details") { HIST.open.has(id) ? HIST.open.delete(id) : HIST.open.add(id); renderHistory(); return; }
+      if (act === "older") { HIST.older.has(id) ? HIST.older.delete(id) : HIST.older.add(id); renderHistory(); return; }
       try {
         if (act === "retry") { await api(`/jobs/${id}/retry`, { body: {} }); toast("Queued again from the failed step"); }
         if (act === "remove") {
@@ -389,6 +489,33 @@ function renderHistory() {
       pageHistory(); refreshStatus();
     };
   });
+}
+
+// One attempt at an episode: the latest is a full row; earlier ones fold under it.
+function historyRow(j, i, n) {
+  const r = j.record || {}, qc = r.qc || {};
+  const head = i === 0, showingOlder = HIST.older.has(j.id);
+  if (!head) {
+    const latest = (pageHistory.jobs || []).find((x) => x.path === j.path);
+    if (!latest || !HIST.older.has(latest.id)) return "";
+  }
+  const took = j.started && j.finished ? mins(j.finished - j.started) : "";
+  const stats = j.status === "done" && qc.dubbed_lines != null
+    ? `<div class="stats"><span><b>${qc.dubbed_lines}</b> lines</span><span><b>${((qc.fallback_rate || 0) * 100).toFixed(1)} %</b> left in original</span>${took ? `<span>took <b>${took}</b></span>` : ""}</div>` : "";
+  const open = HIST.open.has(j.id);
+  return `<tr data-id="${j.id}" class="${head ? "" : "older"}"><td>${head ? `<div class="ep">${epLabel(j.path)}</div>`
+      : `<div class="msg">↳ earlier attempt (job ${j.id})</div>`}
+      <div class="msg">${j.status !== "done" || r.verify === "redo" ? esc(j.message) : ""}</div>
+      ${head && n > 1 ? `<button class="sm ghost" data-act="older" style="margin-top:4px">${showingOlder ? "Hide" : "Show"} ${plural(n - 1, "earlier attempt")}</button>` : ""}
+      ${qc.subtitle_track && qc.subtitle_track.trusted === false && qc.subtitle_track.why !== "no English subtitle"
+        ? `<div class="msg" style="color:var(--warn)">Dubbed from the speech: the English subtitles weren't good enough (${esc(qc.subtitle_track.why)})</div>` : ""}</td>
+    <td>${historyResult(j)}</td><td>${stats}</td><td class="small muted nowrap">${esc(when(j.finished))}</td>
+    <td class="actions"><div class="btn-group">
+      ${r.verify === "pending" ? `<a class="button sm primary" href="#verify/${j.id}">Check</a>` : ""}
+      ${j.status === "failed" ? `<button class="sm" data-act="retry" title="Continue from the step that failed">Retry</button>` : ""}
+      <button class="sm ghost" data-act="details">${open ? "Hide" : "Details"}</button>
+      <button class="sm ghost" data-act="remove" title="Remove from history (deletes any working files)">✕</button></div></td></tr>
+    ${open ? `<tr class="detail"><td colspan="5">${historyDetail(j)}</td></tr>` : ""}`;
 }
 
 function historyDetail(j) {
@@ -429,27 +556,99 @@ async function pageProfiles(slug) {
 }
 
 const VOICES_SHOWN = 12;
+const SMALL_S = 8;  // a voice with less clean audio than this is "small": worth merging into a bigger one
+const PROF = { tab: store.get("profTab", "settings"), all: false, small: false };
+const EP_STATE = { "not dubbed": "", queued: "accent", dubbing: "accent", "waiting for review": "warn", "to check": "warn",
+  dubbed: "ok", failed: "bad", skipped: "", cancelled: "" };
 
 async function pageProfile(slug) {
   const p = await api("/profiles/" + encodeURIComponent(slug));
-  const others = (cid) => p.characters.filter((c) => c.id !== cid).map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
-  const chars = [...p.characters].sort((a, b) => (b.clean_seconds || 0) - (a.clean_seconds || 0));
-  const gloss = Object.entries(p.glossary).sort((a, b) => (b[1].count || 0) - (a[1].count || 0));
+  pageProfile.p = p;
+  const gloss = Object.entries(p.glossary);
+  const tabs = [["settings", "Settings"], ["episodes", "Episodes"], ["voices", `Voices <span class="faint">${p.characters.length}</span>`],
+    ["glossary", `Glossary <span class="faint">${gloss.length}</span>`]];
   main.innerHTML = `
     <div class="page-head"><div class="grow"><div class="small"><a href="#profiles">Shows</a> <span class="faint">›</span></div><h1>${esc(p.name)}</h1>
-      <p>${plural(p.episodes.length, "episode")} · ${plural(p.characters.length, "voice")} · ${plural(gloss.length, "glossary term")} · ${gb(p.size)}</p></div>
+      <p>${plural(p.episodes.length, "episode")} dubbed · ${plural(p.characters.length, "voice")} · ${plural(gloss.length, "glossary term")} · ${gb(p.size)}</p></div>
       <button class="danger" id="delprof">Delete show</button></div>
+    <div class="tabs" id="ptabs">${tabs.map(([k, t]) => `<button data-tab="${k}" class="${PROF.tab === k ? "on" : ""}">${t}</button>`).join("")}</div>
+    <div id="ptab"></div>`;
+  $("#ptabs").querySelectorAll("button").forEach((b) => (b.onclick = () => { PROF.tab = b.dataset.tab; store.set("profTab", PROF.tab); pageProfile(slug); }));
+  $("#delprof").onclick = async () => {
+    if (!confirm(`Delete everything Ai Dub remembers about "${p.name}"? Its voices and glossary are removed and the next episode starts fresh.`)) return;
+    await api(`/profiles/${encodeURIComponent(slug)}?confirm=true`, { method: "DELETE" }).catch(fail);
+    location.hash = "#profiles";
+  };
+  await ({ settings: profileSettings, episodes: profileEpisodes, voices: profileVoices, glossary: profileGlossary }[PROF.tab] || profileSettings)(slug, p);
+}
+
+function profileSettings(slug, p) {
+  $("#ptab").innerHTML = `
     <div class="panel"><h3>Translation</h3>
       <div class="field-grid" style="margin-top:10px">
         <span class="lab">Honorifics</span><span><select id="hon"><option value="keep">Keep them (-san, -kun…)</option><option value="drop">Drop them</option></select></span>
         <span class="lab">Style</span><span><select id="style"><option value="natural">Natural English</option><option value="close">Close to the original</option></select></span>
         <span class="help">Both apply to lines translated from the speech. Lines dubbed from English subtitles keep the subtitles' own wording.</span>
       </div></div>
-    <div class="panel"><h3>Show rules</h3><div id="rules"><span class="muted small">Loading…</span></div></div>
-    <div class="section-head"><h2>Voices</h2><span class="faint small grow">Clips each character's dub voice is cloned from; most audio first</span>
+    <div class="panel"><h3>Show rules</h3><div id="rules"><span class="muted small">Loading…</span></div></div>`;
+  showRules(slug);
+  $("#hon").value = p.settings.honorifics || "keep";
+  $("#style").value = p.settings.style || "natural";
+  const save = () => api("/profiles/" + encodeURIComponent(slug), { method: "PATCH", body: { settings: { honorifics: $("#hon").value, style: $("#style").value } } }).then(() => toast("Saved")).catch(fail);
+  $("#hon").onchange = save; $("#style").onchange = save;
+}
+
+// Every episode in the show's folders and how far it is; the rest can be queued from here.
+async function profileEpisodes(slug) {
+  $("#ptab").innerHTML = `<div class="loading">Looking through the show's folders…</div>`;
+  const eps = (await api(`/profiles/${encodeURIComponent(slug)}/episodes`)).episodes;
+  const can = (e) => ["not dubbed", "failed", "skipped", "cancelled"].includes(e.state);
+  const by = {};
+  for (const e of eps) by[e.state] = (by[e.state] || 0) + 1;
+  const pick = new Set();
+  $("#ptab").innerHTML = eps.length ? `<div class="panel flush">
+      <div class="browser-bar"><span class="stats grow">${Object.entries(by).map(([k, n]) => `<span><b>${n}</b> ${esc(k)}</span>`).join("")}</span>
+        <button class="sm ghost" id="epall" ${eps.some(can) ? "" : "disabled"}>Select all not dubbed</button>
+        <button class="sm primary" id="epqueue" disabled>Queue selected</button></div>
+      <div class="tablewrap" style="max-height:640px;overflow:auto"><table><thead><tr><th style="width:36px"></th><th>Episode</th><th>Status</th><th>Size</th><th></th></tr></thead><tbody>
+      ${eps.map((e, i) => `<tr data-i="${i}"><td>${can(e) ? `<input type="checkbox" class="eppick" aria-label="Select ${esc(e.name)}">` : ""}</td>
+        <td><b>${epLabel(e.name)}</b>${e.folder ? `<div class="small faint">${esc(e.folder)}</div>` : ""}</td>
+        <td><span class="tag ${EP_STATE[e.state] ?? ""}">${esc(e.state)}</span></td><td class="num muted nowrap">${gb(e.size)}</td>
+        <td class="actions">${e.state === "to check" ? `<a class="button sm primary" href="#verify/${e.job}">Check</a>`
+          : e.state === "waiting for review" ? `<a class="button sm primary" href="#review/${e.job}">Review</a>` : ""}</td></tr>`).join("")}
+      </tbody></table></div></div>`
+    : `<div class="panel empty"><b>No episodes found</b>Episodes show up here once one of the show's files has been queued.</div>`;
+  if (!eps.length) return;
+  const sync = () => { $("#epqueue").disabled = !pick.size; $("#epqueue").textContent = pick.size ? `Queue ${plural(pick.size, "episode")}` : "Queue selected"; };
+  $("#ptab").querySelectorAll(".eppick").forEach((cb) => (cb.onchange = () => {
+    const e = eps[Number(cb.closest("tr").dataset.i)];
+    cb.checked ? pick.add(e.path) : pick.delete(e.path); sync();
+  }));
+  $("#epall").onclick = () => { $("#ptab").querySelectorAll(".eppick").forEach((cb) => { cb.checked = true; pick.add(eps[Number(cb.closest("tr").dataset.i)].path); }); sync(); };
+  $("#epqueue").onclick = async () => {
+    if (!confirm(`Queue ${plural(pick.size, "episode")} of ${pageProfile.p.name}? They use the show's settings, including its review setting.`)) return;
+    try {
+      const r = await api("/jobs", { body: { paths: [...pick], profile: slug } });
+      toast(`Queued ${plural(r.added.length, "episode")}` + (r.errors.length ? `; ${r.errors.length} not added: ${r.errors[0].error}` : ""), !!r.errors.length);
+    } catch (e) { return fail(e); }
+    refreshStatus(); profileEpisodes(slug);
+  };
+}
+
+async function profileVoices(slug, p) {
+  const others = (cid) => p.characters.filter((c) => c.id !== cid).map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join("");
+  const chars = [...p.characters].sort((a, b) => (b.clean_seconds || 0) - (a.clean_seconds || 0));
+  const small = (c) => (c.clean_seconds || 0) < SMALL_S || (c.refs || []).length <= 1;
+  const shown = chars.filter((c) => !PROF.small || small(c));
+  const nSmall = chars.filter(small).length;
+  $("#ptab").innerHTML = `
+    <div id="suggest"></div>
+    <div class="section-head" style="margin-top:6px"><div class="seg" id="vkind"><button data-v="all" class="${PROF.small ? "" : "on"}">All <span class="faint">${chars.length}</span></button>
+      <button data-v="small" class="${PROF.small ? "on" : ""}" title="Less than ${SMALL_S} s of clean audio, or a single clip">Small voices <span class="faint">${nSmall}</span></button></div>
+      <span class="faint small grow">Clips each character's dub voice is cloned from; most audio first</span>
       <input type="search" id="vfind" placeholder="Find a voice…"></div>
-    <div class="chars">${chars.map((c, i) => `
-      <div class="panel char" data-cid="${c.id}" data-name="${esc(c.name.toLowerCase())}" ${i >= VOICES_SHOWN && !pageProfile.all ? "hidden" : ""}>
+    <div class="chars">${shown.map((c, i) => `
+      <div class="panel char" data-cid="${c.id}" data-name="${esc(c.name.toLowerCase())}" ${i >= VOICES_SHOWN && !PROF.all ? "hidden" : ""}>
         <div class="head"><input type="text" value="${esc(c.name)}" class="cname" aria-label="Name"><button class="sm" data-act="rename">Rename</button></div>
         <div class="small muted" style="margin-top:6px">${esc([c.gender, c.age].filter(Boolean).join(", ") || "Gender and age unknown")} · ${c.clean_seconds} s of clean audio
           ${c.voice_of ? ` · speaks with ${esc((p.characters.find((x) => x.id === c.voice_of) || {}).name || c.voice_of)}'s voice` : ""}</div>
@@ -464,44 +663,16 @@ async function pageProfile(slug) {
           <button class="sm" data-act="split" title="Make the selected clips a new character">Split off selected</button>
           <span class="grow"></span><button data-act="delchar" class="sm ghost" style="color:var(--bad)">Delete</button>
         </div>
-      </div>`).join("") || `<div class="panel empty"><b>No voices yet</b>They are made from the first dubbed episode.</div>`}</div>
-    ${chars.length > VOICES_SHOWN ? `<div class="row" style="justify-content:center"><button id="vall">${pageProfile.all ? "Show fewer" : `Show all ${chars.length} voices`}</button></div>` : ""}
-    <div class="section-head"><h2>Glossary</h2><span class="faint small">How names and terms are always written in English</span></div>
-    <div class="panel flush">
-      <div class="browser-bar"><input type="text" id="gsrc" placeholder="Term as said (e.g. 吾郎)"><input type="text" id="gen" placeholder="English (e.g. Goro)">
-        <button id="gadd">Add or change</button><span class="grow"></span><input type="search" id="gfind" placeholder="Filter…"></div>
-      <div class="tablewrap" style="max-height:480px;overflow:auto"><table id="gtable"><thead><tr><th>Term</th><th>English</th><th>Seen</th><th></th></tr></thead><tbody>
-      ${gloss.map(([k, v]) => `<tr data-g="${esc((k + " " + v.en).toLowerCase())}"><td>${esc(k)}</td><td>${esc(v.en)}${v.edited ? ' <span class="tag accent">yours</span>' : ""}</td>
-        <td class="num muted">${v.count || 0}×</td><td class="actions"><button class="sm ghost" data-gdel="${esc(k)}" title="Remove">✕</button></td></tr>`).join("")
-        || `<tr><td colspan="4" class="muted">No terms yet.</td></tr>`}</tbody></table></div>
-    </div>`;
-  showRules(slug);
-  $("#hon").value = p.settings.honorifics || "keep";
-  $("#style").value = p.settings.style || "natural";
-  const save = () => api("/profiles/" + encodeURIComponent(slug), { method: "PATCH", body: { settings: { honorifics: $("#hon").value, style: $("#style").value } } }).then(() => toast("Saved")).catch(fail);
-  $("#hon").onchange = save; $("#style").onchange = save;
+      </div>`).join("") || `<div class="panel empty"><b>No voices here</b>${PROF.small ? "No small voices: every voice has enough audio." : "They are made from the first dubbed episode."}</div>`}</div>
+    ${shown.length > VOICES_SHOWN ? `<div class="row" style="justify-content:center"><button id="vall">${PROF.all ? "Show fewer" : `Show all ${shown.length} voices`}</button></div>` : ""}`;
+  $("#vkind").querySelectorAll("button").forEach((b) => (b.onclick = () => { PROF.small = b.dataset.v === "small"; profileVoices(slug, p); }));
   $("#vfind").oninput = (e) => {
     const q = e.target.value.toLowerCase().trim();
-    main.querySelectorAll(".char[data-cid]").forEach((c, i) => (c.hidden = q ? !c.dataset.name.includes(q) : i >= VOICES_SHOWN && !pageProfile.all));
+    $("#ptab").querySelectorAll(".char[data-cid]").forEach((c, i) => (c.hidden = q ? !c.dataset.name.includes(q) : i >= VOICES_SHOWN && !PROF.all));
     if ($("#vall")) $("#vall").hidden = !!q;
   };
-  if ($("#vall")) $("#vall").onclick = () => { pageProfile.all = !pageProfile.all; pageProfile(slug); };
-  $("#gfind").oninput = (e) => { const q = e.target.value.toLowerCase(); $("#gtable").querySelectorAll("tr[data-g]").forEach((tr) => (tr.hidden = !!q && !tr.dataset.g.includes(q))); };
-  $("#delprof").onclick = async () => {
-    if (!confirm(`Delete everything Ai Dub remembers about "${p.name}"? Its voices and glossary are removed and the next episode starts fresh.`)) return;
-    await api(`/profiles/${encodeURIComponent(slug)}?confirm=true`, { method: "DELETE" }).catch(fail);
-    location.hash = "#profiles";
-  };
-  $("#gadd").onclick = async () => {
-    if (!$("#gsrc").value.trim()) return toast("Enter the term as it's said first");
-    await api(`/profiles/${encodeURIComponent(slug)}/glossary`, { method: "PUT", body: { source: $("#gsrc").value, en: $("#gen").value } }).catch(fail);
-    pageProfile(slug);
-  };
-  main.querySelectorAll("[data-gdel]").forEach((b) => (b.onclick = async () => {
-    await api(`/profiles/${encodeURIComponent(slug)}/glossary?source=${encodeURIComponent(b.dataset.gdel)}`, { method: "DELETE" }).catch(fail);
-    pageProfile(slug);
-  }));
-  main.querySelectorAll("[data-cid]").forEach((card) => {
+  if ($("#vall")) $("#vall").onclick = () => { PROF.all = !PROF.all; profileVoices(slug, p); };
+  $("#ptab").querySelectorAll("[data-cid]").forEach((card) => {
     const cid = card.dataset.cid;
     const act = (body) => api(`/profiles/${encodeURIComponent(slug)}/characters/${cid}`, { body }).then(() => pageProfile(slug)).catch(fail);
     card.querySelectorAll("[data-act]").forEach((el) => {
@@ -522,6 +693,79 @@ async function pageProfile(slug) {
     });
     $(".cname", card).onkeydown = (e) => { if (e.key === "Enter") act({ action: "rename", name: e.target.value }); };
   });
+  // Small voices that sound like a bigger one: one click to merge.
+  const sug = (await api(`/profiles/${encodeURIComponent(slug)}/similar`).catch(() => ({ suggestions: [] }))).suggestions;
+  if (!sug.length || !$("#suggest")) return;
+  const sample = (cid) => { const c = p.characters.find((x) => x.id === cid); return c && c.refs && c.refs[0] ? c.refs[0].file : ""; };
+  $("#suggest").innerHTML = `<div class="panel flush"><div class="browser-bar"><h3 class="grow" style="margin:0">Sound like the same person?</h3>
+      <span class="small muted">Small voices that sound like a bigger one. Merging gives the line its voice from more audio.</span></div>
+    <table><tbody>${sug.slice(0, 12).map((x, i) => `<tr data-i="${i}"><td><b>${esc(x.small_name)}</b> <span class="small muted">${x.small_seconds} s</span></td>
+      <td class="small muted">sounds like</td><td><b>${esc(x.target_name)}</b></td><td class="num small muted">${Math.round(x.score * 100)} % alike</td>
+      <td class="actions"><div class="btn-group">${sample(x.small) ? `<button class="sm ghost" data-hear="${esc(sample(x.small))}" title="Hear ${esc(x.small_name)}">▶ ${esc(x.small_name)}</button>` : ""}
+        ${sample(x.target) ? `<button class="sm ghost" data-hear="${esc(sample(x.target))}" title="Hear ${esc(x.target_name)}">▶ ${esc(x.target_name)}</button>` : ""}
+        <button class="sm" data-merge="${i}">Merge into ${esc(x.target_name)}</button></div></td></tr>`).join("")}</tbody></table></div>`;
+  let playing = null;
+  $("#suggest").querySelectorAll("[data-hear]").forEach((b) => (b.onclick = () => {
+    if (playing) playing.pause();
+    playing = new Audio(`/api/profiles/${encodeURIComponent(slug)}/ref?file=${encodeURIComponent(b.dataset.hear)}`);
+    playing.play().catch(() => toast("Couldn't play the sample"));
+  }));
+  $("#suggest").querySelectorAll("[data-merge]").forEach((b) => (b.onclick = async () => {
+    const x = sug[Number(b.dataset.merge)];
+    if (!confirm(`Merge ${x.small_name} into ${x.target_name}? ${x.small_name}'s clips and lines join ${x.target_name}, for every episode of this show.`)) return;
+    try { await api(`/profiles/${encodeURIComponent(slug)}/characters/${x.target}`, { body: { action: "merge", other: x.small } }); toast(`${x.small_name} is now ${x.target_name}`); } catch (e) { return fail(e); }
+    pageProfile(slug);
+  }));
+}
+
+// The glossary: click a term's English to change it in place.
+function profileGlossary(slug, p) {
+  const gloss = Object.entries(p.glossary).sort((a, b) => (b[1].count || 0) - (a[1].count || 0));
+  $("#ptab").innerHTML = `<div class="panel flush">
+      <div class="browser-bar"><input type="text" id="gsrc" placeholder="Term as said (e.g. 吾郎)"><input type="text" id="gen" placeholder="English (e.g. Goro)">
+        <button id="gadd">Add</button><span class="grow"></span><input type="search" id="gfind" placeholder="Filter…"></div>
+      <div class="tablewrap" style="max-height:640px;overflow:auto"><table id="gtable"><thead><tr><th>Term</th><th>English <span class="faint" style="text-transform:none;letter-spacing:0">(click to change)</span></th><th>Kind</th><th>Seen</th><th></th></tr></thead><tbody>
+      ${gloss.map(([k, v]) => `<tr data-g="${esc((k + " " + v.en).toLowerCase())}" data-term="${esc(k)}"><td>${esc(k)}</td>
+        <td class="gedit" tabindex="0" title="Click to change">${esc(v.en)}${v.edited ? ' <span class="tag accent">yours</span>' : ""}</td>
+        <td class="small muted">${esc(v.type || "")}</td><td class="num muted">${v.count || 0}×</td>
+        <td class="actions"><button class="sm ghost" data-gdel="${esc(k)}" title="Remove">✕</button></td></tr>`).join("")
+        || `<tr><td colspan="5" class="muted">No terms yet.</td></tr>`}</tbody></table></div>
+    </div>`;
+  const put = (source, en) => api(`/profiles/${encodeURIComponent(slug)}/glossary`, { method: "PUT", body: { source, en } });
+  $("#gfind").oninput = (e) => { const q = e.target.value.toLowerCase(); $("#gtable").querySelectorAll("tr[data-g]").forEach((tr) => (tr.hidden = !!q && !tr.dataset.g.includes(q))); };
+  $("#gadd").onclick = async () => {
+    if (!$("#gsrc").value.trim()) return toast("Enter the term as it's said first");
+    try { await put($("#gsrc").value, $("#gen").value); } catch (e) { return fail(e); }
+    pageProfile(slug);
+  };
+  $("#ptab").querySelectorAll(".gedit").forEach((td) => {
+    const start = () => {
+      if (td.querySelector("input")) return;
+      const term = td.closest("tr").dataset.term, was = p.glossary[term].en;
+      td.innerHTML = `<input type="text" value="${esc(was)}" style="width:100%">`;
+      const inp = td.querySelector("input");
+      inp.focus(); inp.select();
+      let done = false;
+      const finish = async (keep) => {
+        if (done) return;
+        done = true;
+        const now = inp.value.trim();
+        if (keep && now && now !== was) {
+          try { await put(term, now); p.glossary[term] = { ...p.glossary[term], en: now, edited: true }; toast("Saved"); } catch (e) { fail(e); }
+        }
+        profileGlossary(slug, p);
+      };
+      inp.onkeydown = (e) => { if (e.key === "Enter") finish(true); if (e.key === "Escape") finish(false); };
+      inp.onblur = () => finish(true);
+    };
+    td.onclick = start;
+    td.onkeydown = (e) => { if (e.key === "Enter") start(); };
+  });
+  $("#ptab").querySelectorAll("[data-gdel]").forEach((b) => (b.onclick = async () => {
+    if (!confirm(`Remove “${b.dataset.gdel}” from the glossary?`)) return;
+    await api(`/profiles/${encodeURIComponent(slug)}/glossary?source=${encodeURIComponent(b.dataset.gdel)}`, { method: "DELETE" }).catch(fail);
+    pageProfile(slug);
+  }));
 }
 
 async function showRules(slug) {
@@ -561,14 +805,16 @@ async function pageOriginals() {
       <p>Each dubbed file's original is kept next to it as <code>.aidub-original</code> until you delete it: from the check page once you've listened
         to the dub, or here. Restore puts an original back under its own name and sets the dubbed copy aside.</p></div></div>
     <div class="panel flush">
-      <div class="browser-bar"><span class="grow"><b>${plural(data.items.length, "file")}</b> <span class="muted">· ${gb(data.total)} in total</span></span>
+      <div class="browser-bar"><span class="grow"><b>${plural(data.items.length, "file")}</b> <span class="muted">· ${gb(data.total)} in total</span>
+          ${(data.disks || []).map((d) => `<span class="disk" title="${esc(d.name)}: ${gb(d.free)} free of ${gb(d.total)}"><span class="meter ${d.free / d.total < 0.1 ? "hot" : ""}"><div style="width:${Math.round((1 - d.free / d.total) * 100)}%"></div></span>${gb(d.free)} free</span>`).join("")}</span>
         <button class="sm" id="scan" title="Find set-aside files in the media folders">Rescan folders</button>
         <button class="sm danger" id="delsel" disabled>Delete selected</button>
         <button class="sm danger" id="delall" ${data.items.length ? "" : "disabled"}>Delete all</button></div>
       ${data.items.length ? `<div class="tablewrap"><table><thead><tr><th style="width:36px"><input type="checkbox" id="pickall" aria-label="Select all"></th>
         <th>File</th><th>Kind</th><th>Size</th><th>Set aside</th><th></th></tr></thead><tbody>
       ${data.items.map((o) => `<tr data-id="${o.id}"><td><input type="checkbox" class="pick"></td>
-        <td style="overflow-wrap:anywhere"><b>${epLabel(o.path)}</b><div class="small faint">${esc(o.path)}</div></td>
+        <td style="overflow-wrap:anywhere"><b>${epLabel(o.path)}</b><div class="small faint">${esc(o.path)}</div>
+          ${o.check_pending ? `<a class="tag warn" href="#verify/${o.job_id}" title="Listen to the dub before deleting its original">Dub not checked yet · Check it</a>` : ""}</td>
         <td><span class="tag ${o.kind === "original" ? "" : "accent"}">${esc(o.kind)}</span></td><td class="num nowrap">${gb(o.size)}</td>
         <td class="small muted nowrap">${esc(when(o.created))}</td>
         <td class="actions"><button class="sm" data-act="restore">Restore</button></td></tr>`).join("")}</tbody></table></div>`
@@ -580,7 +826,9 @@ async function pageOriginals() {
   if ($("#pickall")) $("#pickall").onchange = (e) => { main.querySelectorAll(".pick").forEach((cb) => (cb.checked = e.target.checked)); sync(); };
   const del = async (ids) => {
     const size = data.items.filter((o) => ids.includes(o.id)).reduce((a, o) => a + o.size, 0);
-    if (!confirm(`Permanently delete ${plural(ids.length, "file")}, ${gb(size)}? This cannot be undone.`)) return;
+    const unchecked = data.items.filter((o) => ids.includes(o.id) && o.check_pending).length;
+    if (!confirm(`Permanently delete ${plural(ids.length, "file")}, ${gb(size)}? This cannot be undone.`
+      + (unchecked ? `\n\n${plural(unchecked, "of them belongs", "of them belong")} to a dub you haven't checked yet.` : ""))) return;
     try { const r = await api("/originals/delete", { body: { ids, confirm: true } }); toast(`Deleted ${plural(r.deleted, "file")}, freed ${gb(r.freed)}`); } catch (e) { fail(e); }
     pageOriginals(); refreshStatus();
   };
@@ -640,40 +888,48 @@ async function pageModels() {
 async function pageSettings() {
   const s = await api("/settings");
   const bz = ((s.effective.subtitles || {}).providers || {}).bazarr || {};
-  main.innerHTML = `<div class="page-head"><div class="grow"><h1>Settings</h1><p>Changes are saved to config.yaml in the app data folder.</p></div></div>
+  main.innerHTML = `<div class="page-head"><div class="grow"><h1>Settings</h1><p>Changes are saved to config.yaml in the app data folder.
+      Models are installed and chosen on the <a href="#models">Models</a> page.</p></div></div>
+    <div class="section-head"><h2>Dubbing</h2><span class="faint small">How every episode is dubbed unless its show or the episode says otherwise</span></div>
     <div class="panel"><h3>Review before dubbing</h3>
       <p class="small muted">An episode can stop once Ai Dub has worked out its songs and speakers, so you can check them on the review page before
         anything is translated or voiced. Each show (on its page) and each episode (when you add it) can choose differently.</p>
       <div class="row" style="margin-top:10px"><select id="revMode"><option value="off">Off: never stop</option><option value="unsure">When unsure: stop only if something needs a look</option>
         <option value="always">Always: stop for every episode</option></select></div></div>
+    <div class="section-head"><h2>Subtitles</h2><span class="faint small">Where Ai Dub looks for English subtitles besides the episode's own</span></div>
     <div class="panel"><h3>Bazarr</h3>
       <p class="small muted">Ai Dub can ask Bazarr for English subtitles it doesn't find next to the episode.</p>
       <div class="field-grid" style="margin-top:12px">
         <span class="lab">Use Bazarr</span><span><label><input type="checkbox" id="bzon" ${bz.enabled ? "checked" : ""}> Ask Bazarr for missing subtitles</label></span>
-        <span class="lab">Address</span><span><input type="text" id="bzurl" value="${esc(bz.url || "")}" placeholder="http://bazarr:6767" style="width:min(360px,100%)"></span>
+        <span class="lab">Address</span><span class="row"><input type="text" id="bzurl" value="${esc(bz.url || "")}" placeholder="http://bazarr:6767" style="width:min(360px,100%)">
+          <button class="sm" id="bztest" title="Try the address and the API key now">Test</button><span id="bzres" class="small"></span></span>
         <span class="lab">Folder map</span><span><textarea id="bzmap" rows="3">${esc((bz.path_map || []).map((m) => `${m.aidub} = ${m.bazarr}`).join("\n"))}</textarea></span>
         <span class="help">How Bazarr sees the same folders, one per line: <code>ai-dub path = bazarr path</code>.</span>
         <span></span><span><button class="primary" id="bzsave">Save Bazarr settings</button></span>
       </div></div>
-    <div class="panel"><h3>Keys</h3><p class="small muted">Keys can be entered or replaced, but are never shown back. A restart applies them.</p>
+    <div class="section-head"><h2>Keys</h2><span class="faint small">Secrets for services Ai Dub talks to; never shown back</span></div>
+    <div class="panel"><p class="small muted">Keys can be entered or replaced, but are never shown back. A restart applies them.</p>
       <div class="field-grid" style="margin-top:12px">
       ${Object.entries(s.secrets).map(([k, set]) => `<span class="lab"><code>${esc(k)}</code></span>
         <span class="row"><span class="tag ${set ? "ok" : ""}">${set ? "Set" : "Not set"}</span>
           <input type="password" data-secret="${esc(k)}" placeholder="${set ? "Replace with…" : "Enter value…"}" autocomplete="off" style="width:min(280px,100%)">
           <button class="sm" data-save="${esc(k)}">Save</button>${set ? `<button class="sm ghost" data-clear="${esc(k)}">Clear</button>` : ""}</span>`).join("")}
       </div></div>
-    <div class="panel flush"><div class="browser-bar"><h3 class="grow" style="margin:0">Models per step</h3>
-      <a class="button sm" href="#models">Models page</a></div>
-      <div class="tablewrap"><table><thead><tr><th>Step</th><th>Worker</th><th>Model</th><th></th></tr></thead><tbody>
-      ${Object.entries(s.effective.stages || {}).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="muted">${esc(v.worker || "")}</td><td class="small">${esc(v.model || "")}</td>
-        <td class="actions">${status && status.workers[v.worker] ? '<span class="tag ok">Installed</span>' : '<span class="tag warn">Not installed</span>'}</td></tr>`).join("")}</tbody></table></div>
-      <div class="panel-foot small muted">Choose different models in config.yaml in the app data folder.</div></div>
-    <div class="panel"><details><summary>Effective configuration</summary><pre>${esc(JSON.stringify(s.effective, null, 1))}</pre></details></div>`;
+    <div class="section-head"><h2>Advanced</h2></div>
+    <div class="panel"><details><summary>Effective configuration (everything, after config.yaml and secrets)</summary><pre>${esc(JSON.stringify(s.effective, null, 1))}</pre></details></div>`;
   $("#revMode").value = (s.effective.review || {}).mode || "unsure";
   $("#revMode").onchange = async () => {
     const o = s.overrides || {};
     o.review = { ...(o.review || {}), mode: $("#revMode").value };
     try { toast((await api("/settings", { body: { overrides: o } })).note || "Saved"); } catch (e) { fail(e); }
+  };
+  $("#bztest").onclick = async () => {
+    const res = $("#bzres");
+    res.className = "small muted"; res.textContent = "Trying…";
+    try {
+      const r = await api("/bazarr/test", { body: { url: $("#bzurl").value.trim() } });
+      res.className = "tag " + (r.ok ? "ok" : "bad"); res.textContent = r.ok ? `✓ ${r.message}` : r.message;
+    } catch (e) { res.className = "tag bad"; res.textContent = e.message; }
   };
   $("#bzsave").onclick = async () => {
     const o = s.overrides || {};
@@ -712,4 +968,6 @@ async function route() {
 
 window.addEventListener("hashchange", route);
 refreshStatus().then(route);
+refreshEvents();
 setInterval(refreshStatus, 15000);
+setInterval(refreshEvents, 15000);

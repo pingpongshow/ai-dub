@@ -193,3 +193,50 @@ audio { height: 32px; max-width: 100%; }
   border-radius: 10px; max-width: min(560px, 90vw); box-shadow: 0 8px 30px rgba(0, 0, 0, .25); font-size: 14px; z-index: 50; }
 #toast.bad { background: var(--bad); color: #fff; }
 .loading { color: var(--muted); padding: 30px 0; }
+
+/* Notifications ---------------------------------------------------------------------------- */
+.bell { position: relative; padding: 6px 8px; color: var(--muted); }
+.bell .count { position: absolute; top: -3px; right: -4px; }
+.bellpop { position: absolute; top: calc(100% + 4px); right: 14px; width: min(420px, 92vw); max-height: 70vh; overflow-y: auto;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 12px 40px rgba(0, 0, 0, .3); z-index: 40; }
+.bellpop-head { padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.bell-item { display: grid; gap: 3px; padding: 10px 14px; border-bottom: 1px solid var(--line); color: var(--text); text-decoration: none; }
+.bell-item:hover { background: var(--panel-2); }
+.bell-item.new { box-shadow: inset 3px 0 0 var(--accent); }
+.bell-item .tag { width: fit-content; }
+.bell-name { font-weight: 600; overflow-wrap: anywhere; }
+
+/* Log panel: stays open until closed ------------------------------------------------------- */
+.logpanel { position: fixed; left: 16px; right: 16px; bottom: 16px; z-index: 35; max-width: 1100px; margin: 0 auto; background: var(--panel);
+  border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 16px 48px rgba(0, 0, 0, .35); display: flex; flex-direction: column; }
+.logpanel-head { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+.logpanel-head .grow { flex: 1; }
+.logpanel pre { margin: 0; border-radius: 0 0 var(--radius) var(--radius); height: 38vh; max-height: none; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Foldable sections ------------------------------------------------------------------------ */
+.section-head.fold { cursor: pointer; user-select: none; }
+.section-head.fold .chev { display: inline-block; transition: transform .15s; color: var(--muted); }
+.section-head.fold.open .chev { transform: rotate(90deg); }
+.section-head.fold:hover h2 { color: var(--accent); }
+
+/* History by show --------------------------------------------------------------------------- */
+.hgroup { margin-bottom: 14px; }
+.hgroup-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px 18px; cursor: pointer; user-select: none; }
+.hgroup-head:hover { background: var(--panel-2); }
+.hgroup-head .chev { color: var(--muted); transition: transform .15s; }
+.hgroup-head.open .chev { transform: rotate(90deg); }
+.hgroup-head.open { border-bottom: 1px solid var(--line); }
+.hist tr.older > td { background: var(--panel-2); opacity: .85; }
+
+/* Tabs (the show page) ----------------------------------------------------------------------- */
+.tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+.tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; color: var(--muted); padding: 8px 14px; font-size: 14.5px; }
+.tabs button:hover { color: var(--text); background: none; }
+.tabs button.on { color: var(--text); border-bottom-color: var(--accent); }
+.gedit { cursor: text; }
+.gedit:hover { background: var(--accent-soft); }
+.disk { display: inline-flex; align-items: center; gap: 6px; margin-left: 14px; font-size: 12.5px; color: var(--muted); }
+.disk .meter { width: 70px; height: 6px; border-radius: 3px; background: var(--bar); overflow: hidden; display: inline-block; }
+.disk .meter > div { height: 100%; background: var(--accent); }
+.disk .meter.hot > div { background: var(--bad); }
+a.tag { text-decoration: none; margin-top: 4px; }

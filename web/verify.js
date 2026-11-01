@@ -14,7 +14,8 @@ async function pageVerify(id) {
       <p class="muted">${esc(done || "There's nothing to check for this job: its check files aren't there.")}</p></div>`;
     return;
   }
-  VF = { id: Number(id), d, hear: "dub", m: -1 };
+  VF = { id: Number(id), d, hear: "dub", m: -1, ab: null, ticks: new Set(store.get(`ticks.${id}`, [])) };
+  const frees = (d.original.exists ? d.original.size : 0) + (d.work_size || 0);
   const base = `/api/jobs/${id}/verify/media/`;
   const gbs = (n) => (n / 1e9).toFixed(2) + " GB";
   main.innerHTML = `
@@ -25,8 +26,9 @@ async function pageVerify(id) {
       <span class="grow"></span>
       ${d.can_redub ? `<a class="button" href="#review/${id}" title="Open the full review page: change songs, subtitles or voices, then redub from there (the analysis is kept)">Review and change…</a>`
         : `<button id="vfRedo" title="Put the original back and queue the episode again, stopping for review">Redo with review</button>`}
-      <button id="vfRestore">Put the original back</button>
-      <button class="primary" id="vfGood">Looks good: delete the original</button>
+      <button class="ghost" id="vfRestore" title="Delete the dub and put the original file back">Put the original back</button>
+      <span class="vsep"></span>
+      <button class="primary" id="vfGood" title="Keep the dub; the original and the working files are deleted for good">✓ Keep the dub${frees ? ` · frees ${gbs(frees)}` : ""}</button>
     </div>
     <div class="rv-body">
       <div class="rv-left">
@@ -53,11 +55,12 @@ async function pageVerify(id) {
           <span><kbd>D</kbd> dub · <kbd>O</kbd> original</span></div>
       </div>
       <div class="rv-right">
-        <div class="rv-tabs"><button class="on">Moments to check<span class="n">${d.moments.length}</span></button></div>
+        <div class="rv-tabs"><button class="on">Moments to check<span class="n" id="vfTicked"></span></button></div>
         <div class="rv-list" id="vfList">${d.moments.length ? d.moments.map((m, i) => `
-          <div class="frow" data-m="${i}"><span class="rv-time muted">${fmtT(m.t, false)}</span>
-            <div><b>${esc(m.title)}</b>${m.detail ? `<span class="d">${esc(m.detail)}</span>` : ""}
-              ${m.line != null && d.can_redub ? `<a class="button sm" style="margin-top:6px" href="#review/${id}/${m.line}" title="Open this line on the review page: new English, another speaker, or just voice it again">Fix this line…</a>` : ""}</div></div>`).join("")
+          <div class="frow vfm" data-m="${i}"><button class="tick" data-tick="${i}" title="Tick it off once you've listened" aria-label="Listened">✓</button>
+            <div><span class="rv-time muted">${fmtT(m.t, false)}</span> <b>${esc(m.title)}</b>${m.detail ? `<span class="d">${esc(m.detail)}</span>` : ""}
+              <div class="row" style="margin-top:6px;gap:6px"><button class="sm" data-ab="${i}" title="Play these few seconds as the original, then as the dub">A/B</button>
+              ${m.line != null && d.can_redub ? `<a class="button sm" href="#review/${id}/${m.line}" title="Open this line on the review page: new English, another speaker, or just voice it again">Fix this line…</a>` : ""}</div></div></div>`).join("")
           : `<div class="rv-empty">Nothing stood out. Play a few scenes to be sure.</div>`}</div>
         <div class="rv-ins">
           <h4>When you're happy with it</h4>
@@ -67,7 +70,7 @@ async function pageVerify(id) {
             ${d.qc.free_timing ? `<span class="lab">Timing</span><span>latest start ${d.qc.free_timing.max_wait_s} s after its original</span>` : ""}
           </div>
           ${d.can_redub ? `<div class="grid" style="margin-top:6px"><span class="lab">Working files</span><span>${gbs(d.work_size)}, kept so you can change and redub</span></div>` : ""}
-          <p class="muted small" style="margin:8px 0 0"><b>Looks good</b> deletes the original and the working files, for good.
+          <p class="muted small" style="margin:8px 0 0"><b>Keep the dub</b> deletes the original and the working files, for good.
             <b>Put the original back</b> deletes the dub instead. ${d.can_redub
               ? "<b>Review and change</b> opens the full review page, even if nothing was flagged; redub from there with your changes."
               : "<b>Redo with review</b> puts the original back and dubs again, stopping for review first."}</p>
@@ -79,6 +82,35 @@ async function pageVerify(id) {
   vfDraw();
 }
 
+// A/B: the same few seconds as the original, then as the dub.
+function vfAB(i) {
+  const m = VF.d.moments[i], v = $("#vfv");
+  if (!m || !v) return;
+  const a = Math.max(0, m.t - 1.5), b = Math.min(VF.d.duration, m.t + 4.5);
+  clearInterval(VF.abTimer);
+  VF.ab = { phase: "A", a, b };
+  vfGo(i, true);
+  vfHear("orig");
+  pairedSeek(v, null, a);
+  v.play().catch(() => {});
+  $("#vfTag").innerHTML = `<span class="chip plain">A · original</span>`;
+  VF.abTimer = setInterval(() => {
+    if (!VF.ab) return clearInterval(VF.abTimer);
+    if (v.paused && !v._pairBusy) return;
+    if (v.currentTime < VF.ab.b) return;
+    if (VF.ab.phase === "A") {
+      VF.ab.phase = "B";
+      vfHear("dub");
+      pairedSeek(v, $("#vfDub"), VF.ab.a);
+      $("#vfTag").innerHTML = `<span class="chip dub">B · the dub</span>`;
+    } else {
+      v.pause(); VF.ab = null; clearInterval(VF.abTimer);
+      $("#vfTag").innerHTML = `<span class="chip dub">Hearing the dub</span>`;
+    }
+  }, 100);
+}
+function vfStopAB() { if (VF && VF.ab) { VF.ab = null; clearInterval(VF.abTimer); } }
+
 function vfNow() { const v = $("#vfv"); return v ? v.currentTime : 0; }
 function vfSync(force) {
   const v = $("#vfv"), a = $("#vfDub");
@@ -87,6 +119,7 @@ function vfSync(force) {
   pairedSync(v, a, VF.hear === "dub", force);
 }
 function vfSeek(t) {
+  vfStopAB();
   const v = $("#vfv");
   pairedSeek(v, VF.hear === "dub" ? $("#vfDub") : null, Math.max(0, Math.min(VF.d.duration, t)));
   vfDraw();
@@ -97,14 +130,14 @@ function vfHear(h) {
   $("#vfTag").innerHTML = h === "dub" ? `<span class="chip dub">Hearing the dub</span>` : `<span class="chip plain">Hearing the original</span>`;
   vfSync(true);
 }
-function vfGo(i) {
+function vfGo(i, noSeek = false) {
   const m = VF.d.moments[i];
   if (!m) return;
   VF.m = i;
   document.querySelectorAll("#vfList .frow").forEach((r) => r.classList.toggle("sel", Number(r.dataset.m) === i));
   const row = document.querySelector(`#vfList .frow[data-m="${i}"]`);
   if (row) row.scrollIntoView({ block: "nearest" });
-  vfSeek(Math.max(0, m.t - 2));
+  if (!noSeek) vfSeek(Math.max(0, m.t - 2));
 }
 function vfDraw() {
   const cv = $("#vfBar");
@@ -138,10 +171,10 @@ function vfWire() {
   v.onpause = () => { if (v._pairBusy) return; $("#vfPlay").textContent = "▶"; vfSync(false); vfDraw(); };
   v.onseeked = () => vfSync(false);
   v.ontimeupdate = () => { vfSync(false); $("#vfTime").textContent = `${fmtT(v.currentTime)} / ${fmtT(d.duration, false)}`; };
-  $("#vfPlay").onclick = () => { if (v._pairBusy) $("#vfPlay").textContent = pairedToggle(v) ? "❚❚" : "▶"; else pairedToggle(v); };
+  $("#vfPlay").onclick = () => { vfStopAB(); if (v._pairBusy) $("#vfPlay").textContent = pairedToggle(v) ? "❚❚" : "▶"; else pairedToggle(v); };
   $("#vfBack").onclick = () => vfSeek(vfNow() - 5);
   $("#vfFwd").onclick = () => vfSeek(vfNow() + 5);
-  segWire("#vfHear", (val) => vfHear(val));
+  segWire("#vfHear", (val) => { vfStopAB(); vfHear(val); });
   segWire("#vfRate", (val) => { v.playbackRate = Number(val); vfSync(false); });
   segWire("#vfSubs", (val) => { for (const t of v.textTracks) t.mode = val === "en" ? "showing" : "hidden"; });
   document.querySelectorAll("#vfList .frow").forEach((r) => (r.onclick = () => vfGo(Number(r.dataset.m))));
@@ -155,7 +188,26 @@ function vfWire() {
       location.hash = "#queue";
     } catch (e) { toast(e.message); }
   };
-  $("#vfGood").onclick = () => decide("good", `Keep this dub and permanently delete the original${d.original.exists ? ` (${(d.original.size / 1e9).toFixed(2)} GB)` : ""} and the working files? This can't be undone.`, "Kept");
+  $("#vfGood").onclick = () => {
+    const left = d.moments.length - VF.ticks.size;
+    decide("good", (left > 0 ? `You haven't ticked ${left} of the ${d.moments.length} moments yet.\n\n` : "")
+      + `Keep this dub and permanently delete the original${d.original.exists ? ` (${(d.original.size / 1e9).toFixed(2)} GB)` : ""} and the working files? This can't be undone.`, "Kept");
+  };
+  // Ticks: which moments you've listened to (kept in this browser, per dub).
+  const ticks = () => {
+    document.querySelectorAll("#vfList .vfm").forEach((r) => r.classList.toggle("ticked", VF.ticks.has(Number(r.dataset.m))));
+    $("#vfTicked").textContent = d.moments.length ? `${VF.ticks.size} / ${d.moments.length}` : "0";
+  };
+  document.querySelectorAll("#vfList [data-tick]").forEach((b) => (b.onclick = (e) => {
+    e.stopPropagation();
+    const i = Number(b.dataset.tick);
+    VF.ticks.has(i) ? VF.ticks.delete(i) : VF.ticks.add(i);
+    store.set(`ticks.${VF.id}`, [...VF.ticks]);
+    ticks();
+  }));
+  document.querySelectorAll("#vfList [data-ab]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); vfAB(Number(b.dataset.ab)); }));
+  document.querySelectorAll("#vfList a").forEach((a) => (a.onclick = (e) => e.stopPropagation()));
+  ticks();
   $("#vfRestore").onclick = () => decide("restore", "Put the original back and delete this dub?", "Original put back");
   if ($("#vfRedo")) $("#vfRedo").onclick = () => decide("redo", "Put the original back, delete this dub, and dub the episode again (stopping for review first)?", "Queued again");
   window.onresize = () => vfDraw();

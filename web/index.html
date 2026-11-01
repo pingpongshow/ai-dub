@@ -21,7 +21,17 @@
     <a href="#settings" data-page="settings">Settings</a>
   </nav>
   <div id="gpu"></div>
+  <button id="bell" class="bell ghost" title="What happened lately" aria-label="Notifications">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+    <span class="count warn" id="nBell"></span></button>
+  <div id="bellpop" class="bellpop" hidden></div>
 </header>
+<div id="logpanel" class="logpanel" hidden>
+  <div class="logpanel-head"><b id="logtitle">Log</b><span class="grow"></span>
+    <label class="small"><input type="checkbox" id="logfollow" checked> Follow</label>
+    <button class="sm ghost" id="logclose" title="Close the log">✕</button></div>
+  <pre id="logtext"></pre>
+</div>
 <main id="main"></main>
 <div id="toast" hidden></div>
 <script src="review.js"></script>
