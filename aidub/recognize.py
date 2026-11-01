@@ -12,7 +12,7 @@ from collections import Counter
 from pathlib import Path
 
 from . import media
-from .job import Job
+from .job import Job, Skipped
 
 CHUNK_MAX_S = 25.0
 PAD_S = 0.15
@@ -75,3 +75,11 @@ def run(job: Job) -> None:
     main = lang_hint or (langs.most_common(1)[0][0] if langs else "")
     job.set("asr", {"language": media.lang_code(main), "segments": out})
     job.status(f"{sum(len(s['words']) for s in out)} words, language {main or 'unknown'}")
+    if already_english(media.lang_code(main), lang_hint, job.options, job.cfg.get("ingest.skip_english_audio", True)):
+        # An English dub whose track carries no language tag (a Demon Slayer release): ingest
+        # couldn't tell, and dubbing English into English helps nobody.
+        raise Skipped("the audio is already English (its track has no language tag)")
+
+
+def already_english(heard: str, hint: str | None, options: dict, skip: bool) -> bool:
+    return skip and heard == "en" and not hint and not options.get("language") and not options.get("redo")

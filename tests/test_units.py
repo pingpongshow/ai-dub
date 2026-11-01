@@ -1421,3 +1421,13 @@ def test_tuned_from_the_s01e05_review():
     n = T.subtitled_reactions(ls, [cue(100, 101.5, "Yes."), cue(110, 110.5, "Ohh!"), cue(120, 121.5, "Is gang warfare back?"),
                                    cue(130, 135, "From the lips of a hostess")])
     assert n == 1 and yes.kind == L.SPEECH and ohh.kind == L.WORDLESS and tv.kind == L.BACKGROUND and edge.kind == L.WORDLESS
+
+
+def test_untagged_english_audio_is_skipped():
+    from aidub import recognize as R
+    assert R.already_english("en", None, {}, True)
+    assert not R.already_english("ja", None, {}, True)
+    assert not R.already_english("en", "ja", {}, True)                     # the track said Japanese
+    assert not R.already_english("en", None, {"language": "ja"}, True)     # the user chose the language
+    assert not R.already_english("en", None, {"redo": True}, True)
+    assert not R.already_english("en", None, {}, False)                    # skipping English audio is off
