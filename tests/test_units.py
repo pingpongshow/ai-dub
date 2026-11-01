@@ -1431,3 +1431,23 @@ def test_untagged_english_audio_is_skipped():
     assert not R.already_english("en", None, {"language": "ja"}, True)     # the user chose the language
     assert not R.already_english("en", None, {"redo": True}, True)
     assert not R.already_english("en", None, {}, False)                    # skipping English audio is off
+
+
+def test_backcheck_knows_the_shows_names():
+    from types import SimpleNamespace
+    from aidub import speak
+    prof = SimpleNamespace(glossary={"ネロ": {"en": "Nello", "type": "name"}, "アロア": {"en": "Alois", "type": "name"},
+                                     "ミシェル": {"en": "Michel", "type": "name"}, "犬": {"en": "dog", "type": "term"}},
+                           characters={"c1": {"name": "Character 1"}, "c2": {"name": "Grandpa Jehan"}})
+    names = speak.show_names(prof)
+    assert {"nello", "alois", "michel", "grandpa", "jehan"} <= names and "dog" not in names and "character" not in names
+    # Dog of Flanders E02: names heard with other spellings, at the start of a line or alone.
+    assert speak.missed_words("Alois, are you all right", "Alwa, are you all right?", names) == []
+    assert speak.wer("Alois, are you all right", "Alwa, are you all right?", names) == 0
+    assert speak.wer("Nello, goodbye", "Hello, goodbye.", names) == 0
+    assert speak.wer("Alois", "Alua.", names) == 0 and speak.wer("Nello", "Hello.", names) == 0
+    assert speak.wer("Nello", "Ahhhh!", names) == 1.0                  # a scream is not the name
+    assert speak.wer("Alois", "Oh yeah, all of us.", names) == 1.0     # nor a whole other line
+    assert speak.missed_words("Alois, are you all right", "Alwa, are you all right?") == ["alois"]  # without the names
+    # Calls and sounds.
+    assert speak.missed_words("Ouch", "Uh.") == [] and speak.missed_words("Yo ho~", "Yeah.") == []

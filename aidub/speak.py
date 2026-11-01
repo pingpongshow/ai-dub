@@ -69,7 +69,7 @@ CLIPPED_FULL = {"bout": "about", "em": "them", "cause": "because", "cos": "becau
                 "round": "around", "fraid": "afraid", "nother": "another"}
 CLIPPED = re.compile(r"(?<![A-Za-z])['’](" + "|".join(CLIPPED_FULL) + r")\b", re.I)
 INTERJECTIONS = set("ah ahh ahhh aah oh ohh ooh uh uhh um umm hm hmm huh eh mm mmm ugh whoa wow ha haha heh hey oops "
-                    "phew tsk nah yeah yep nope".split())
+                    "phew tsk nah yeah yep nope yo ho ow ouch oi yay aw yoohoo".split())
 REDUCED = re.compile(r"^([a-z]+)'(d|ll|ve)$")  # "you'd let" said quickly is heard "you let"
 
 
@@ -154,7 +154,31 @@ def _numbers(words: list[str], digitwise: bool) -> list[str]:
     return out
 
 
-def wer(ref: str, hyp: str) -> float:
+NAME_LIKE = 0.4  # letters a name heard on its own must share with it ("Alua" for "Alois", "Hello" for "Nello")
+
+
+def show_names(prof) -> frozenset[str]:
+    """The show's names and places as words ("Nello", "Alois", "Antwerp"): from its
+    glossary (taken from the subtitles) and the characters the user named.
+    Recognition spells a made-up name its own way, wherever it stands in a line."""
+    if not prof:
+        return frozenset()
+    out = set()
+    for k, v in (prof.glossary or {}).items():
+        if (v or {}).get("type") in ("name", "place"):
+            out.update(re.findall(r"[a-z']+", str(v.get("en") or k).lower()))
+    for ch in (prof.characters or {}).values():
+        name = str(ch.get("name") or "")
+        if name and not re.fullmatch(r"Character \d+", name):
+            out.update(re.findall(r"[a-z']+", name.lower()))
+    return frozenset(w.removesuffix("'s") for w in out if len(w) >= 3)
+
+
+def _name_heard(name: str, heard: str) -> bool:
+    return difflib.SequenceMatcher(None, name, heard).ratio() >= NAME_LIKE
+
+
+def wer(ref: str, hyp: str, names: frozenset = frozenset()) -> float:
     """Back-check error rate. Short lines (names, one or two words) are compared
     letter by letter, so "Kikoru" heard as "Kikaru" is a small error, not 100%.
     A number counts read either way ("212": "two hundred and twelve", "two one two").
@@ -164,6 +188,11 @@ def wer(ref: str, hyp: str) -> float:
     hyp = re.sub(r"[A-Za-z]+['’][a-z]+", lambda m: next(
         (w for w in SOUND_ALIKE.get(m.group(0).lower().replace("’", "'"), ()) if w in said), m.group(0)), hyp)
     a, b = _words(ref), _words(hyp)
+    if names and a and all(w.removesuffix("'s") in names for w in a):
+        # Only names ("Nello!", "Alois?"): heard as about as many words, roughly alike.
+        return 0.0 if 1 <= len(b) <= len(a) + 1 and _name_heard("".join(a), "".join(b)) else 1.0
+    # A show's name heard with another spelling ("Alwa, are you all right?") is that name.
+    b = [next((n for n in a if n in names and n not in b and _name_heard(n, h)), h) if h not in a else h for h in b]
     b = [w for i, w in enumerate(b) if not (w == "and" and i and b[i - 1] in ("hundred", "thousand"))]
     b = ["zero" if w == "oh" and i and b[i - 1] == "point" else w for i, w in enumerate(b)]  # "nine point oh"
     # A hyphenated name heard as one word ("Kikoru-chan" as "Kikorichan") is that name.
@@ -219,7 +248,7 @@ which when where why how all any some just very too also only own same such than
 well right yeah let go get got come came say said""".split())
 
 
-def missed_words(text: str, heard: str) -> list[str]:
+def missed_words(text: str, heard: str, names: frozenset = frozenset()) -> list[str]:
     """Key words of the line the back-check didn't hear ("shady" heard as "shoddy").
     Names (capitalised mid-sentence) are left out: recognition spells them its own
     way. A word heard with another spelling that sounds the same counts as heard
@@ -234,6 +263,7 @@ def missed_words(text: str, heard: str) -> list[str]:
     # Every part of a hyphenated name ("Ga-yeong", "Ok-hui") is the name. A capitalised
     # word opening any sentence is checked like the line's first word ("Wait. Brakes
     # failed": "Brakes" must be heard).
+    show = names
     names = {p.lower() for m, w in zip(found, raw) if w[0].isupper()
              and (not opens_sentence(m.start()) or "-" in w) for p in w.split("-")}
     heard_words = _words(heard)
@@ -268,6 +298,7 @@ def missed_words(text: str, heard: str) -> list[str]:
         if w in INTERJECTIONS:  # "Ahh... Well, I let the ecstasy...": a sigh isn't a word to hear back
             continue
         if len(w) < 3 or base in STOPWORDS or w in names or base in names or w in heard_set or base in heard_set \
+                or w in show or base in show \
                 or pronounce.heard_as(w, heard_words) or pronounce.heard_as(base, heard_words):
             continue
         # Plural, possessive and simple tense endings still count as heard.
@@ -458,6 +489,7 @@ def score_files(job: Job, items: list[tuple[L.Line, str, str]]) -> dict[str, dic
     prof = job.profile
     out: dict[str, dict] = {}
     pronounce.load(job.cfg.models / "lexicon" / "cmudict.dict")
+    names = show_names(prof)
     asr_cfg = job.cfg.get("stages.recognize")
     with job.worker("recognize") as w:
         w.call("load", {"model": asr_cfg.get("model")})
@@ -469,9 +501,9 @@ def score_files(job: Job, items: list[tuple[L.Line, str, str]]) -> dict[str, dic
             for (ln, text, p), r in zip(part, res["results"]):
                 ws = _words(text)
                 sounds = pronounce.only_sounds(ws)  # "Shh.", "Mm-hmm.": nothing recognition can spell
-                out[p] = {"wer": 0.0 if sounds else round(wer(text, r.get("text", "")), 3), "heard": r.get("text", ""),
-                          "missed": [] if sounds else missed_words(text, r.get("text", "")), "words": len(ws),
-                          "interjection": len(ws) == 1 and len(ws[0]) <= 4,
+                out[p] = {"wer": 0.0 if sounds else round(wer(text, r.get("text", ""), names), 3), "heard": r.get("text", ""),
+                          "missed": [] if sounds else missed_words(text, r.get("text", ""), names), "words": len(ws),
+                          "interjection": (len(ws) == 1 and len(ws[0]) <= 4) or bool(ws) and all(x in INTERJECTIONS for x in ws),
                           "seconds": round(media.duration(p), 2), "own_ref": not ln.voice,
                           "not_character": "didn't match" in ln.voice_note}
             job.status(f"back-check {min(i + 16, len(items))}/{len(items)}", progress=0.5 * min(1.0, (i + 16) / len(items)))
