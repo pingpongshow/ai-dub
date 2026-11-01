@@ -204,7 +204,7 @@ function rvShell() {
       <div class="rv-overview"><canvas id="rvOv" title="The whole episode: drag the box to move"></canvas></div>
       <div class="rv-keys">
         <span><kbd>Space</kbd> play / pause</span><span><kbd>←</kbd><kbd>→</kbd> 1 s</span><span><kbd>Shift</kbd>+<kbd>←</kbd><kbd>→</kbd> 5 s</span>
-        ${d.editable ? `<span><kbd>I</kbd> <kbd>O</kbd> song starts / ends here</span><span><kbd>K</kbd> keep original</span><span><kbd>D</kbd> dub</span><span><kbd>Delete</kbd> remove region</span>` : ""}
+        ${d.editable ? `<span><kbd>I</kbd> <kbd>O</kbd> song starts / ends here</span><span><kbd>K</kbd> keep original</span><span><kbd>D</kbd> dub</span><span><kbd>S</kbd> song</span><span><kbd>Delete</kbd> remove region</span>` : ""}
         <span><kbd>N</kbd> <kbd>P</kbd> next / previous to check</span><span><kbd>Z</kbd> zoom</span>
       </div>
     </div>
@@ -1148,11 +1148,26 @@ document.addEventListener("keydown", (ev) => {
   if ((ev.target.closest && ev.target.closest("input, select, textarea")) || ev.metaKey || ev.ctrlKey || ev.altKey) return;
   const v = $("#rvv"), ed = RV.data.editable, k = ev.key;
   const sel = RV.sel;
+  // K, D and S act on whatever is selected: a subtitle, a region, a line or a flagged stretch.
   const act = (action) => {
     if (!ed || !sel) return;
-    if (sel.type === "region") { const r = regionsNow().find((x) => x.id === sel.id); if (r) setRegion(r, { action }); }
-    else if (sel.type === "cue") RV.dec.cues[sel.id] = action;
-    else return;
+    if (sel.type === "region") {
+      const r = regionsNow().find((x) => x.id === sel.id);
+      if (!r) return;
+      setRegion(r, action === "song" ? { action: "keep", kind: "song" } : { action });
+    } else if (sel.type === "cue") {
+      const q = RV.data.cues.find((c) => c.key === sel.id);
+      if (action === "song") { if (q) rvSongFromCue(q); return; }
+      RV.dec.cues[sel.id] = action;
+    } else if (sel.type === "line") {
+      const ln = RV.data.lines.find((l) => l.id === sel.id);
+      if (ln) setSpan(+(ln.start - 0.05).toFixed(2), +(ln.end + 0.05).toFixed(2), action);
+      return;
+    } else if (sel.type === "flag") {
+      const f = RV.data.flags[sel.id];
+      if (f && f.end > f.start + 0.2) setSpan(f.start, f.end, action);
+      return;
+    } else return;
     setDirty(); rvList(); rvInspector(); rvDraw();
   };
   if (k === " ") { ev.preventDefault(); $("#rvPlay").click(); }
@@ -1161,6 +1176,7 @@ document.addEventListener("keydown", (ev) => {
   else if ((k === "o" || k === "O") && ed && RV.markIn != null) rvMarkKey();
   else if (k === "k" || k === "K") act("keep");
   else if (k === "d" || k === "D") act("dub");
+  else if (k === "s" || k === "S") act("song");
   else if ((k === "n" || k === "N") && RV.data.flags.length) rvGoFlag((RV.flag + 1) % RV.data.flags.length);
   else if ((k === "p" || k === "P") && RV.data.flags.length) rvGoFlag((RV.flag - 1 + RV.data.flags.length) % RV.data.flags.length);
   else if (k === "z" || k === "Z") {
