@@ -364,10 +364,17 @@ function rvList() {
   RV.listTab = tab;
   if (tab === "subs") box.innerHTML = rvSubRows();
   else if (tab === "voices") box.innerHTML = rvVoiceRows();
-  else if (tab === "look") box.innerHTML = RV.data.flags.length ? RV.data.flags.map((f, i) => `
-      <div class="frow" data-flag="${i}"><span class="rv-time muted">${fmtT(f.start, false)}</span>
-        <div><b>${esc(f.title)}</b><span class="d">${esc(f.detail)}</span></div></div>`).join("")
+  else if (tab === "look") {
+    const n = RV.data.flags.filter(flagDecided).length;
+    box.innerHTML = RV.data.flags.length ? `<div class="rv-empty" style="padding:8px 10px">${n} of ${RV.data.flags.length} decided.
+        Red still needs your decision; green has one. Starting the dub leaves the rest to Ai Dub.</div>` + RV.data.flags.map((f, i) => {
+      const done = flagDecided(f);
+      return `<div class="frow ${done ? "done" : "open"} ${RV.selFlag === i ? "sel" : ""}" data-flag="${i}"><span class="rv-time muted">${fmtT(f.start, false)}</span>
+        <div><b>${esc(f.title)}</b><span class="d">${esc(f.detail)}</span>
+          <span class="chip ${done ? "dub" : "look"}" style="margin-top:4px">${done ? "✓ " + esc(flagDecision(f)) : "Needs your decision"}</span></div></div>`;
+    }).join("")
     : `<div class="rv-empty">Nothing flagged. Ai Dub was sure of every decision in this episode.</div>`;
+  }
   else if (tab === "kept") {
     const regs = regionsNow();
     box.innerHTML = regs.length ? regs.map((r) => `
@@ -508,6 +515,48 @@ async function rvSaveRules(body) {
     toast("Saved for every episode of this show"); rvTabs(); rvList();
   } catch (e) { toast(e.message); }
 }
+// A flag is decided once you made any choice about what it covers: its subtitles, a region
+// over it, or its lines' speaker.
+function flagDecisions(f) {
+  const a = f.start - 0.05, b = Math.max(f.end, f.start + 0.1) + 0.05, out = [];
+  for (const [k, v] of Object.entries(RV.dec.cues)) {
+    const q = RV.data.cues.find((c) => c.key === k);
+    if (q && overlap(q.start, q.end, a, b) > 0) out.push(v === "keep" ? "Keep original" : "Dub it");
+  }
+  for (const r of RV.dec.regions) {
+    if (r.source === "hidden" || overlap(r.start, r.end, a, b) <= 0) continue;
+    out.push(r.action === "dub" ? "Dub it" : r.kind === "song" ? "Song" : "Keep original");
+  }
+  if (f.lines.some((id) => RV.dec.lines[String(id)])) out.push("Speaker");
+  return out;
+}
+function flagDecided(f) { return flagDecisions(f).length > 0; }
+function flagDecision(f) { return [...new Set(flagDecisions(f))].join(", "); }
+
+// Keep, dub or song for a stretch with no subtitle of its own (a line, a flag): your region over it.
+function spanChoice(a, b) {
+  const r = RV.dec.regions.find((x) => x.source === "user" && x.start <= a + 0.01 && x.end >= b - 0.01);
+  return r ? (r.action === "dub" ? "dub" : r.kind === "song" ? "song" : "keep") : "";
+}
+function setSpan(a, b, choice) {
+  RV.dec.regions = RV.dec.regions.filter((x) => !(x.source === "user" && x.start >= a - 0.01 && x.end <= b + 0.01));
+  if (choice) {
+    const r = addRegion(a, b, choice === "song" ? "song" : "ignore");
+    if (r) r.action = choice === "dub" ? "dub" : "keep";
+  }
+  setDirty(); rvInspector(); rvList(); rvDraw();
+}
+function spanButtons(a, b) {
+  const c = spanChoice(a, b);
+  return `<div class="row"><button class="btn-keep ${c === "keep" ? "on" : ""}" data-span="keep">Keep original</button>
+    <button class="btn-dub ${c === "dub" ? "on" : ""}" data-span="dub">Dub it</button>
+    <button class="btn-keep ${c === "song" ? "on" : ""}" data-span="song">♪ It's a song</button>
+    ${c ? `<button data-span="">Let Ai Dub decide</button>` : ""}</div>`;
+}
+function wireSpan(box, a, b) {
+  box.querySelectorAll("[data-span]").forEach((x) => (x.onclick = () => setSpan(a, b, x.dataset.span)));
+}
+
 function rvGoFlag(i) {
   const f = RV.data.flags[i];
   if (!f) return;
@@ -515,10 +564,10 @@ function rvGoFlag(i) {
   const reg = regionsNow().find((r) => f.lines.some((id) => r.lines && r.lines.includes(id)));
   const cue = RV.data.cues.find((q) => overlap(q.start, q.end, f.start, f.end) > 0);
   RV.sel = (f.kind === "voice" || f.kind === "nosub") && f.lines.length ? { type: "line", id: f.lines[0] }
-    : reg ? { type: "region", id: reg.id } : cue ? { type: "cue", id: cue.key } : { type: "flag", id: i };
+    : reg ? { type: "region", id: reg.id } : cue ? { type: "cue", id: cue.key }
+    : f.lines.length ? { type: "line", id: f.lines[0] } : { type: "flag", id: i };
   RV.selFlag = i;
   RV.pendingShow = true;
-  if (RV.sel.type === "cue" || RV.sel.type === "line") { RV.tab = "subs"; rvTabs(); }
   rvSeek(Math.max(0, f.start - 1));
   const pos = $("#rvFlagPos");
   if (pos) pos.textContent = `Needs a look ${i + 1} of ${RV.data.flags.length}`;
@@ -628,8 +677,10 @@ function rvInspector() {
       ${ed && q ? `<div class="row"><button class="btn-keep ${RV.dec.cues[q.key] === "keep" ? "on" : ""}" id="rvCKeep">Keep original</button>
         <button class="btn-dub ${RV.dec.cues[q.key] === "dub" ? "on" : ""}" id="rvCDub">Dub it</button>
         ${RV.dec.cues[q.key] ? `<button id="rvCAuto">Let Ai Dub decide</button>` : ""}
-        <button id="rvCSong" title="Keep the original for this subtitle as part of a song; grow it to the next ones after">♪ It's a song</button></div>` : ""}`;
+        <button id="rvCSong" title="Keep the original for this subtitle as part of a song; grow it to the next ones after">♪ It's a song</button></div>` : ""}
+      ${ed && !q && ln ? spanButtons(+(ln.start - 0.05).toFixed(2), +(ln.end + 0.05).toFixed(2)) : ""}`;
     if (!ed) return;
+    if (!q && ln) wireSpan(box, +(ln.start - 0.05).toFixed(2), +(ln.end + 0.05).toFixed(2));
     box.querySelectorAll("[data-wl]").forEach((b) => (b.onclick = (ev) => rvWhoMenu(ev, Number(b.dataset.wl))));
     if (q) {
       $("#rvCKeep").onclick = () => { RV.dec.cues[q.key] = "keep"; setDirty(); rvList(); rvInspector(); rvDraw(); };
@@ -694,7 +745,10 @@ function rvInspector() {
   }
   if (s.type === "flag") {
     const f = d.flags[s.id];
-    box.innerHTML = `<h4>${esc(f.title)}</h4><div class="muted small">${esc(f.detail)}</div>`;
+    const span = f.end > f.start + 0.2;
+    box.innerHTML = `<h4>${esc(f.title)}</h4><div class="muted small">${esc(f.detail)}</div>
+      ${ed && span && f.kind !== "subtitles" ? spanButtons(f.start, f.end) : ""}`;
+    if (ed && span && f.kind !== "subtitles") wireSpan(box, f.start, f.end);
   }
 }
 
@@ -703,6 +757,10 @@ function rvWhy(q, ln) {
   const span = q || ln;
   if (q && RV.dec.cues[q.key]) return RV.dec.cues[q.key] === "keep" ? "You set this subtitle to keep the original." : "You set this subtitle to be dubbed.";
   const r = regionsNow().find((x) => overlap(x.start, x.end, span.start, span.end) > 0.5 * (span.end - span.start));
+  if (r && r.source === "user" && r.end - r.start <= span.end - span.start + 0.5) {  // a choice for just this line
+    return r.action === "dub" ? "You set this to be dubbed." : r.kind === "song" ? "You marked this as a song: it keeps the original."
+      : "You set this to keep the original.";
+  }
   if (r) {
     const who = r.source === "user" ? "your" : r.edited ? "Ai Dub's (changed by you)" : "Ai Dub's";
     return r.action === "dub" ? `Inside ${who} ${(RV_KINDS[r.kind] || "song").toLowerCase()} region, which you set to be dubbed.`

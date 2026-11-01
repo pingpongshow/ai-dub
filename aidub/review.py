@@ -315,6 +315,9 @@ def apply(job, lines: list[L.Line], d: dict | None = None) -> int:
             elif action == "dub" and ln.kind in DUBBABLE:
                 ln.kind, ln.kept_why, ln.decided, ln.fallback = L.SPEECH, "", "dub", ""
                 changed.add(ln.id)
+            elif action == "dub" and ln.kind == L.SPEECH and ln.decided != "dub":
+                ln.decided = "dub"  # a short line with no subtitle is dubbed, not kept as a sound
+                changed.add(ln.id)
         if action == "keep" and r.get("show_rule") and r.get("kind") in ("opening", "ending", "song") and prof:
             try:
                 recurring.save_rule(job, a, b, r["kind"], r.get("label", ""))
@@ -333,6 +336,9 @@ def apply(job, lines: list[L.Line], d: dict | None = None) -> int:
                 changed.add(ln.id)
             elif action == "dub" and ln.kind in DUBBABLE:
                 ln.kind, ln.kept_why, ln.decided, ln.fallback = L.SPEECH, "", "dub", ""
+                changed.add(ln.id)
+            elif action == "dub" and ln.kind == L.SPEECH and ln.decided != "dub":
+                ln.decided = "dub"  # a short line with no subtitle is dubbed, not kept as a sound
                 changed.add(ln.id)
     new_chars: dict[str, str] = {}
     by_id = {ln.id: ln for ln in lines}
