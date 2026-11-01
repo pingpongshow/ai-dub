@@ -172,6 +172,7 @@ ones you're most likely to want are below.
 | `songs.match_episodes` | `true` | Find the opening and ending shared with neighbouring episodes in the folder |
 | `speakers.link_threshold` | `0.62` | How alike two voices must sound (cosine similarity) to be treated as one speaker. Raise it if different people get merged; lower it if one person is split in two. |
 | `speak.takes` | `2` | Takes voiced per line; the best one is kept |
+| `speak.redo_takes` | `4` | Takes for a line you send back from the check screen, with new seeds each time |
 | `speak.processes` | `2` | Voice-model processes sharing the GPU |
 | `fit.timing` | `auto` | `window` fits each line to the time the character's mouth moves. `start` starts with the original line at its natural length. `auto` uses `start` for word-for-word subtitle dubs and `window` otherwise. |
 | `condense.enabled` | `true` | Write shorter English for lines that still don't fit |

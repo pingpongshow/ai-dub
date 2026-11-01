@@ -14,7 +14,10 @@ async function pageVerify(id) {
       <p class="muted">${esc(done || "There's nothing to check for this job: its check files aren't there.")}</p></div>`;
     return;
   }
-  VF = { id: Number(id), d, hear: "dub", m: -1, ab: null, ticks: new Set(store.get(`ticks.${id}`, [])) };
+  VF = { id: Number(id), d, hear: "dub", m: -1, ab: null, ticks: new Set(store.get(`ticks.${id}`, [])),
+    redo: store.get(`redo.${id}`, {}), now: null };
+  VF.en = Object.fromEntries((d.lines || []).map(([lid, , , en]) => [lid, en]));
+  d.moments.forEach((m) => { if (m.line != null && m.en != null) VF.en[m.line] = m.en; });
   const frees = (d.original.exists ? d.original.size : 0) + (d.work_size || 0);
   const base = `/api/jobs/${id}/verify/media/`;
   const gbs = (n) => (n / 1e9).toFixed(2) + " GB";
@@ -53,14 +56,18 @@ async function pageVerify(id) {
         <div class="rv-keys"><span><kbd>Space</kbd> play / pause</span><span><kbd>←</kbd><kbd>→</kbd> 1 s</span>
           <span><kbd>Shift</kbd>+<kbd>←</kbd><kbd>→</kbd> 5 s</span><span><kbd>N</kbd> <kbd>P</kbd> next / previous moment</span>
           <span><kbd>D</kbd> dub · <kbd>O</kbd> original</span></div>
+        ${d.can_redo_lines ? `<div class="vf-now" id="vfNow"><span class="muted small">Hear a line that's wrong? Its controls show here while it plays.</span></div>` : ""}
       </div>
       <div class="rv-right">
         <div class="rv-tabs"><button class="on">Moments to check<span class="n" id="vfTicked"></span></button></div>
+        <div class="vf-redo" id="vfRedoBar" hidden><span class="grow" id="vfRedoN"></span>
+          <button class="sm ghost" id="vfRedoClear">Clear</button><button class="sm primary" id="vfRedoGo"></button></div>
         <div class="rv-list" id="vfList">${d.moments.length ? d.moments.map((m, i) => `
           <div class="frow vfm" data-m="${i}"><button class="tick" data-tick="${i}" title="Tick it off once you've listened" aria-label="Listened">✓</button>
             <div><span class="rv-time muted">${fmtT(m.t, false)}</span> <b>${esc(m.title)}</b>${m.detail ? `<span class="d">${esc(m.detail)}</span>` : ""}
               <div class="row" style="margin-top:6px;gap:6px"><button class="sm" data-ab="${i}" title="Play these few seconds as the original, then as the dub">A/B</button>
-              ${m.line != null && d.can_redub ? `<a class="button sm" href="#review/${id}/${m.line}" title="Open this line on the review page: new English, another speaker, or just voice it again">Fix this line…</a>` : ""}</div></div></div>`).join("")
+              ${m.line != null && !d.can_redo_lines && d.can_redub ? `<a class="button sm" href="#review/${id}/${m.line}" title="Open this line on the review page: new English, another speaker, or just voice it again">Fix this line…</a>` : ""}</div>
+              ${m.line != null && d.can_redo_lines ? `<div class="vf-act" data-line="${m.line}"></div>` : ""}</div></div>`).join("")
           : `<div class="rv-empty">Nothing stood out. Play a few scenes to be sure.</div>`}</div>
         <div class="rv-ins">
           <h4>When you're happy with it</h4>
@@ -170,7 +177,7 @@ function vfWire() {
   v.onplay = () => { $("#vfPlay").textContent = "❚❚"; vfSync(false); vfLoop(); };
   v.onpause = () => { if (v._pairBusy) return; $("#vfPlay").textContent = "▶"; vfSync(false); vfDraw(); };
   v.onseeked = () => vfSync(false);
-  v.ontimeupdate = () => { vfSync(false); $("#vfTime").textContent = `${fmtT(v.currentTime)} / ${fmtT(d.duration, false)}`; };
+  v.ontimeupdate = () => { vfSync(false); $("#vfTime").textContent = `${fmtT(v.currentTime)} / ${fmtT(d.duration, false)}`; vfNowLine(); };
   $("#vfPlay").onclick = () => { vfStopAB(); if (v._pairBusy) $("#vfPlay").textContent = pairedToggle(v) ? "❚❚" : "▶"; else pairedToggle(v); };
   $("#vfBack").onclick = () => vfSeek(vfNow() - 5);
   $("#vfFwd").onclick = () => vfSeek(vfNow() + 5);
@@ -211,6 +218,83 @@ function vfWire() {
   $("#vfRestore").onclick = () => decide("restore", "Put the original back and delete this dub?", "Original put back");
   if ($("#vfRedo")) $("#vfRedo").onclick = () => decide("redo", "Put the original back, delete this dub, and dub the episode again (stopping for review first)?", "Queued again");
   window.onresize = () => vfDraw();
+  if (d.can_redo_lines) {
+    $("#vfRedoClear").onclick = () => { VF.redo = {}; vfRedoSave(); vfActions(); };
+    $("#vfRedoGo").onclick = () => vfRedoGo();
+    vfActions();
+  }
+}
+
+// Voicing lines again: mark them here (same words, or new ones), then send them all at
+// once. Each gets fresh takes; every other line keeps its voice.
+function vfRedoSave() { store.set(`redo.${VF.id}`, VF.redo); }
+function vfActionHtml(lid) {
+  const r = VF.redo[lid];
+  if (!r) {
+    return `<div class="row" style="gap:6px"><button class="sm" data-vo="${lid}" title="Voice this line again with the same words: fresh takes, the best one is kept">↻ Voice again</button>
+      <button class="sm ghost" data-vw="${lid}" title="Change the English, then voice it again">Change words…</button>
+      <a class="button sm ghost" href="#review/${VF.id}/${lid}" title="Give the line to another speaker on the review page">Other speaker…</a></div>`;
+  }
+  return `<div class="vf-marked"><span class="chip dub">↻ Will be voiced again${r.en != null ? " with your words" : ""}</span>
+      ${r.en != null ? `<textarea rows="2" data-ven="${lid}">${esc(r.en)}</textarea>` : ""}
+      <div class="row" style="gap:6px">${r.en == null ? `<button class="sm ghost" data-vw="${lid}">Change words…</button>` : ""}
+        <button class="sm ghost" data-vx="${lid}">Don't</button></div></div>`;
+}
+function vfActions() {
+  document.querySelectorAll(".vf-act[data-line]").forEach((box) => (box.innerHTML = vfActionHtml(Number(box.dataset.line))));
+  const root = document.querySelector(".rv");
+  root.querySelectorAll("[data-vo]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); VF.redo[b.dataset.vo] = {}; vfRedoSave(); vfActions(); }));
+  root.querySelectorAll("[data-vw]").forEach((b) => (b.onclick = (e) => {
+    e.stopPropagation();
+    VF.redo[b.dataset.vw] = { en: VF.en[b.dataset.vw] || "" };
+    vfRedoSave(); vfActions();
+    const t = root.querySelector(`[data-ven="${b.dataset.vw}"]`);
+    if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); }
+  }));
+  root.querySelectorAll("[data-vx]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); delete VF.redo[b.dataset.vx]; vfRedoSave(); vfActions(); }));
+  root.querySelectorAll("[data-ven]").forEach((t) => {
+    t.onclick = (e) => e.stopPropagation();
+    t.oninput = () => { if (VF.redo[t.dataset.ven]) { VF.redo[t.dataset.ven].en = t.value; vfRedoSave(); } };
+  });
+  root.querySelectorAll(".vf-act a").forEach((a) => (a.onclick = (e) => e.stopPropagation()));
+  const n = Object.keys(VF.redo).length;
+  $("#vfRedoBar").hidden = !n;
+  $("#vfRedoN").textContent = `${n} line${n === 1 ? "" : "s"} to voice again`;
+  $("#vfRedoGo").textContent = `↻ Voice ${n === 1 ? "it" : "them"} again ›`;
+}
+// The line playing now, for one the check didn't flag.
+function vfNowLine() {
+  const box = $("#vfNow");
+  if (!box || !VF.d.lines.length) return;
+  const t = vfNow();
+  let cur = null;
+  for (const l of VF.d.lines) { if (l[1] > t) break; if (t <= l[2] + 0.5) cur = l; }
+  const lid = cur ? cur[0] : null;
+  if (lid === VF.now && box.dataset.ready) return;
+  VF.now = lid; box.dataset.ready = "1";
+  box.innerHTML = cur ? `<span class="rv-time muted">${fmtT(cur[1], false)}</span> <span class="said">“${esc(cur[3])}”</span>
+      <div class="vf-act" data-line="${lid}"></div>`
+    : `<span class="muted small">Hear a line that's wrong? Its controls show here while it plays.</span>`;
+  vfActions();
+}
+async function vfRedoGo() {
+  const ids = Object.keys(VF.redo);
+  if (!ids.length) return;
+  const lines = {};
+  for (const lid of ids) {
+    const en = (VF.redo[lid].en || "").trim();
+    lines[lid] = en && en !== (VF.en[lid] || "") ? { en } : {};
+  }
+  const words = Object.values(lines).filter((x) => x.en).length;
+  if (!confirm(`Voice ${ids.length} line${ids.length === 1 ? "" : "s"} again${words ? ` (${words} with your words)` : ""}?\n\n`
+    + "Each gets fresh takes and the best one is kept; every other line keeps its voice. The original goes back while this runs "
+    + "(a few minutes), then the dub comes back here to check.")) return;
+  try {
+    const r = await api(`/jobs/${VF.id}/lines/redo`, { body: { lines } });
+    VF.redo = {}; vfRedoSave();
+    toast(r.message || "Voicing again");
+    location.hash = "#queue";
+  } catch (e) { toast(e.message); }
 }
 document.addEventListener("keydown", (ev) => {
   if (!VF || !location.hash.startsWith("#verify/")) return;

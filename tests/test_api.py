@@ -299,21 +299,26 @@ def test_redo_a_few_lines_of_a_finished_dub(client, cfg, media_root):
     assert spoken and all(ln["outcome"] in ("dubbed", "unclear", "japanese") for ln in spoken)
     one, other = spoken[0], spoken[-1]
     assert sorted((work / "lines" / f"{other['id']:05d}").glob("take_*.wav"))
+    # The check page can voice any dubbed line again: it gets each line's English.
+    v = c.get(f"/api/jobs/{jid}/verify").json()
+    assert v["can_redo_lines"] and [one["id"], one["en"]] in [[x[0], x[3]] for x in v["lines"]]
     res = c.post(f"/api/jobs/{jid}/lines/redo", json={"lines": {str(one["id"]): {"en": "A brand new line."}}})
     assert res.status_code == 200, res.text
     j = svc.store.get(jid)
     assert j["status"] == J.QUEUED and not originals.aside_name(ep).exists()
     state = json.loads((work / "state.json").read_text())
     assert "translate" in state["done"] and "speak" not in state["done"]
+    assert state["data"]["redo_rounds"] == {str(one["id"]): 1}  # new seeds for its takes
     assert not (work / "lines" / f"{one['id']:05d}").exists()
     svc.run_one(svc.store.next_queued())
     j = svc.store.get(jid)
     assert j["status"] == J.DONE, j["message"]
     lines = {ln.id: ln for ln in L.load(work / "lines.json")}
     assert lines[one["id"]].en == "A brand new line." and lines[one["id"]].en_from == "user"
-    # Only that line was voiced again (its two takes); every other take was reused.
+    # Only that line was voiced again (four fresh takes); every other take was reused.
     voiced = [x for x in (work / "job.log").read_text().splitlines() if "] takes: " in x]
-    assert voiced[-1].endswith("takes: 2/2"), voiced[-1]
+    assert voiced[-1].endswith("takes: 4/4"), voiced[-1]
+    assert len(list((work / "lines" / f"{one['id']:05d}").glob("take_*.wav"))) == 4
     assert originals.aside_name(ep).exists() and j["record"]["verify"] == "pending"
     # The English is remembered for a later redub of the whole episode.
     assert c.get(f"/api/jobs/{jid}/review").json()["decisions"]["lines"][str(one["id"])]["en"] == "A brand new line."

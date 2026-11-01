@@ -86,11 +86,11 @@ def moments(lines: list[L.Line], duration: float) -> list[dict]:
             out.append({"t": ln.start, "kind": "unclear", "title": "One word may be unclear", "line": ln.id,
                         "detail": f"“{ln.en[:60]}”: " + ln.check_note.split(UNCLEAR + ": ", 1)[-1]})
         elif ln.voice_note in ("moved by pitch", "your choice") or ln.voice_note.endswith("(your choice)"):
-            out.append({"t": ln.start, "kind": "voice", "title": "Voice changed",
+            out.append({"t": ln.start, "kind": "voice", "title": "Voice changed", "line": ln.id,
                         "detail": f"{ln.voice_note}: “{ln.en[:60]}”"})
         placed = (ln.fit or {}).get("placed")
         if placed is not None and placed - ln.start > LATE_S:
-            out.append({"t": ln.start, "kind": "late", "title": f"Starts {placed - ln.start:.1f} s late",
+            out.append({"t": ln.start, "kind": "late", "title": f"Starts {placed - ln.start:.1f} s late", "line": ln.id,
                         "detail": f"“{ln.en[:60]}”"})
     out.sort(key=lambda m: m["t"])
     return [{**m, "t": round(m["t"], 2)} for m in out]
@@ -124,12 +124,24 @@ def view(store: Store, work_root: Path, jid: int) -> dict:
     meta = json.loads((d / "meta.json").read_text())
     orig = Path(meta.get("original") or "")
     rec = j.get("record") or {}
+    work = work_root / f"job-{jid}"
+    # What every dubbed line says, so any of them can be voiced again from here: the
+    # flagged ones, or one you hear going wrong.
+    redo = rec.get("verify") == "pending" and review.can_redo_lines(work)
+    moments, spoken = meta.get("moments", []), []
+    if (work / "lines.json").exists():
+        lines = L.load(work / "lines.json")
+        en = {ln.id: ln.en for ln in lines}
+        moments = [{**m, "en": en.get(m["line"], "")} if m.get("line") is not None else m for m in moments]
+        if redo:
+            spoken = [[ln.id, round(ln.start, 2), round(ln.end, 2), ln.en] for ln in lines if ln.kind == L.SPEECH and ln.en]
     return {"ready": True, "id": jid, "name": meta.get("name"), "duration": meta.get("duration"), "path": j["path"],
-            "moments": meta.get("moments", []), "verify": rec.get("verify", ""),
+            "moments": moments, "verify": rec.get("verify", ""),
             "original": {"path": str(orig), "exists": orig.exists() if orig.name else False,
                          "size": orig.stat().st_size if orig.name and orig.exists() else 0},
             "qc": {k: (rec.get("qc") or {}).get(k) for k in ("fallback_rate", "dubbed_lines", "free_timing")},
-            "can_redub": review.can_redub(work_root / f"job-{jid}"),
+            "can_redub": review.can_redub(work),
+            "can_redo_lines": redo, "lines": spoken,
             "work_size": sum(f.stat().st_size for f in (work_root / f"job-{jid}").rglob("*") if f.is_file())}
 
 

@@ -468,13 +468,18 @@ def run_speak(job: Job) -> None:
     lines = L.load(job.path("lines.json"))
     todo = [ln for ln in lines if ln.dubbed and ln.en]
     takes = max(1, int(job.cfg.get("speak.takes", 2)))
+    # Lines you asked to voice again get more takes, with seeds of their own.
+    rounds = job.get("redo_rounds", {}) or {}
+    redo_takes = max(takes, int(job.cfg.get("speak.redo_takes", 4)))
     rules = F.FitRules.from_config(job.cfg)
     dlg, sr = media.read_wav(job.path("audio", "dialogue.wav"), mono=True)
     with _voices(job) as w:
         caps = job.get("tts_caps", {})
         reqs = []
         for ln in todo:
-            reqs += [r for r in _requests(job, ln, ln.en, takes, "take", dlg, sr) if not Path(r["out"]).exists()]
+            rnd = int(rounds.get(str(ln.id), 0))
+            reqs += [r for r in _requests(job, ln, ln.en, redo_takes if rnd else takes, "take", dlg, sr,
+                                          seed_offset=100003 * rnd) if not Path(r["out"]).exists()]
         # Same speaker reference back to back: the model reuses that voice's analysis.
         reqs.sort(key=lambda r: r["speaker_ref"])
         _synthesize(job, w, reqs, "takes")

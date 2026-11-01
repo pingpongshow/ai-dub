@@ -105,8 +105,10 @@ by itself from the step it was on.
 Everything here can be fixed on the review page. Open it from the check
 screen (**Review and change…**) or from History, change what's wrong, and
 press **Redub with these changes**. The analysis is kept, so only
-translation and voicing run again. For one or two lines, **Fix this line…**
-on the check screen voices just those lines again.
+translation and voicing run again. For one or two lines, use **↻ Voice again** or
+**Change words…** on the check screen. It works on a flagged moment, or on the
+line playing under the player. Only those lines are voiced again, with fresh
+takes.
 
 | Problem | Fix |
 |---|---|

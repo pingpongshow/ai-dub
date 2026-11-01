@@ -181,9 +181,8 @@ region.
 
 The review is available after a dub too. Open it from the job, change
 anything, and press **Redub with these changes**. The original goes back,
-and the job restarts from its review step without redoing the analysis. To fix a few lines only (new
-English or another speaker), use **Fix this line…** on the check screen. Only
-those lines are voiced again.
+and the job restarts from its review step without redoing the analysis. To fix
+a few lines only, voice them again from the check screen (below).
 
 ### Check (after dubbing)
 
@@ -194,6 +193,18 @@ moments worth a listen (lines left in the original language, late lines, takes
 with an unclear word); tick each moment off as you go. For each moment,
 **A/B** plays the original and then the dub. Keys: Space, ←/→, N/P, D (hear
 the dub), O (hear the original).
+
+A line that came out wrong (a word missing or mangled) can be fixed right
+there:
+
+- **↻ Voice again** keeps the same words.
+- **Change words…** lets you edit the English first.
+- **Other speaker…** opens the line on the review page to give it another
+  voice.
+
+This works for any flagged moment, and for whatever line is playing (shown
+under the player). Then press **Voice them again**. Only those lines are
+redone, each with four fresh takes, and the dub comes back to be checked.
 
 Then choose one:
 

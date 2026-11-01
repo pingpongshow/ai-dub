@@ -34,14 +34,14 @@ button.chip { border: 0; cursor: pointer; font: inherit; font-size: 12px; font-w
 .seg button { border: 0; border-radius: 0; padding: 4px 9px; color: var(--muted); background: var(--panel); }
 .seg button + button { border-left: 1px solid var(--line); }
 .seg button.on { background: var(--bar); color: var(--text); }
-.rv-right { display: flex; flex-direction: column; min-width: 0; min-height: 0; max-height: max(420px, calc(100vh - 430px)); }
+.rv-right { display: flex; flex-direction: column; min-width: 0; min-height: 0; max-height: max(420px, calc(100vh - 430px)); overflow: hidden; }
 .rv-tabs { display: flex; gap: 2px; padding: 8px 10px 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
 .rv-tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; color: var(--muted); padding: 6px 9px; white-space: nowrap; }
 .rv-tabs button.on { color: var(--text); border-bottom-color: var(--accent); }
 .rv-tabs .n { font-size: 11px; color: var(--muted); margin-left: 3px; }
 .rv-filter { display: flex; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
 .rv-filter input { flex: 1; min-width: 0; }
-.rv-list { flex: 1; overflow-y: auto; min-height: 160px; }
+.rv-list { flex: 1 1 auto; overflow-y: auto; min-height: 140px; }
 .srow { display: grid; grid-template-columns: 50px minmax(0, 1fr) auto; gap: 8px; align-items: start; padding: 7px 10px; border-bottom: 1px solid var(--line); cursor: pointer; }
 .srow:hover { background: var(--bar); }
 .srow.cur { box-shadow: inset 3px 0 0 var(--accent); background: var(--bar); }
@@ -56,7 +56,8 @@ button.chip { border: 0; cursor: pointer; font: inherit; font-size: 12px; font-w
 .rv-who-btn { gap: 6px; }
 .vdot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: none; }
 .rv-empty { padding: 18px 12px; color: var(--muted); }
-.rv-ins { border-top: 1px solid var(--line); padding: 10px 12px 12px; background: var(--bg); }
+.rv-ins { border-top: 1px solid var(--line); padding: 10px 12px 12px; background: var(--bg);
+  flex: 0 1 auto; min-height: 0; max-height: 62%; overflow-y: auto; overscroll-behavior: contain; }
 .rv-ins h4 { margin: 0 0 8px; font-size: 13px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .rv-ins .grid { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 10px; align-items: center; }
 .rv-ins .lab { color: var(--muted); font-size: 12px; }
@@ -116,3 +117,12 @@ button.chip { border: 0; cursor: pointer; font: inherit; font-size: 12px; font-w
 .vfm .tick:hover { border-color: var(--ok); color: var(--ok); }
 .vfm.ticked .tick { background: var(--ok); border-color: var(--ok); color: #fff; }
 .vfm.ticked > div { opacity: .6; }
+
+/* Check page: voicing lines again */
+.vf-act { margin-top: 6px; }
+.vf-marked { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.vf-marked textarea { width: 100%; font-family: inherit; font-size: 13px; }
+.vf-redo { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: var(--accent-soft); border-bottom: 1px solid var(--line); font-size: 13px; font-weight: 600; }
+.vf-now { margin-top: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); min-height: 44px; }
+.vf-now .said { font-size: 14px; }
+.rv-right > :not(.rv-list):not(.rv-ins) { flex-shrink: 0; }

@@ -444,6 +444,11 @@ def reset_for_lines(work: Path, live: Path, changes: dict[int, dict], prof) -> l
     data = st.setdefault("data", {})
     for k in ("deliver_swap", "delivered"):
         data.pop(k, None)
+    # Each redo of a line voices it with new seeds: the same words and seeds would give
+    # the same takes back, mangled word and all.
+    rounds = data.setdefault("redo_rounds", {})
+    for lid in done:
+        rounds[str(lid)] = int(rounds.get(str(lid), 0)) + 1
     if data.get("ingest"):
         data["ingest"]["source"] = str(live)
     tmp = f.with_suffix(".tmp")
