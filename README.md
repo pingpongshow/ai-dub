@@ -21,6 +21,8 @@ Bazarr (optional) and the one-time model downloads.
 > don't distribute dubbed files. Added tracks are labelled "AI dub" and carry
 > a version stamp.
 
+![The review page: the episode, its subtitles with the voice each line will be dubbed in, and a timeline of voices, songs and speakers](docs/images/review.png)
+
 **Documentation**
 
 | | |
@@ -28,6 +30,19 @@ Bazarr (optional) and the one-time model downloads.
 | [Setup](docs/setup.md) | Requirements, installing with Docker, Docker Compose or Unraid, first run, updating, backups |
 | [Configuration](docs/configuration.md) | `config.yaml`, keys, environment variables, per-show settings, the settings worth knowing |
 | [Troubleshooting](docs/troubleshooting.md) | Jobs that wait, skip or fail; model installs; Bazarr; disk space; dubs that sound wrong |
+
+## Screenshots
+
+All screenshots use a made-up demo library.
+
+| | |
+|---|---|
+| ![Queue page](docs/images/queue.png) | ![Adding episodes, with each file's languages and the language filter](docs/images/add.png) |
+| **Queue**: what's waiting for you, what's next, pause | **Add episodes**: each file's audio and subtitle languages, and the language filter |
+| ![Check screen](docs/images/check.png) | ![History grouped by show](docs/images/history.png) |
+| **Check** a finished dub before its original is deleted | **History**, grouped by show |
+| ![A show's voices](docs/images/show.png) | |
+| **Shows**: each character's cloned voice references | |
 
 ## How it works
 

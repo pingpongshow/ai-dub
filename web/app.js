@@ -286,16 +286,16 @@ function renderBrowser() {
   const data = loadBrowser.data;
   if (!data || !$("#crumbs")) return;
   // Breadcrumbs: every folder above is a step back.
-  const parts = data.path ? data.path.split("/").filter(Boolean) : [];
+  // Media › the media folder by its name › the folders below it.
   let html = `<button data-go="">Media</button>`;
-  let acc = "";
-  parts.forEach((p, i) => {
-    acc += "/" + p;
-    const last = i === parts.length - 1;
-    if (i === 0) return;  // "/media" itself isn't a folder to browse: its folders are the roots
-    const name = i === 1 ? p[0].toUpperCase() + p.slice(1) : p;
-    html += `<span class="sep">›</span>` + (last ? `<b>${esc(name)}</b>` : `<button data-go="${esc(acc)}">${esc(name)}</button>`);
-  });
+  const root = data.root;
+  if (root) {
+    const parts = data.path.slice(root.path.length).split("/").filter(Boolean);
+    const step = (name, path, last) => `<span class="sep">›</span>` + (last ? `<b>${esc(name)}</b>` : `<button data-go="${esc(path)}">${esc(name)}</button>`);
+    html += step(root.name, root.path, !parts.length);
+    let acc = root.path;
+    parts.forEach((p, i) => { acc += "/" + p; html += step(p, acc, i === parts.length - 1); });
+  }
   $("#crumbs").innerHTML = html;
   $("#crumbs").querySelectorAll("[data-go]").forEach((b) => (b.onclick = () => loadBrowser(b.dataset.go).catch(fail)));
   renderFilter();

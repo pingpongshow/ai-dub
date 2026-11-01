@@ -122,7 +122,10 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
                                 "set_aside": originals.aside_name(e).exists(), "dubbed": str(e) in dubbed})
         roots = [str(r.resolve()) for r in svc.media_roots()]
         parent = None if str(p) in roots else str(p.parent)
-        return {"path": str(p), "parent": parent, "entries": entries}
+        # The media folder this is in, by its configured name, for the breadcrumbs.
+        root = next(({"name": m["name"], "path": str(Path(m["path"]).resolve())} for m in cfg.media_roots
+                     if p.is_relative_to(Path(m["path"]).resolve())), None)
+        return {"path": str(p), "parent": parent, "entries": entries, "root": root}
 
     @app.get("/api/browse/tracks")
     def browse_tracks(path: str):

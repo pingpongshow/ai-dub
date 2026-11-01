@@ -26,6 +26,7 @@ def test_browse_and_inspect(client, media_root, tmp_path):
     assert [e["name"] for e in roots["entries"]] == ["Anime"]
     listing = c.get("/api/browse", params={"path": str(media_root)}).json()
     assert [e["name"] for e in listing["entries"]] == ["Show - 01.mkv"]
+    assert listing["root"]["name"] == "Anime"  # breadcrumbs use the media folder's own name
     assert c.get("/api/browse", params={"path": str(tmp_path)}).status_code == 403
     assert c.get("/api/browse", params={"path": str(media_root / "..")}).status_code == 403
     info = c.post("/api/inspect", json={"path": str(ep)}).json()
