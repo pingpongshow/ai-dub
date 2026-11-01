@@ -30,7 +30,8 @@ INTERJECTION_CHARS = set("あいうえおぁぃぅぇぉっーんアイウエオ
 INTERJECTION_WORDS = {
     "ja": {"あ", "あっ", "ああ", "え", "えっ", "えー", "う", "うう", "うん", "ふん", "はぁ", "はあ", "ん", "んっ",
            "お", "おお", "ひっ", "きゃー", "わぁ", "わあ", "ほう", "へえ", "へー", "ちっ", "くっ", "はっ", "ふう", "ふぅ",
-           "うわ", "うわぁ", "おっ", "おや", "ふふ", "へへ", "あはは", "うふふ", "ひぃ", "ぎゃ", "うぅ", "はは"},
+           "うわ", "うわぁ", "おっ", "おや", "ふふ", "へへ", "あはは", "うふふ", "ひぃ", "ぎゃ", "うぅ", "はは",
+           "ね", "ねえ", "ねぇ", "なあ", "なぁ", "はい", "ええ", "うむ"},
     "ko": {"아", "어", "음", "응", "흠", "헉", "하", "흐", "으", "엇", "앗", "아이", "아이고", "아유", "어머", "에이",
            "에휴", "아휴", "어휴", "휴", "흥", "헐", "와", "오", "우와", "쯧", "흑", "허", "후", "하하", "히히", "흐흐"},
     "zh": {"啊", "哦", "嗯", "呃", "哈", "唉", "哎", "嘿", "呀", "哼", "噢"},
@@ -62,9 +63,25 @@ SUBTITLE_DISAGREES = 0.6   # character error rate between a source subtitle line
 SENTENCE_END = re.compile(r"[。！？!?…]$|[.!?]$")
 
 
+KATAKANA = re.compile(r"[\u30a0-\u30ff]+")
+
+
+def _repeats(t: str, most: int = 4) -> tuple[str, int] | None:
+    """"うんうんうん" as ("うん", 3): a short unit said over and over."""
+    for n in range(1, most + 1):
+        if len(t) >= 2 * n and len(t) % n == 0 and t == t[:n] * (len(t) // n):
+            return t[:n], len(t) // n
+    return None
+
+
 def is_interjection(text: str, lang: str) -> bool:
     t = re.sub(r"[\s、。,.!?！？…~〜ー-]", "", text.lower())
     if not t:
+        return True
+    rep = _repeats(t)
+    known = {re.sub(r"[ー-]", "", w) for w in INTERJECTION_WORDS.get("zh" if lang == "yue" else lang, set())}
+    if rep and (rep[0] in known  # "うんうんうんうん", "はいはいはい" (not "わくわく": a word)
+                or (lang == "ja" and rep[1] >= 3 and KATAKANA.fullmatch(rep[0]))):  # "パンパンパン": a sound effect
         return True
     words = INTERJECTION_WORDS.get("zh" if lang == "yue" else lang, set())
     if t in {re.sub(r"[ー-]", "", w) for w in words}:

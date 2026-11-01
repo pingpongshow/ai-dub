@@ -1459,3 +1459,11 @@ def test_backcheck_two_words_heard_as_one():
     assert speak.missed_words("The flowers turn into fruits some time", "The flowers turn into fruits sometimes.") == []
     assert speak.wer("The flowers turn into fruits some time", "The flowers turn into fruit sometime.") <= 0.15
     assert speak.missed_words("Any way you like", "Anyway you like.") == []
+
+
+def test_sounds_and_fillers_said_over_and_over():
+    from aidub.align import is_interjection
+    for t in ("ね。", "うんうんうんうん", "はいはいはい", "パンパンパンパンパンパンパンパンパンパン", "ええ。"):
+        assert is_interjection(t, "ja"), t
+    for t in ("カットカット", "わくわく", "ようやく見つけたぜ", "やはり", "皆さん大丈夫"):   # "Cut, cut!" and real words are speech
+        assert not is_interjection(t, "ja"), t
