@@ -1,6 +1,7 @@
 """End to end on synthetic media with stand-in workers: file handling, tracks,
 set-aside originals, skip rules, redo, restore and delete."""
 
+import subprocess
 import hashlib
 import shutil
 
@@ -135,7 +136,9 @@ def test_decode_check_finds_what_cant_be_played(media_root):
     from aidub import deliver
     ep = synth.episode(media_root / "Decode.mkv")
     assert deliver.decode_check(ep, "a", 0.0) == "" and deliver.decode_check(ep, "v", 0.0) == ""
-    assert "nothing could be decoded" in deliver.decode_check(ep, "a", 100000.0)
+    silent = media_root / "Silent.mkv"
+    subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-i", str(ep), "-map", "0:v", "-c", "copy", str(silent)], check=True)
+    assert "nothing could be decoded" in deliver.decode_check(silent, "a", 0.0)
     bad = media_root / "Garbage.mkv"
     bad.write_bytes(b"not a video " * 5000)
     assert deliver.decode_check(bad, "v", 0.0)
