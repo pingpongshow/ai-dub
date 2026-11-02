@@ -95,6 +95,7 @@ step, because by default a failed job's working folder is kept
 | `worker '…' failed to start` | The model's environment is broken | **Models → Reinstall** that model |
 | `No space left on device` | `/work` or the media disk is full | See [Disk space](#disk-space) |
 | `Permission denied` on the media file | Ai Dub can't write next to the file | See [Permissions](#permissions) |
+| `the English track is silent from …`, or `only N% of the English lines can be heard` | The **Listen back** step found the finished track broken | Nothing was delivered and the original is untouched. Open an issue with the log. |
 | `… is over 4 GiB and would read back cut short` | A very long audio file was written in a form that loses its end | Nothing was delivered. Open an issue with the log. |
 | A delivery check fails (`stream … missing`, durations differ) | The new file didn't pass the safety check | Nothing was changed; the original is untouched. Open an issue with the log. |
 

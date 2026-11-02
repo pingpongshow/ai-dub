@@ -15,6 +15,7 @@ import hashlib
 import json
 import re
 import time
+from dataclasses import replace as dc_replace
 
 import httpx
 
@@ -821,10 +822,106 @@ def _collect(reply: str, ids: set[int] | None = None) -> dict[int, dict]:
             out[lid] = {"en": _str(item.get("en")), "short": _str(item.get("short")),
                         "subtitle_ok": item.get("subtitle_ok") is True,
                         "from_subtitle": item.get("from_subtitle") is True,
-                        "matches": item.get("matches") is not False}
+                        "matches": item.get("matches")}
         except (KeyError, ValueError, TypeError):
             continue
     return out
+
+
+SENTENCE_GAP_S = 1.0     # a sentence carrying on across this short a pause ...
+SENTENCE_MAX_S = 12.0    # ... is voiced as one take, up to this long
+SENTENCE_END = re.compile(r"[.!?…:;\"”)\]]\s*$")
+SENTENCES = re.compile(r".+?(?:[.!?…]+[\"”]?(?=\s|$)|$)")
+
+
+def _joined(a: str, b: str) -> str:
+    return f"{a[:-1]}{b}" if re.search(r"\w-$", a) and b[:1].islower() else f"{a} {b}"
+
+
+def join_sentences(job: Job, lines: list[L.Line]) -> list[L.Line]:
+    """One sentence cut across two lines ("They're the same" / "as always.", "Thank" / "you.")
+    is voiced as one take: voiced apart, each piece comes out as a sentence of its own, with
+    its own falling tune. The same character's line, or a piece that can only be the rest of
+    the sentence (starts in lower case), whoever diarization gave it to."""
+    out: list[L.Line] = []
+    joined = 0
+    for ln in sorted(lines, key=lambda l: l.start):
+        p = out[-1] if out else None
+        if (p is not None and p.kind == L.SPEECH and ln.kind == L.SPEECH and p.en and ln.en
+                and not p.fallback and not ln.fallback and "user" not in (p.en_from, ln.en_from)
+                and ln.start - p.end <= SENTENCE_GAP_S and ln.end - p.start <= SENTENCE_MAX_S
+                and not SENTENCE_END.search(p.en) and (p.character == ln.character or ln.en[:1].islower())):
+            if ln.duration > p.duration:
+                p.character, p.voice, p.voice_note, p.speaker = ln.character, ln.voice, ln.voice_note, ln.speaker
+            p.en, p.en_short = _joined(p.en, ln.en), ""
+            p.source_text = f"{p.source_text} {ln.source_text}".strip()
+            p.english_ref = f"{p.english_ref} {ln.english_ref}".strip()
+            p.end, p.words = max(p.end, ln.end), p.words + ln.words
+            p.overlap = p.overlap or ln.overlap
+            p.heard_chars = max(p.heard_chars, 0) + max(ln.heard_chars, 0)
+            p.check_note = "; ".join(x for x in dict.fromkeys((p.check_note, ln.check_note)) if x)
+            joined += 1
+            continue
+        out.append(ln)
+    if joined:
+        job.qc["sentences_joined"] = joined
+        job.log(f"{joined} lines were the rest of the sentence before them: voiced as one take")
+    return out
+
+
+def split_two_voices(job: Job, lines: list[L.Line]) -> list[L.Line]:
+    """A line two people speak, with a subtitle of two sentences that fits where the voice
+    changes ("Give it back. No."): each sentence in its own speaker's voice. A sentence
+    isn't cut, and a change the words don't fit stays one line (flagged on the check)."""
+    from .align import main_speaker
+    turns = (job.get("diarization") or {}).get("segments", [])
+    chars = job.get("characters") or {}
+    voices: dict[str, str] = {}
+    for ln in lines:
+        if ln.voice:
+            voices.setdefault(ln.character, ln.voice)
+    out, split = [], 0
+    next_id = max((l.id for l in lines), default=0) + 1
+    for ln in lines:
+        out.append(ln)
+        if ln.kind != L.SPEECH or not ln.en or ln.fallback or ln.en_from == "user":
+            continue
+        ranked = main_speaker(turns, ln.start, ln.end)[2]
+        total = sum(v for _, v in ranked)
+        if len(ranked) < 2 or ranked[1][1] < 0.4 or ranked[1][1] / total < 0.25:
+            continue
+        parts = [m.group(0).strip() for m in SENTENCES.finditer(ln.en) if m.group(0).strip()]
+        if len(parts) < 2:
+            continue
+        here = sorted((t for t in turns if t["end"] > ln.start and t["start"] < ln.end), key=lambda t: t["start"])
+        first = here[0]["speaker"]
+        change = next((t["start"] for t in here if t["speaker"] != first and t["start"] > ln.start), None)
+        if change is None:
+            continue
+        share = (change - ln.start) / ln.duration
+        k = min(range(1, len(parts)), key=lambda i: abs(len(" ".join(parts[:i])) / len(ln.en) - share))
+        if abs(len(" ".join(parts[:k])) / len(ln.en) - share) > 0.3:
+            continue
+        second = next(t["speaker"] for t in here if t["speaker"] != first and t["start"] >= change)
+        other = dc_replace(ln, id=next_id, start=round(change, 3), en=" ".join(parts[k:]), en_short="", words=[w for w in ln.words if w.start >= change],
+                           speaker=second, character=chars.get(second, ln.character), voice="", voice_note="",
+                           source_text=join_words_of(ln, change, True), take_scores={}, fit={})
+        other.voice = voices.get(other.character, "")
+        other.voice_note = "" if other.voice else "own line as reference"
+        next_id += 1
+        ln.en, ln.en_short, ln.end = " ".join(parts[:k]), "", round(change, 3)
+        ln.source_text, ln.words = join_words_of(ln, change, False), [w for w in ln.words if w.start < change]
+        out.append(other)
+        split += 1
+    if split:
+        job.qc["lines_split_between_speakers"] = split
+        job.log(f"{split} lines were two people speaking: each given their own voice")
+    return sorted(out, key=lambda l: l.start)
+
+
+def join_words_of(ln: L.Line, at: float, after: bool) -> str:
+    ws = [w.text for w in ln.words if (w.start >= at) == after]
+    return "".join(ws) if ws else ln.source_text
 
 
 LYRICS_SYSTEM = "You tell song lyrics from spoken lines in the subtitles of a film or TV episode. Answer with JSON only."
@@ -1004,12 +1101,14 @@ def lyrics_check(job: Job, llm: "LLM", lines: list[L.Line], cues: list) -> int:
     for run, reply in zip(runs, llm.chat_many(prompts, max_tokens=1024)):
         try:
             said = {int(x["id"]): bool(x.get("sung")) for x in parse_json(reply).get("lines", []) if isinstance(x, dict)}
-        except Exception:
+        except Exception as exc:
+            job.log(f"lyrics check: unreadable answer ({exc}); held-note lines kept as songs and flagged")
             said = {}
         for ln in run:
             if said.get(ln.id, True):
                 ln.kind = L.SONG
-                ln.check_note = ln.kept_why = "lyrics (held notes over music, and the words read as a song)"
+                ln.check_note = ln.kept_why = ("lyrics (held notes over music, and the words read as a song)" if ln.id in said
+                                               else "held notes over music; the words could not be checked")
                 sung += 1
             else:
                 spoken += 1
@@ -1125,9 +1224,11 @@ def run(job: Job) -> None:
                 if got.get("from_subtitle") and ln.check_note != NO_SUBTITLE:
                     ln.en_from = "script"
                     counts["from_subtitles"] += 1
-                    if not got.get("matches", True):
+                    if got.get("matches") is False:
                         ln.check_note = "the subtitle says something different from the speech"
                         counts["differ_from_speech"] += 1
+                    elif got.get("matches") is None:
+                        counts["meaning_not_checked"] = counts.get("meaning_not_checked", 0) + 1
                 else:
                     ln.check_note = ln.check_note or "the subtitles didn't cover this line: translated from the speech"
                     counts["from_speech"] += 1
@@ -1205,5 +1306,6 @@ def run(job: Job) -> None:
         except Exception as exc:
             job.log(f"glossary update skipped: {exc}")
 
+    lines = split_two_voices(job, join_sentences(job, lines))
     L.save(lines, job.path("lines.json"))
     job.status(f"{sum(1 for l in lines if l.en)} lines translated")

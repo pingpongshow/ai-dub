@@ -21,6 +21,7 @@ def cfg(tmp_path, monkeypatch):
         "media": [{"name": "Anime", "path": str(media / "Anime")}],
         "gpu": {"wait": False},
         "speak": {"takes": 2},
+        "readback": {"min_clear": 0.0},  # the stand-in recogniser hears nothing English in a mix
     }
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(conf))

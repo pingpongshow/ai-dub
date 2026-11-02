@@ -154,6 +154,7 @@ def spoken_rows(raw: str) -> str:
 
 
 DASH_TURN = re.compile(r"^\s*[-–—‐]\s*")
+REPLY_DASH = re.compile(r"(?<=[.!?…\"”])\s+[-–—‐]\s*(?=[A-Z\"“'])")
 
 
 def speaker_turns(shown: str) -> list[str]:
@@ -174,7 +175,12 @@ def speaker_turns(shown: str) -> list[str]:
     one = re.split(r"\s+[-–—]\s+(?=\S)", " ".join(rows))  # "- A. - B." on a single row
     if len(rows) == 1 and DASH_TURN.match(rows[0]) and len(one) >= 2:
         return [DASH_TURN.sub("", x) for x in one]
-    return []
+    # Only the reply marked: "Who are you?\n-I'm Mio." or "Who? -Dad. Repeat." ("Special -
+    # like hell." is one speaker: the dash doesn't follow a finished sentence.)
+    if len(rows) >= 2 and sum(1 for r in rows[1:] if DASH_TURN.match(r)) == 1 and DASH_TURN.match(rows[-1]):
+        return [" ".join(r.strip() for r in rows[:-1]), DASH_TURN.sub("", rows[-1])]
+    parts = REPLY_DASH.split(" ".join(rows))
+    return [DASH_TURN.sub("", p) for p in parts] if len(parts) >= 2 else []
 
 
 INVISIBLE = re.compile("[\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]")
@@ -203,6 +209,9 @@ def text_kind(raw: str, habits: dict | None = None) -> str:
     return DIALOGUE
 
 
+OCR_I = re.compile(r"(?<![\w'’])l(?=(?:[ntsf]|['’](?:m|ll|ve|d))?(?![\w'’]))")  # "ln the end", "l'm": OCR's I
+
+
 def clean_text(raw: str, habits: dict | None = None) -> tuple[str, str, str]:
     """Return (spoken text, speaker name if labelled, kind)."""
     kind = text_kind(raw, habits)
@@ -223,7 +232,7 @@ def clean_text(raw: str, habits: dict | None = None) -> tuple[str, str, str]:
         label = m.group(1) or m.group(2)
         name = name or (label.title() if m.group(1) else label)
         t = t[m.end():]
-    t = re.sub(r"\s+", " ", t).strip(" -–—")
+    t = OCR_I.sub("I", re.sub(r"\s+", " ", t).strip(" -–—"))
     if not t:
         return "", name, HI
     return t, name, DIALOGUE

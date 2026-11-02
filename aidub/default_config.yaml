@@ -130,9 +130,15 @@ fit:
                             # start: starts with the original line at its natural length (lip movement ignored);
                             # auto: start when the dub is the subtitles word for word, window otherwise
   free_gap_ms: 120          # timing start: a line due while the previous English line still speaks follows it
-  free_max_late_ms: 500     # ... but at most this late: the line before is sped up (to force_stretch_max) to make room
+  free_early_ms: 400        # ... or starts up to this early when that leaves the next line on time (never back over a shot change)
+  free_max_late_ms: 350     # ... and at most this late: the lines running into it are sped up to make room,
+  free_gentle_tempo: 1.12   # ... together, this much first, then up to force_stretch_max
   force_stretch_max: 1.3    # subtitle_only: a long subtitled line may be sped up this much ...
   force_overrun_s: 0.8      # ... and run on this long past its window rather than stay in the original
+
+readback:                   # the finished English track is listened to before delivery
+  enabled: true
+  min_clear: 0.5            # stop the job if less than this share of its lines can be heard in it
 
 condense:                   # lines that still don't fit get shorter English with the same meaning
   enabled: true
@@ -144,6 +150,7 @@ mix:
   eq_match: true
   eq_max_db: 6.0
   extra_duck_db: 0.0
+  min_level_db: -12.0       # no dubbed line quieter than this under the film's usual dialogue level
   fade_ms: 12
 
 deliver:

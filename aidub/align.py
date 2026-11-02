@@ -696,6 +696,7 @@ def extend_songs(lines: list[L.Line], lang: str, subtitled: set[int] | None = No
     return total
 
 
+CHAPTER_TITLES_S = 150.0  # a song chapter away from the film's edges longer than this isn't titles
 CREDITS_GAP_S = 10.0     # song and credit subtitles this close together are one titles sequence
 CREDITS_MIN_S = 20.0     # ... and one this long (with a song in it) is an intro or end credits
 EDGE_SLACK_S = 3.0
@@ -708,7 +709,11 @@ def intro_credits(job: Job) -> list[list[float]]:
     English subtitle track was chosen, the stretch before its first and after its last
     dialogue subtitle (an unsubtitled closing song would otherwise be translated). A
     dialogue subtitle ends a run: the narration after an opening isn't part of it."""
-    out = [list(r) for r in job["ingest"].get("song_ranges", [])]
+    duration = job["ingest"].get("duration") or 0.0
+    # A chapter named "Song" mid-film (or "Opening" around a film's first scene) is often
+    # mostly dialogue: only one at the very start or end, or short, is titles.
+    out = [list(r) for r in job["ingest"].get("song_ranges", [])
+           if r[1] - r[0] <= CHAPTER_TITLES_S or r[0] <= EDGE_MAX_S or duration - r[1] <= EDGE_MAX_S]
     for which in ("source", "english"):
         cues = sorted((q for q in load_chosen(job, which) if q.kind in (SONG, SIGN) or q.text.strip()),
                       key=lambda q: q.start)
@@ -722,7 +727,6 @@ def intro_credits(job: Job) -> list[list[float]]:
                 out.append([run[0].start, max(r.end for r in run)])
             run = [q] if q is not None and not talk else []
     talk = [q for q in load_chosen(job, "english") if q.kind == DIALOGUE and q.text.strip()]
-    duration = job["ingest"].get("duration")
     if talk and duration:
         first, last = min(q.start for q in talk) - EDGE_SLACK_S, max(q.end for q in talk) + EDGE_SLACK_S
         if 0 < first <= EDGE_MAX_S:
@@ -902,6 +906,51 @@ def classify(job: Job, lines: list[L.Line]) -> None:
             ln.kind = L.WORDLESS
 
 
+TITLE_WHYS = ("opening or end credits", "heard as singing", "lyric subtitle")
+
+
+def spoken_under_titles(job: Job, lines: list[L.Line], talk: list) -> int:
+    """A line with its own dialogue subtitle, hardly held on notes, is someone talking, whatever
+    runs around it: a chapter named "Opening" holding a whole scene, or a shout the sound
+    tagger calls singing ("Someone help!"). 53 of these had to be set right by hand."""
+    if not talk:
+        return 0
+    p = Pitch.load(job)
+    n = 0
+    for ln in lines:
+        if ln.kind != L.SONG or ln.kept_why not in TITLE_WHYS or not _subtitled(ln, talk) or ln.decided == "keep":
+            continue
+        if p is None or clearly_spoken(ln, p):
+            ln.kind, ln.kept_why = L.SPEECH, ""
+            n += 1
+    if n:
+        job.qc["spoken_under_titles"] = n
+    return n
+
+
+SCRAP_S = 2.0            # a line this short ...
+SCRAP_MUSIC_DB = -15.0   # ... under this much music, with no subtitle
+REPEATS = re.compile(r"(.{1,3}?)\1{2,}.?")  # はははは, わっほっほっほ
+
+
+def unsubtitled_scraps(lines: list[L.Line], talk: list, lang: str) -> int:
+    """Where a good subtitle track covers the film, a scrap it leaves out, under music, or only
+    a laugh said over and over, is rarely speech worth dubbing, and what recognition made of it
+    is rarely right (51 kept by hand against 21 dubbed). It keeps the original; the review
+    lists it, and one click dubs it."""
+    if not talk:
+        return 0
+    n = 0
+    for ln in lines:
+        if ln.kind != L.SPEECH or ln.decided == "dub" or _subtitled(ln, talk):
+            continue
+        said = clean_norm(ln.source_text)
+        if (ln.duration <= SCRAP_S and ln.music_db is not None and ln.music_db >= SCRAP_MUSIC_DB) or REPEATS.fullmatch(said):
+            ln.kind, ln.kept_why = L.BACKGROUND, "no subtitle, and hard to make out"
+            n += 1
+    return n
+
+
 def measure(job: Job, lines: list[L.Line]) -> None:
     """Loudness and stereo position of each line in the dialogue stem."""
     data, sr = media.read_wav(job.path("audio", "dialogue.wav"))
@@ -1000,6 +1049,10 @@ def run(job: Job) -> None:
     recurring_titles(job, lines)
     talk = [q for q in load_chosen(job, "english") if q.kind == DIALOGUE and q.text.strip()]
     extend_songs(lines, job["subtitles"].get("source_language", ""), {ln.id for ln in lines if _subtitled(ln, talk)})
+    spoken_under_titles(job, lines, talk)
+    scraps = unsubtitled_scraps(lines, talk, job["subtitles"].get("source_language", ""))
+    if scraps:
+        job.log(f"{scraps} short unsubtitled scraps under music kept in the original")
     # Translation context: which window each line belongs to.
     job.set("line_windows", [next((wi for wi, (a, b) in enumerate(windows) if a <= ln.start < b), len(windows) - 1)
                              for ln in lines])

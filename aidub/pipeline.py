@@ -6,7 +6,7 @@ from __future__ import annotations
 import time
 from typing import Callable
 
-from . import __version__, align, bwe, deliver, diarize, events, ingest, mix, recognize, review, scenes, separate, speak, translate, voicebank
+from . import __version__, align, bwe, deliver, diarize, events, ingest, mix, readback, recognize, review, scenes, separate, speak, translate, voicebank
 from .job import Cancelled, Job, Skipped
 from .subtitles import step as subtitles
 
@@ -28,6 +28,7 @@ STEPS: list[tuple[str, str, Callable[[Job], None]]] = [
     ("condense", "Shorten long lines", speak.run_condense),
     ("bwe", "Sound quality", bwe.run),
     ("mix", "Mix", mix.run),
+    ("listen", "Listen back", readback.run),
     ("deliver", "Deliver", deliver.run),
 ]
 STEP_NAMES = [s for s, _, _ in STEPS]

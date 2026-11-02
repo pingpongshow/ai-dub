@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -225,6 +226,33 @@ def verify(src: Path, out: Path, dropped: set[int], added_audio: int, added_subs
     return problems
 
 
+def peak_db(path: Path, stream: int, at: float, seconds: float = 3.0) -> float | None:
+    """The loudest moment of one audio stream of a file around `at`; None if it can't be read."""
+    cmd = ["ffmpeg", "-nostdin", "-hide_banner", "-ss", f"{at:.2f}", "-i", str(path), "-t", f"{seconds:.2f}", "-map",
+           f"0:{stream}", "-vn", "-sn", "-dn", "-af", "volumedetect", "-f", "null", "-"]
+    try:
+        proc = subprocess.run(["sh", "-c", f'ulimit -v {DECODE_MEMORY_KB}; exec "$@"', "sh", *cmd],
+                              capture_output=True, text=True, timeout=DECODE_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return None
+    m = re.search(r"max_volume:\s*(-?[\d.]+|-inf) dB", proc.stderr)
+    return (float(m.group(1)) if m.group(1) != "-inf" else -120.0) if m else None
+
+
+def dub_plays(path: Path, lines: list[L.Line], samples: int = 8) -> list[str]:
+    """The delivered file's English track, sampled where dubbed lines should play across the
+    whole film: every other check here would pass a dub track that is silent."""
+    b = media.probe(path)
+    ours = [s for s in b.audio if any(t in s.title for t in AI_TITLES) or s.is_aidub]
+    dubbed = sorted((ln for ln in lines if ln.kind == L.SPEECH and ln.take and not ln.fallback), key=lambda l: l.start)
+    if not ours or not dubbed:
+        return []
+    picks = dubbed[:: max(1, len(dubbed) // samples)][:samples]
+    peaks = [peak_db(path, ours[0].index, (ln.fit or {}).get("placed") or ln.start) for ln in picks]
+    mute = [ln.start for ln, p in zip(picks, peaks) if p is None or p < -60.0]
+    return [f"the English track is silent where lines should play, at {', '.join(f'{t:.0f}s' for t in mute)}"] if mute else []
+
+
 def decode_check(path: Path, kind: str, at: float) -> str:
     """Decode a few seconds of a file's video or audio ("v" / "a"); empty = OK. ffprobe, because
     `ffmpeg -t 3 -f null` kept decoding past its end on some H.264 films, holding every frame
@@ -323,7 +351,7 @@ def run(job: Job) -> None:
         else:
             write_ffmpeg(job, source, dub, subs, tmp, out_fmt, drop)
         job.status("verifying the new file")
-        problems = verify(source, tmp, set(drop), 1, len(subs))
+        problems = verify(source, tmp, set(drop), 1, len(subs)) + dub_plays(tmp, lines)
         if problems:
             raise DeliveryError("verification failed: " + "; ".join(problems))
     except Exception:

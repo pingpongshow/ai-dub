@@ -473,7 +473,7 @@ async function loadNeeds() {
   }));
 }
 
-const AFTER_REVIEW = ["review", "translate", "speak", "check", "finalize", "condense", "bwe", "mix", "deliver"];
+const AFTER_REVIEW = ["review", "translate", "speak", "check", "finalize", "condense", "bwe", "mix", "listen", "deliver"];
 
 async function loadQueue() {
   const all = await api("/jobs?view=queue");
@@ -646,8 +646,9 @@ function historyRow(j, i, n) {
       : `<div class="msg">↳ earlier attempt (job ${j.id})</div>`}
       <div class="msg">${j.status !== "done" || r.verify === "redo" ? esc(j.message) : ""}</div>
       ${head && n > 1 ? `<button class="sm ghost" data-act="older" style="margin-top:4px">${showingOlder ? "Hide" : "Show"} ${plural(n - 1, "earlier attempt")}</button>` : ""}
-      ${qc.subtitle_track && qc.subtitle_track.trusted === false && qc.subtitle_track.why !== "no English subtitle"
-        ? `<div class="msg" style="color:var(--warn)">Dubbed from the speech: the English subtitles weren't good enough (${esc(qc.subtitle_track.why)})</div>` : ""}</td>
+      ${qc.subtitle_track && qc.subtitle_track.trusted === false
+        ? `<div class="msg" style="color:var(--warn)">Dubbed from the speech: ${qc.subtitle_track.why === "no English subtitle" ? "no English subtitle was used" : `the English subtitles weren't good enough (${esc(qc.subtitle_track.why)})`}</div>` : ""}
+      ${r.check_error ? `<div class="msg" style="color:var(--warn)">The check files couldn't be kept: ${esc(r.check_error)}</div>` : ""}</td>
     <td>${historyResult(j)}</td><td>${stats}</td><td class="small muted nowrap">${esc(when(j.finished))}</td>
     <td class="actions"><div class="btn-group">
       ${r.verify === "pending" ? `<a class="button sm primary" href="#verify/${j.id}">Check</a>` : ""}

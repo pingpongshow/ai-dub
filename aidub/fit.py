@@ -58,25 +58,61 @@ def free_timing(job) -> bool:
     return timing == "start"
 
 
-def pace(lines: list[tuple[float, float]], gap: float, max_late: float, max_tempo: float) -> list[tuple[float, float]]:
-    """Free timing: where each English line starts, and how much faster the one before
-    it is played. `lines` are (original start, natural length) in time order. A line
-    starts with its original, or after the English line before it (plus `gap`). When
-    that would make it more than `max_late` late, the line before is sped up (at most
-    `max_tempo`) to end in time, so one long line doesn't push every later line back."""
-    out: list[list[float]] = []
-    busy = float("-inf")
+def place(lines: list[tuple[float, float]], tempos: list[float], gap: float, early: float,
+          floors: list[float]) -> list[float]:
+    """Where each line starts at these speeds: with its original where it can, else as late
+    as still leaves the lines after it on time, at most `early` before its original and
+    never before the line ahead of it ends or its floor (a shot change, a line kept in the
+    original)."""
+    n = len(lines)
+    latest, nxt = [0.0] * n, float("inf")
+    for i in range(n - 1, -1, -1):
+        latest[i] = min(lines[i][0], nxt - gap - lines[i][1] / tempos[i])
+        nxt = latest[i]
+    out, busy = [], float("-inf")
     for i, (orig, length) in enumerate(lines):
-        start = max(orig, busy + gap)
-        if out and start - orig > max_late:
-            prev_start, prev_len = out[-1][0], lines[i - 1][1]
-            room = orig + max_late - gap - prev_start
-            if room > 0:
-                out[-1][1] = min(max_tempo, max(out[-1][1], prev_len / room))
-                start = max(orig, prev_start + prev_len / out[-1][1] + gap)
-        out.append([start, 1.0])
-        busy = start + length
-    return [(round(s, 3), round(t, 4)) for s, t in out]
+        start = max(busy + gap, min(orig, max(orig - early, floors[i], latest[i])))
+        out.append(start)
+        busy = start + length / tempos[i]
+    return out
+
+
+def pace(lines: list[tuple[float, float]], gap: float, max_late: float, max_tempo: float, early: float = 0.0,
+         floors: list[float] | None = None, gentle_tempo: float | None = None, chain: int = 4) -> list[tuple[float, float]]:
+    """Free timing: where each English line starts, and how much faster it is played.
+    `lines` are (original start, natural length) in time order. A line starts with its
+    original; when the English before it would run into it, it starts a little early if
+    that helps (`early`), then waits. A line still over `max_late` late has the lines
+    running into it sped up together, gently (`gentle_tempo`) before any goes as far as
+    `max_tempo`, so one long line doesn't push every later line back or play at a rush."""
+    n = len(lines)
+    floors = floors if floors is not None else [float("-inf")] * n
+    tempos = [1.0] * n
+    step = 0.01
+    for cap in sorted({min(gentle_tempo or max_tempo, max_tempo), max_tempo}):
+        for _ in range(int((cap - 1.0) / step) * max(1, n)):
+            starts = place(lines, tempos, gap, early, floors)
+            todo = None
+            for i in range(1, n):
+                if starts[i] - lines[i][0] <= max_late + 1e-6:
+                    continue
+                # The lines running into this one: each ends where the next begins.
+                run, j = [], i - 1
+                while j >= 0 and len(run) < chain:
+                    if run and starts[j] + lines[j][1] / tempos[j] + gap < starts[j + 1] - 1e-3:
+                        break
+                    run.append(j)
+                    j -= 1
+                run = [k for k in run if tempos[k] < cap - 1e-6]
+                if run:
+                    todo = run
+                    break
+            if not todo:
+                break
+            for k in todo:
+                tempos[k] = min(cap, tempos[k] + step)
+    starts = place(lines, tempos, gap, early, floors)
+    return [(round(s, 3), round(t, 4)) for s, t in zip(starts, tempos)]
 
 
 def windows(lines: list[L.Line], cuts: list[float], rules: FitRules, duration: float) -> dict[int, float]:

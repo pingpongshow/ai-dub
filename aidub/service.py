@@ -334,6 +334,7 @@ class Service:
                     rec["verify"] = "pending"
                 except Exception as exc:
                     job.log(f"check files not kept: {exc}")
+                    rec["check_error"] = str(exc)[:300]  # the log goes with the working folder
                     job.remove_work()
             else:
                 job.remove_work()

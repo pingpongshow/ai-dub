@@ -1005,12 +1005,24 @@ def test_free_timing_late_lines_do_not_pile_up():
     plan = fit.pace(lines, gap=0.12, max_late=0.5, max_tempo=1.3)
     late = [s - o for (o, _), (s, _) in zip(lines, plan)]
     assert max(late) <= 0.5 + 1e-6
-    assert all(1.0 < t <= 1.3 for _, t in plan[:-1]) and plan[-1][1] == 1.0
+    assert all(t <= 1.3 for _, t in plan) and plan[-1][1] == 1.0 and max(t for _, t in plan) > 1.0
     # A line far too long for the speed-up limit makes the next one later, but the line after recovers.
     plan = fit.pace([(0.0, 6.0), (2.0, 1.0), (10.0, 1.0)], gap=0.12, max_late=0.5, max_tempo=1.3)
     assert plan[0][1] == 1.3 and plan[1][0] == pytest.approx(6.0 / 1.3 + 0.12, abs=1e-3) and plan[2] == (10.0, 1.0)
     # Lines with room keep their natural speed and start with the original.
     assert fit.pace([(0.0, 1.0), (3.0, 1.0)], 0.12, 0.5, 1.3) == [(0.0, 1.0), (3.0, 1.0)]
+
+
+def test_free_timing_starts_early_only_when_it_helps():
+    lines = [(5.0, 3.0), (7.0, 1.0)]  # the first runs 1.12 s into the second
+    plan = fit.pace(lines, 0.12, 0.35, 1.3, early=0.4, gentle_tempo=1.12)
+    assert plan[0][0] == pytest.approx(4.6) and plan[1][0] - 7.0 <= 0.35 + 1e-6
+    # Nothing crowding it: on time. And no earlier than a shot change at 4.9.
+    assert fit.pace([(5.0, 1.0)], 0.12, 0.35, 1.3, early=0.4) == [(5.0, 1.0)]
+    assert fit.pace(lines, 0.12, 0.35, 1.3, early=0.4, floors=[4.9, 0.0])[0][0] == pytest.approx(4.9)
+    # Gently first: several lines share a little before one goes fast.
+    run = [(i * 2.0, 2.2) for i in range(5)]
+    assert max(t for _, t in fit.pace(run, 0.12, 0.35, 1.3, gentle_tempo=1.12)) <= 1.12 + 1e-6
 
 
 def test_intro_and_end_credits_keep_the_original(tmp_path, monkeypatch):
@@ -1554,3 +1566,134 @@ def test_relisten_skips_lines_past_the_audio(tmp_path):
     assert len(sent) == 1 and sent[0] > 0
     assert align.relisten(job, [past], "ja") == {}
     assert len(sent) == 1
+
+
+def test_voice_text_gets_past_its_normaliser():
+    from aidub import speak
+    assert speak.spoken("No.") == "No ." and speak.spoken("No... No.") == "No ... No ."
+    assert speak.spoken("It's been fun.") == "It’s been fun." and speak.spoken("Oh no.") == "Oh no."
+    assert speak.spoken("Room No. 12.") == "Room Number 12."
+    assert speak.spoken("Sat down. Unlike you, Gen. You must see TV.") == "sat down. Unlike you, Gen . You must see T V."
+    assert speak.spoken("Gen. Yamada.") == "Gen. Yamada."
+    assert speak.spoken("73,000.") == "Seventy three thousand." and speak.spoken("1980.") == "Nineteen eighty."
+    assert speak.spoken("7:00.") == "Seven o’clock." and speak.spoken("7:05") == "Seven oh five"
+    assert speak.spoken("¥1,224,560 Yen.") == "1224560 yen." and speak.spoken("Those are 25cm guns.") == "Those are 25 centimeters guns."
+
+
+def test_backcheck_hears_units_and_large_numbers():
+    from aidub import speak
+    assert speak.wer("Those are 25cm guns.", "Those are twenty five centimeters guns.") == 0
+    assert speak.wer("¥1,224,560 Yen.", "One million two hundred twenty four thousand five hundred and sixty yen.") == 0
+    assert speak.missed_words("You need 40cm.", "You need forty centimeters.") == []
+
+
+def test_backcheck_counts_negations():
+    from aidub import speak
+    assert speak.missed_words("Men aren't dogs.", "Men are dogs.") == ["not"]
+    assert speak.missed_words("You can go.", "You can't go.") == ["not"]
+    assert speak.missed_words("I did not kill him.", "I did kill him.") == ["not"]
+    assert speak.missed_words("No. Just touch it.", "Number, just touch it.")
+    assert speak.missed_words("No.", "Oh.") == ["not"] or speak.missed_words("No.", "Oh.")
+    assert speak.missed_words("I know.", "I no.") == [] and speak.missed_words("Don't go.", "Do not go.") == []
+    assert speak.missed_words("Nah, it's fine.", "No, it's fine.") == []
+
+
+def test_take_with_every_word_heard_is_used_despite_a_doubtful_voice():
+    from aidub import speak
+    from types import SimpleNamespace
+    cfg = SimpleNamespace(get=lambda k, d=None: d)
+    clear = {"wer": 0.0, "missed": [], "words": 3, "sim": -0.01, "sim_median": 0.3, "seconds": 2.0, "own_ref": False}
+    assert not speak._passes(clear, cfg) and speak._rescue(clear, cfg)
+    assert not speak._rescue({**clear, "wer": 0.3}, cfg)
+
+
+def test_a_reply_dash_is_a_second_speaker():
+    from aidub.subtitles import clean
+    assert clean.speaker_turns("Who? -Dad. Repeat.") == ["Who?", "Dad. Repeat."]
+    assert clean.speaker_turns("Who are you?\n-I'm Mio.") == ["Who are you?", "I'm Mio."]
+    assert clean.speaker_turns("What's that for? - The sand seeps in.") == ["What's that for?", "The sand seeps in."]
+    assert clean.speaker_turns("OK.\u3000-OK.") == ["OK.", "OK."]
+    assert clean.speaker_turns("Special - like hell.") == [] and clean.speaker_turns("A well-made bowl.") == []
+
+
+def test_ocr_capital_i():
+    from aidub.subtitles import clean
+    assert clean.clean_text("ln the end, l'm here. lt is. All well.")[0] == "In the end, I'm here. It is. All well."
+
+
+def test_listen_back_finds_a_silent_stretch():
+    from aidub import readback as R
+    original = np.full(4000, -30.0)
+    assert R.silent_runs(np.full(4000, -30.0), original) == []
+    # A film whose last hour was lost:
+    dub = np.concatenate([np.full(3728, -30.0), np.full(272, -120.0)])
+    assert R.silent_runs(dub, original) == [(3728, 4000)]
+    assert R.silent_runs(np.full(3728, -30.0), original) == [(3728, 4000)]  # a track that simply stops
+    # The original goes quiet too: a pause, not a fault.
+    quiet = original.copy(); quiet[100:400] = -90.0
+    pause = np.full(4000, -30.0); pause[100:400] = -120.0
+    assert R.silent_runs(pause, quiet) == []
+    assert R.clock(3728) == "1:02:08" and R.clock(75) == "1:15"
+
+
+def test_listen_back_hard_to_hear():
+    from aidub import readback as R
+    assert R.hard_to_hear("Get out of here.", "", [])
+    assert R.hard_to_hear("Watch the door.", "Watch.", ["door"])
+    assert not R.hard_to_hear("I told you to wait for me at the old station.", "I told you to wait at the old station.", ["wait"][:0])
+    assert not R.hard_to_hear("I told you to wait for me at the old station.", "I told you to wait for me at the old stat.", ["station"])
+    ln = L.Line(1, 10.0, 12.0, fit={"placed": 10.5, "final": 2.6, "paced_tempo": 1.3})
+    assert R.placed(ln) == (10.5, 12.5)
+
+
+def _said(id, start, end, en, **kw):
+    return L.Line(id=id, start=start, end=end, en=en, kind=L.SPEECH, **kw)
+
+
+def test_one_sentence_across_two_lines_is_one_take():
+    from types import SimpleNamespace
+    from aidub import translate as T
+    job = SimpleNamespace(qc={}, log=lambda m: None)
+    lines = [_said(1, 0.0, 1.0, "They're the same", character="c1", source_text="A"),
+             _said(2, 1.3, 2.0, "as always.", character="c2", source_text="B"),  # lower case: the rest of it, whoever
+             _said(3, 2.2, 3.0, "Ask him.", character="c1"), _said(4, 3.1, 4.0, "He knows.", character="c1"),  # ended
+             _said(5, 9.0, 10.0, "Thank", character="c1"), _said(6, 10.2, 11.0, "you.", character="c1"),
+             _said(7, 20.0, 21.0, "About hunting boars in...", character="c1"), _said(8, 21.1, 22.0, "winter.", character="c1"),
+             _said(9, 30.0, 31.0, "Then I", character="c1"), _said(10, 35.0, 36.0, "left.", character="c1"),  # too far apart
+             _said(11, 40.0, 41.0, "somehow laugh-", character="c1"), _said(12, 41.2, 42.0, "ing.", character="c1")]
+    got = T.join_sentences(job, lines)
+    said = [l.en for l in got]
+    assert "They're the same as always." in said and "Thank you." in said and "Ask him." in said and "He knows." in said
+    assert "winter." in said and "left." in said and "somehow laughing." in said
+    whole = got[0]
+    assert (whole.start, whole.end, whole.source_text) == (0.0, 2.0, "A B") and job.qc["sentences_joined"] == 3
+
+
+def test_two_sentences_two_speakers_get_two_voices():
+    from aidub import translate as T
+    class Job(dict):
+        qc = {}
+        def log(self, m): pass
+    turns = [{"start": 0.0, "end": 2.0, "speaker": "S1"}, {"start": 2.0, "end": 3.0, "speaker": "S2"}]
+    job = Job(diarization={"segments": turns}, characters={"S1": "c1", "S2": "c2"})
+    lines = [_said(1, 0.0, 3.0, "You hid it from me. Sorry.", character="c1", voice="a.wav"),
+             _said(2, 5.0, 6.0, "Hello.", character="c2", voice="b.wav")]
+    got = T.split_two_voices(job, lines)
+    assert [(l.en, l.character, l.voice) for l in got] == [("You hid it from me.", "c1", "a.wav"), ("Sorry.", "c2", "b.wav"), ("Hello.", "c2", "b.wav")]
+    assert got[1].id == 3 and got[0].end == 2.0 and got[1].start == 2.0
+    # One sentence, or words that don't fit the change: left whole.
+    assert len(T.split_two_voices(job, [_said(1, 0.0, 3.0, "You hid it from me, sorry.", character="c1")])) == 1
+    assert len(T.split_two_voices(job, [_said(1, 0.0, 3.0, "No. You hid it from me and then you lied to me.", character="c1")])) == 1
+
+
+def test_unsubtitled_scraps_keep_the_original():
+    from types import SimpleNamespace
+    from aidub import align as A
+    q = SimpleNamespace(start=0.0, end=2.0, text="Hello there.", kind=DIALOGUE)
+    lines = [L.Line(1, 0.0, 2.0, source_text="こんにちは", music_db=0.0),      # subtitled
+             L.Line(2, 5.0, 6.0, source_text="どうも", music_db=-3.0),         # scrap under music
+             L.Line(3, 8.0, 9.0, source_text="いらっしゃいませ", music_db=-30.0),   # clear, no music: translated and flagged
+             L.Line(4, 10.0, 13.0, source_text="はははははは", music_db=-30.0)]  # a laugh said over and over
+    assert A.unsubtitled_scraps(lines, [q], "ja") == 2
+    assert [l.kind for l in lines] == [L.SPEECH, L.BACKGROUND, L.SPEECH, L.BACKGROUND]
+    assert A.unsubtitled_scraps(lines, [], "ja") == 0

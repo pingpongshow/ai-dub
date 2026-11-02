@@ -20,7 +20,7 @@ from pathlib import Path
 from . import lines as L
 from . import media, originals, review
 from .jobs import Store
-from .speak import UNCLEAR
+from .speak import UNCLEAR, VOICE_DOUBT
 
 MEDIA = {"preview.mp4": "video/mp4", "dub.m4a": "audio/mp4", "subs.en.vtt": "text/vtt"}
 LATE_S = 1.0
@@ -88,6 +88,12 @@ def moments(lines: list[L.Line], duration: float) -> list[dict]:
         elif ln.voice_note in ("moved by pitch", "your choice") or ln.voice_note.endswith("(your choice)"):
             out.append({"t": ln.start, "kind": "voice", "title": "Voice changed", "line": ln.id,
                         "detail": f"{ln.voice_note}: “{ln.en[:60]}”"})
+        elif VOICE_DOUBT in ln.check_note:
+            out.append({"t": ln.start, "kind": "voice", "title": "Voice may not match", "line": ln.id,
+                        "detail": f"every word came out right: “{ln.en[:60]}”"})
+        if (ln.fit or {}).get("mix_missed"):
+            out.append({"t": ln.start, "kind": "masked", "title": "May be hard to hear in the mix", "line": ln.id,
+                        "detail": f"“{ln.en[:60]}”: heard “{str(ln.fit.get('mix_heard', ''))[:60]}”"})
         placed = (ln.fit or {}).get("placed")
         if placed is not None and placed - ln.start > LATE_S:
             out.append({"t": ln.start, "kind": "late", "title": f"Starts {placed - ln.start:.1f} s late", "line": ln.id,

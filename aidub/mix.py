@@ -10,6 +10,7 @@ normalised to the original track's integrated loudness (EBU R128) and, for
 
 from __future__ import annotations
 
+import bisect
 import json
 from pathlib import Path
 
@@ -120,6 +121,20 @@ def soft_limit(x: np.ndarray, ceiling_db: float = -1.0) -> np.ndarray:
     return x
 
 
+def start_floors(job: Job, lines: list[L.Line], dubbed: list[L.Line]) -> list[float]:
+    """How early each dubbed line may begin: not back across a shot change (the voice would
+    start in the shot before), nor over a line left in the original."""
+    cuts = sorted((job.get("scenes") or {}).get("cuts", []))
+    dub_ids = {l.id for l in dubbed}
+    kept = sorted(l.end for l in lines if l.id not in dub_ids and l.kind in (L.SPEECH, L.ENGLISH, L.WORDLESS, L.SONG))
+    out = []
+    for ln in dubbed:
+        k = bisect.bisect_right(cuts, ln.start + 0.05) - 1
+        e = bisect.bisect_right(kept, ln.start) - 1
+        out.append(max(min(ln.start, cuts[k]) if k >= 0 else float("-inf"), kept[e] if e >= 0 else float("-inf")))
+    return out
+
+
 def run(job: Job) -> None:
     lines = L.load(job.path("lines.json"))
     stems = json.loads(job.path("audio", "stems.json").read_text())
@@ -146,9 +161,16 @@ def run(job: Job) -> None:
         take, tsr = media.read_wav(ln.take, mono=True)
         takes.append(media.resample(take, tsr, SR)[:, 0].copy())
     plan = pace([(ln.start, len(x) / SR) for ln, x in zip(dubbed, takes)], gap,
-                float(cfg.get("fit.free_max_late_ms", 500)) / 1000, float(cfg.get("fit.force_stretch_max", 1.3))) \
-        if free else []
+                float(cfg.get("fit.free_max_late_ms", 350)) / 1000, float(cfg.get("fit.force_stretch_max", 1.3)),
+                early=float(cfg.get("fit.free_early_ms", 400)) / 1000, floors=start_floors(job, lines, dubbed),
+                gentle_tempo=float(cfg.get("fit.free_gentle_tempo", 1.12))) if free else []
     spans, waited, sped = [], [], 0
+    # A line whose original voice is nearly gone (left in the music by separation, or
+    # whispered under it) would be dubbed as quietly: no quieter than this under the film's usual level.
+    voice_refs = [sum(v["dlg"][int(ln.start * SR): int(ln.end * SR)].mean(axis=1) for v in groups.values()) for ln in dubbed]
+    usual = float(np.median([active_rms(r, SR) for r in voice_refs if len(r)] or [0.0]))
+    least = usual * 10 ** (float(cfg.get("mix.min_level_db", -12.0)) / 20)
+    raised = 0
     # Lines left in the original (short reactions, songs, lines with no usable take) stay
     # audible even where a dub runs on over them; only the dubbed lines' own speech is muted.
     dub_ids = {l.id for l in dubbed}
@@ -185,7 +207,8 @@ def run(job: Job) -> None:
         if cfg.get("mix.eq_match", True):
             x = apply_band_gains(x, SR, band_gains_db(ref, x, SR, float(cfg.get("mix.eq_max_db", 6.0))))
         target = active_rms(ref, SR) if len(ref) else 10 ** (ln.loudness_db / 20)
-        x *= target / max(active_rms(x, SR), 1e-6)
+        raised += target < least
+        x *= min(max(target, least) / max(active_rms(x, SR), 1e-6), 30.0)
         x = fade(x.astype(np.float32), fade_n)
         for g, v in groups.items():
             share = np.sqrt(energies[g] / etot)
@@ -246,8 +269,10 @@ def run(job: Job) -> None:
     out = soft_limit(out.astype(np.float32))
     media.write_wav(job.path("mix", "dub.wav"), out, SR)
     job.qc["dubbed_lines"] = placed
+    job.qc["quiet_lines_raised"] = raised
     if free:
         job.qc["free_timing"] = {"lines_waited": len(waited), "max_wait_s": round(max(waited, default=0.0), 2),
+                                 "lines_early": sum(s < ln.start - 0.02 for (s, _), ln in zip(plan, dubbed)),
                                  "sped_up": sped, "ran_over_kept_lines": over_kept,
                                  "mean_wait_s": round(sum(waited) / len(waited), 2) if waited else 0.0}
         L.save(lines, job.path("lines.json"))

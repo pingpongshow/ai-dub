@@ -82,15 +82,30 @@ def _full(word: str) -> str:
     return full.capitalize() if word[0].isupper() else full
 
 
+UNITS = {"cm": "centimeter", "mm": "millimeter", "km": "kilometer", "m": "meter", "kg": "kilogram", "g": "gram",
+         "mg": "milligram", "ml": "milliliter"}
+UNIT_RE = re.compile(r"(?<![\w.])(\d+(?:\.\d+)?)\s*(cm|mm|km|kg|mg|ml|mph|kph)\b|(?<![\w.])(\d+(?:\.\d+)?)(m|g)\b")
+
+
+def _unit(m: re.Match) -> str:
+    n, u = (m.group(1), m.group(2)) if m.group(1) else (m.group(3), m.group(4))
+    if u in ("mph", "kph"):
+        return f"{n} {'miles' if u == 'mph' else 'kilometers'} per hour"
+    return f"{n} {UNITS[u]}{'' if n == '1' else 's'}"
+
+
 def said_as(text: str) -> str:
     """Symbols and numbers as words, the way the voice should read them and the
     back-check should compare them: "84%" is "84 percent" (the voice read a bare "84%"
     in Chinese), "9.0" is "9 point 0" (it said "nine point"), "12.75" is "12 point 7 5"
     (not "twelve point seventy-five"), "$4.99" is "4 dollars 99", "1,000" is "1000",
-    "No. 12" is "Number 12". Clipped words are said in full ("How 'bout it?" is read
-    "How about it?", and recognition hears "about")."""
+    "No. 12" is "Number 12", "25cm" is "25 centimeters", "¥1,000 Yen" is "1000 yen".
+    Clipped words are said in full ("How 'bout it?" is read "How about it?", and
+    recognition hears "about")."""
     text = CLIPPED.sub(lambda m: _full(m.group(1)), text)
     text = re.sub(r"(?<=\d),(?=\d{3}\b)", "", text)
+    text = re.sub(r"¥\s*(\d+)(?:\s+yen\b)?", r"\1 yen", text, flags=re.I)
+    text = UNIT_RE.sub(_unit, text)
     text = re.sub(r"\$(\d+)\.(\d\d)\b", r"\1 dollars \2", text)
     text = re.sub(r"\$(\d+)\b", lambda m: m.group(1) + (" dollar" if m.group(1) == "1" else " dollars"), text)
     text = re.sub(r"(?<=\d)\.(\d+)", lambda m: " point " + " ".join(m.group(1)), text)
@@ -119,6 +134,8 @@ TENS = "_ _ twenty thirty forty fifty sixty seventy eighty ninety".split()
 
 def number_words(n: int) -> list[str]:
     """212 as said: "two hundred twelve" (an "and" heard after "hundred" is dropped)."""
+    if n >= 1000000:
+        return number_words(n // 1000000) + ["million"] + (number_words(n % 1000000) if n % 1000000 else [])
     if n >= 1000:
         return number_words(n // 1000) + ["thousand"] + (number_words(n % 1000) if n % 1000 else [])
     if n >= 100:
@@ -147,7 +164,7 @@ def _numbers(words: list[str], digitwise: bool) -> list[str]:
     for w in words:
         if ORDINAL_RE.fullmatch(w):
             out.extend(ordinal_words(int(ORDINAL_RE.fullmatch(w).group(1))))
-        elif w.isdigit() and len(w) <= 6:
+        elif w.isdigit() and len(w) <= 9:
             out.extend([ONES[int(d)] for d in w] if digitwise else number_words(int(w)))
         else:
             out.append(w)
@@ -245,17 +262,26 @@ def _wer(a: list[str], b: list[str]) -> float:
 
 
 STOPWORDS = set("""a an the and or but so if then of to in on at by for with from up out off over into onto as is am
-are was were be been being do does did have has had will would shall should can could may might must not no yes
+are was were be been being do does did have has had will would shall should can could may might must yes
 i you he she it we they me him her us them my your his its our their this that these those there here what who whom
 which when where why how all any some just very too also only own same such than now oh ah uh um huh hey okay ok
 well right yeah let go get got come came say said""".split())
+
+
+# Said or not, these turn a line around ("Men aren't dogs" heard "Men are dogs"; "You can go"
+# heard "You can't go"). "know" sounds like "no", and "nah" is said for it.
+NEGATIONS = {"no", "not", "never", "cannot", "none", "nobody", "nothing", "nope", "nah", "know", "knot"}
+
+
+def _negations(words: list[str]) -> int:
+    return sum(w in NEGATIONS for w in words)
 
 
 def missed_words(text: str, heard: str, names: frozenset = frozenset()) -> list[str]:
     """Key words of the line the back-check didn't hear ("shady" heard as "shoddy").
     Names (capitalised mid-sentence) are left out: recognition spells them its own
     way. A word heard with another spelling that sounds the same counts as heard
-    (see pronounce)."""
+    (see pronounce). A negation lost or added counts as missed."""
     found = list(re.finditer(r"[A-Za-z0-9'’]+(?:-[A-Za-z0-9'’]+)*", text))
     raw = [m.group(0) for m in found]
 
@@ -287,6 +313,9 @@ def missed_words(text: str, heard: str, names: frozenset = frozenset()) -> list[
         elif any(pronounce.near(joined, h) or pronounce.same_sound(joined, h) for h in heard_pairs):
             heard_set.update(p for p in parts if p not in pronounce.LEXICON)
     said = _words(text)
+    lost, added = _negations(heard_words) < _negations(said), not _negations(said) and _negations(heard_words)
+    # (A made-up word can be heard as one: "Nguyen" as "No yen".)
+    negations = lost or (added and not any(w not in heard_set and pronounce.heard_as(w, heard_words) for w in said))
     pairs = {x for a, b in zip(said, said[1:]) if (a + b) in heard_set or (a + b) + "s" in heard_set for x in (a, b)}
     out = []
     for w in said:
@@ -300,7 +329,7 @@ def missed_words(text: str, heard: str, names: frozenset = frozenset()) -> list[
             if not any(f" {' '.join(_numbers([w], d))} " in joined for d in (False, True)) and w not in heard_set:
                 out.append(w)
             continue
-        if w in INTERJECTIONS:  # "Ahh... Well, I let the ecstasy...": a sigh isn't a word to hear back
+        if w in INTERJECTIONS or w in NEGATIONS:  # "Ahh... Well, I let the ecstasy...": a sigh isn't a word to hear back
             continue
         if len(w) < 3 or base in STOPWORDS or w in names or base in names or w in heard_set or base in heard_set \
                 or w in show or base in show \
@@ -313,7 +342,7 @@ def missed_words(text: str, heard: str, names: frozenset = frozenset()) -> list[
         if any(h.rstrip("s") == w.rstrip("s") or h.rstrip("ed") == w.rstrip("ed") for h in heard_set):
             continue
         out.append(w)
-    return out
+    return out + ["not"] * negations
 
 
 def missed_by_voice(ln: L.Line) -> list[str]:
@@ -349,7 +378,8 @@ def _orig_clip(job: Job, ln: L.Line, dlg: np.ndarray, sr: int) -> Path:
     return p
 
 
-COUNT = re.compile(r"[\d\s.,!?…-]+")
+COUNT = re.compile(r"[\d\s.,:!?…-]+")
+DIGITS = re.compile(r"(?<!\d)(\d{1,2}):(\d{2})(?!\d)|(\d+)")
 
 
 def spoken(text: str) -> str:
@@ -358,9 +388,35 @@ def spoken(text: str) -> str:
     "self esteem"), so hyphens between letters become spaces. A long run of dots is
     one pause, and a count ("3..... 4....", a referee) is said in words."""
     text = re.sub(r"\.{4,}", "...", re.sub(r"(?<=[A-Za-z])-(?=[A-Za-z])", " ", text))
+    return _past_cleanup(said_as(text))
+
+
+def _digits_said(m: re.Match) -> str:
+    if m.group(1):  # 7:00, 7:30
+        hour, minute = int(m.group(1)), int(m.group(2))
+        said = " ".join(number_words(hour)) + (" o’clock" if not minute else " " + " ".join(
+            (["oh"] if minute < 10 else []) + number_words(minute)))
+    else:
+        n = int(m.group(3))
+        said = " ".join(number_words(n // 100) + (["hundred"] if not n % 100 else (["oh"] if n % 100 < 10 else [])
+                                                  + number_words(n % 100))) if 1100 <= n < 2100 else " ".join(number_words(n))
+    return said.capitalize()
+
+
+def _past_cleanup(text: str) -> str:
+    """The voice model rewrites text before reading it, in ways that change the line
+    (tested against its normaliser): "No." is read "number" and "Gen." "general"; "Sat
+    down" "Saturday down"; "TV" "television"; "it's", "what's", "that's" (and "she's
+    gotten") "it is", "what is", "she is gotten"; a line of only digits is read in
+    Chinese ("73000." came out "seventy-three zero"). These forms get past that."""
+    text = re.sub(r"(?<=[A-Za-z])'(?=[a-z])", "’", text)
+    text = re.sub(r"\b(No|NO)(\.+)", r"\1 \2", text)
+    text = re.sub(r"\bGen\.(?=\s*$|\s+[a-z]|\s+(?:" + "|".join(sorted(w.capitalize() for w in STOPWORDS)) + r")\b)", "Gen .", text)
+    text = re.sub(r"\b(Sat|Sun|Mon|Wed|Fri|Tu|Th|Thur|Thurs)\b", lambda m: m.group(1).lower(), text)
+    text = re.sub(r"\bTV\b", "T V", text)
     if re.search(r"\d", text) and COUNT.fullmatch(text):
-        text = re.sub(r"\d{1,3}", lambda m: " ".join(number_words(int(m.group(0)))).capitalize(), text)
-    return said_as(text)
+        text = DIGITS.sub(_digits_said, text)
+    return text
 
 
 def _requests(job: Job, ln: L.Line, text: str, takes: int, tag: str, dlg, sr, factor: float | None = None,
@@ -555,7 +611,9 @@ def _rescue(s: dict, cfg) -> bool:
     line in Japanese). Nearly right English beats keeping the original."""
     if s.get("wer", 1) > float(cfg.get("speak.rescue_wer", 0.25)) or len(s.get("missed", [])) > 1:
         return False
-    return _passes({**s, "missed": []}, cfg)
+    # Every word heard, only the voice in doubt ("Be my guest." at likeness 0.04): the right
+    # words in a doubtful voice beat keeping the original, and it is flagged for a listen.
+    return _passes({**s, "missed": []}, cfg) or (s.get("wer", 1) <= CLEAR_WER and not s.get("missed"))
 
 
 def _passes(s: dict, cfg) -> bool:
@@ -588,6 +646,8 @@ def _passes(s: dict, cfg) -> bool:
 
 
 UNCLEAR = "voiced with one word unclear"
+VOICE_DOUBT = "the voice may not sound like this character"
+CLEAR_WER = 0.05
 FIT_FILES = (("fit1_0.wav", "en"), ("fit0_0.wav", "en"), ("short_0.wav", "en_short"), ("shortfit_0.wav", "en_short"))
 
 
@@ -628,7 +688,8 @@ def run_check(job: Job) -> None:
             best = max(rescue, key=lambda p: mine[p].get("score", 0))
             mine[best]["rescued"] = True
             ln.take, ln.fallback = best, ""
-            note = f"{UNCLEAR}: “{', '.join(mine[best].get('missed', [])) or '?'}” (heard “{mine[best].get('heard', '')}”)"
+            note = VOICE_DOUBT if mine[best].get("wer", 1) <= CLEAR_WER and not mine[best].get("missed") else \
+                f"{UNCLEAR}: “{', '.join(mine[best].get('missed', [])) or '?'}” (heard “{mine[best].get('heard', '')}”)"
             ln.check_note = f"{ln.check_note}; {note}" if ln.check_note else note
             rescued += 1
         else:
@@ -725,6 +786,33 @@ def choose(options: list[tuple[str, Path]], scores: dict, window: float, rules: 
     return None
 
 
+def _shorter_takes(job: Job, lines: list[L.Line]) -> int:
+    """Free timing: a line that would run into the next one uses its shortest take that
+    passed the checks. Unlike speeding up, this costs nothing in the voice."""
+    dubbed = sorted((l for l in lines if l.kind == L.SPEECH and l.take and not l.fallback), key=lambda l: l.start)
+    gap = float(job.cfg.get("fit.free_gap_ms", 120)) / 1000
+    used = 0
+    for ln, nxt in zip(dubbed, dubbed[1:]):
+        room = nxt.start - ln.start - gap
+        now = float(ln.fit.get("final") or 0)
+        if now <= room:
+            continue
+        good = [(float(s.get("seconds") or 99), p) for p, s in ln.take_scores.items()
+                if _passes(s, job.cfg) and Path(p).exists()]
+        if not good or min(good)[0] >= now - 0.05:
+            continue
+        seconds, p = min(good)
+        F.time_stretch(Path(p), Path(ln.take), 1.0)
+        ln.fit.update({"final": round(media.duration(ln.take), 3), "source": Path(p).name, **_heard(ln.take_scores[p])})
+        used += 1
+    return used
+
+
+def _heard(score: dict | None) -> dict:
+    """What the audio in use was heard saying (take_scores keeps the earlier takes)."""
+    return {"heard": score.get("heard", ""), "wer": score.get("wer")} if score else {}
+
+
 def _qc_fallbacks(job: Job, lines: list[L.Line]) -> None:
     dubbed = sum(1 for l in lines if l.kind == L.SPEECH)
     fallback = [l for l in lines if l.kind == L.SPEECH and l.fallback]
@@ -753,8 +841,9 @@ def run_finalize(job: Job) -> None:
         if free:  # the best take as it came out; the mix starts it with the original line
             final = d / "final.wav"
             F.time_stretch(Path(ln.take), final, 1.0)
+            ln.fit.update({"method": "natural", "tempo": 1.0, "final": round(media.duration(final), 3),
+                           **_heard(ln.take_scores.get(ln.take))})
             ln.take = str(final)
-            ln.fit.update({"method": "natural", "tempo": 1.0, "final": round(media.duration(final), 3)})
             counts["fits"] += 1
             continue
         window = ln.fit.get("window", ln.duration + rules.borrow)
@@ -809,9 +898,11 @@ def run_finalize(job: Job) -> None:
         counts[how] += 1
         ln.take = str(final)
         ln.fit.update({"method": how, "tempo": tempo, "final": round(m, 3), "source": p.name,
-                       "timing_error": round(max(0.0, m - window), 3)})
+                       "timing_error": round(max(0.0, m - window), 3), **_heard(all_scores.get(str(p)))})
         if p.name.startswith("short"):
             ln.en = ln.en_short
+    if free:
+        counts["shorter_take"] = _shorter_takes(job, lines)
     L.save(lines, job.path("lines.json"))
     dubbed = sum(1 for l in lines if l.kind == L.SPEECH)
     job.qc["fit"] = counts
@@ -1057,7 +1148,8 @@ def run_condense(job: Job) -> None:
             if said.get(str(p), ("", ""))[1]:
                 ln.voice, ln.voice_note = said[str(p)][1], "voice bank (its own clip came out unclear)"
             ln.fit.update({"window": window, "method": "condensed", "tempo": tempo, "source": p.name,
-                           "final": round(media.duration(final), 3), "round": rnd + 1})
+                           "final": round(media.duration(final), 3), "round": rnd + 1,
+                           **_heard({**ln.take_scores, **scores}.get(str(p)))})
             rescued += 1
         L.save(lines, job.path("lines.json"))
     counts = job.qc.setdefault("fit", {})
