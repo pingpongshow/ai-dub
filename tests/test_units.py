@@ -1477,7 +1477,8 @@ def test_track_filter_matches():
     en_comment = {"audio": ja["audio"] + [{"lang": "en", "aidub": False, "commentary": True}]}
     untagged = {"audio": [{"lang": "", "aidub": False, "commentary": False}]}
     assert matches(ja, {"ja"}, {"en"}) and not matches(ja, {"ko"}, set())
-    assert matches(dubbed, set(), {"en"})          # an Ai Dub track doesn't count as English audio
+    assert not matches(dubbed, {"ja"}, {"en"})     # an Ai Dub track counts as having English audio
+    assert not matches(dubbed, {"en"}, set())      # but not as a title in English to begin with
     assert not matches(with_en, {"ja"}, {"en"})
     assert matches(en_comment, set(), {"en"})      # nor does an English commentary
     assert matches(untagged, {"und"}, set()) and not matches(untagged, {"ja"}, set())

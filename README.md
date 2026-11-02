@@ -133,7 +133,8 @@ language filter above the list does two things:
 
 - **Audio in**: shows only files with audio in that language.
 - **Hide if it already has audio in**: hides files that already have, for
-  example, English audio. Tracks Ai Dub added don't count.
+  example, English audio. A dub Ai Dub added counts, and so does a title that's
+  in the queue or already dubbed.
 
 **Select all here** and **Add all…** follow the filter. Options when adding:
 
@@ -162,7 +163,11 @@ it translates or voices anything. The review screen has:
   with Ai Dub's reasons;
 - every subtitle with the voice it will be dubbed in;
 - the speakers, with gender, age and voice;
-- a **Needs a look** list of what Ai Dub was unsure of, red until decided.
+- a **Needs a look** list of what Ai Dub was unsure of, red until decided;
+- a **Kept** list of everything that stays in the original: songs, your marks,
+  lines with no words, voices under music, crowds, English lines, and after a
+  dub the lines left in Japanese;
+- a **Songs** list of every section tagged as a song.
 
 You can:
 

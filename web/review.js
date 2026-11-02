@@ -9,6 +9,9 @@ const RV_LANES = [["", 18], ["Voices", 46], ["Keep original", 26], ["Subtitles",
 function rvLanes() { return RV && RV.data && RV.data.redub ? [...RV_LANES, ["Dub result", 22]] : RV_LANES; }
 const RV_OUTCOME = { dubbed: "Dubbed", unclear: "Dubbed, one word may be unclear", japanese: "Left in Japanese", kept: "Kept the original" };
 const RV_GAP = 6;
+const RV_KEPT_WHY = { wordless: "No words to dub", background: "Voice is under the music and effects", crowd: "Several people at once", english: "Already in English", song: "Song" };
+const RV_SONG_KINDS = new Set(["song", "opening", "ending"]);
+const RV_SONG_GAP_S = 8;  // lyric subtitles this close together are one section
 let RV = null;
 
 const rvClone = (o) => JSON.parse(JSON.stringify(o));
@@ -72,6 +75,52 @@ function cueState(q) {
   if (ls.some((l) => l.kind === "song")) return ["keep", "Song"];
   if (ls.some((l) => l.kind === "speech")) return ["dub", "Dub"];
   return ["plain", ls.length ? "Kept" : "No line"];
+}
+// Everything that stays in the original, as the Kept tab lists it: regions, subtitles you kept,
+// subtitles with no line under them, and lines Ai Dub leaves alone or couldn't dub.
+function rvKeptItems() {
+  const d = RV.data, regs = regionsNow();
+  const keeps = regs.filter((r) => r.action === "keep");
+  const dubs = [...regs.filter((r) => r.action === "dub"), ...RV.dec.regions.filter((r) => r.source === "hidden")];
+  const over = (x, list) => list.some((r) => overlap(x.start, x.end, r.start, r.end) >= 0.5 * (x.end - x.start));
+  const marked = (ln, action) => d.cues.some((q) => RV.dec.cues[q.key] === action && overlap(ln.start, ln.end, q.start, q.end) >= 0.3 * (ln.end - ln.start));
+  const items = keeps.map((r) => ({ type: "region", start: r.start, r }));
+  for (const q of d.cues) {
+    if (q.kind === "sign" || q.kind === "hi" || over(q, keeps)) continue;
+    const mine = RV.dec.cues[q.key];
+    if (mine === "keep") items.push({ type: "cue", start: q.start, end: q.end, id: q.key, title: "Kept by you", cls: "mine", text: q.text });
+    else if (!mine && !over(q, dubs) && !linesIn(q.start, q.end).length) {
+      items.push({ type: "cue", start: q.start, end: q.end, id: q.key, title: q.kind === "song" ? "Lyric subtitle" : "Subtitle with no line", cls: "plain",
+        why: q.kind === "song" ? "Subtitled as a song; no voice was found under it" : "No voice was found under this subtitle", text: q.text });
+    }
+  }
+  for (const ln of d.lines) {
+    if (over(ln, keeps) || marked(ln, "keep")) continue;
+    const text = ln.english || ln.source;
+    if (ln.kind === "speech") {
+      if (ln.fallback) items.push({ type: "line", start: ln.start, end: ln.end, id: ln.id, title: RV_OUTCOME.japanese, cls: "look", why: ln.fallback, text });
+    } else if (ln.kind === "english" || !(over(ln, dubs) || marked(ln, "dub"))) {
+      items.push({ type: "line", start: ln.start, end: ln.end, id: ln.id, title: RV_KEPT_WHY[ln.kind] || "Kept", cls: "keep", why: ln.kept_why, text });
+    }
+  }
+  return items.sort((a, b) => a.start - b.start);
+}
+// The sections tagged as songs: regions, plus runs of lyric subtitles with no region around them.
+function rvSongSections() {
+  const regs = regionsNow();
+  const out = regs.filter((r) => RV_SONG_KINDS.has(r.kind)).map((r) => ({ start: r.start, end: r.end, r }));
+  let run = null;
+  for (const q of RV.data.cues) {
+    if (q.kind !== "song" || regs.some((r) => overlap(r.start, r.end, q.start, q.end) > 0) || linesIn(q.start, q.end).some((l) => l.kind === "speech")) continue;
+    if (run && q.start - run.end <= RV_SONG_GAP_S) { run.end = q.end; }
+    else { run = { start: q.start, end: q.end, key: q.key }; out.push(run); }
+  }
+  return out.sort((a, b) => a.start - b.start);
+}
+function rvSpanText(a, b) {
+  const qs = RV.data.cues.filter((q) => q.kind !== "sign" && q.kind !== "hi" && overlap(q.start, q.end, a, b) > 0).map((q) => q.text);
+  const t = (qs.length ? qs : linesIn(a, b).map((l) => l.source)).filter(Boolean).join(" · ");
+  return t.length > 140 ? `${t.slice(0, 140)}…` : t;
 }
 function cueLine(q) { return linesIn(q.start, q.end).find((l) => l.kind === "speech" || l.kind === "song"); }
 function setDirty() {
@@ -225,7 +274,7 @@ function rvShell() {
 function rvTabs() {
   const d = RV.data;
   const tabs = [["subs", "Subtitles", d.cues.length || d.lines.length], ["voices", "Voices", d.speakers.length],
-    ["look", "Needs a look", d.flags.length], ["kept", "Kept", regionsNow().filter((r) => r.action === "keep").length],
+    ["look", "Needs a look", d.flags.length], ["kept", "Kept", rvKeptItems().length], ["songs", "Songs", rvSongSections().length],
     ["rules", "Show rules", (d.rules.regions || []).length]];
   $("#rvTabs").innerHTML = tabs.map(([k, t, n]) => `<button data-tab="${k}" class="${RV.tab === k ? "on" : ""}">${t}<span class="n">${n}</span></button>`).join("");
   $("#rvTabs").querySelectorAll("button").forEach((b) => (b.onclick = () => { RV.tab = b.dataset.tab; rvTabs(); rvList(); }));
@@ -385,18 +434,37 @@ function rvList() {
     : `<div class="rv-empty">Nothing flagged. Ai Dub was sure of every decision in this episode.</div>`;
   }
   else if (tab === "kept") {
-    const regs = regionsNow();
-    box.innerHTML = regs.length ? regs.map((r) => `
-      <div class="frow" data-region="${esc(r.id)}"><span class="rv-time muted">${fmtT(r.start, false)}</span>
-        <div><b>${esc(RV_KINDS[r.kind] || "Song")} · ${fmtT(r.start)}–${fmtT(r.end)}
-          ${r.action === "dub" ? `<span class="chip dub">will be dubbed</span>` : r.source === "user" ? `<span class="chip mine">your mark</span>` : ""}</b>
-          <span class="d">${esc((r.reasons || ["marked by you"]).join(" · "))}</span></div></div>`).join("")
-      : `<div class="rv-empty">Nothing keeps the original in this episode.</div>`;
+    const items = rvKeptItems(), dubs = regionsNow().filter((r) => r.action === "dub");
+    box.innerHTML = (items.length ? `<div class="rv-empty" style="padding:8px 10px">Everything that stays in the original: ${items.length} in this episode.</div>`
+        + items.map((it) => (it.type === "region" ? rvRegionRow(it.r) : rvKeptRow(it))).join("")
+      : `<div class="rv-empty">Nothing keeps the original in this episode.</div>`)
+      + (dubs.length ? `<div class="rv-empty" style="padding:8px 10px">Set to be dubbed, so not kept:</div>${dubs.map(rvRegionRow).join("")}` : "");
+  } else if (tab === "songs") {
+    const songs = rvSongSections();
+    box.innerHTML = songs.length ? `<div class="rv-empty" style="padding:8px 10px">${songs.length === 1 ? "1 section tagged as a song" : `${songs.length} sections tagged as songs`}, ${fmtT(songs.reduce((n, s) => n + s.end - s.start, 0), false)} in all.</div>`
+      + songs.map((s) => (s.r ? rvRegionRow(s.r) : rvKeptRow({ type: "cue", start: s.start, end: s.end, id: s.key, title: "Lyric subtitles", cls: "plain",
+        why: "Subtitled as a song; no voice was found under it", text: rvSpanText(s.start, s.end) }))).join("")
+      : `<div class="rv-empty">Nothing is tagged as a song in this episode.</div>`;
   } else if (tab === "rules") box.innerHTML = rvRulesHtml();
   box.scrollTop = keepScroll;
+  rvTabs();  // the counts follow your changes
   rvListWire();
   rvClock();
   rvShowSelected();
+}
+function rvRegionRow(r) {
+  const sel = RV.sel && RV.sel.type === "region" && RV.sel.id === r.id;
+  const text = rvSpanText(r.start, r.end);
+  return `<div class="frow ${sel ? "sel" : ""}" data-region="${esc(r.id)}"><span class="rv-time muted">${fmtT(r.start, false)}</span>
+    <div><b>${esc(RV_KINDS[r.kind] || "Song")} · ${fmtT(r.start)}–${fmtT(r.end)}
+      ${r.action === "dub" ? `<span class="chip dub">will be dubbed</span>` : r.source === "user" ? `<span class="chip mine">your mark</span>` : ""}</b>
+      <span class="d">${esc((r.reasons || ["marked by you"]).join(" · "))}</span>${text ? `<span class="d">${esc(text)}</span>` : ""}</div></div>`;
+}
+function rvKeptRow(it) {
+  const sel = RV.sel && RV.sel.type === it.type && RV.sel.id === it.id;
+  return `<div class="frow ${sel ? "sel" : ""}" data-kept-${it.type}="${esc(String(it.id))}" data-a="${it.start}"><span class="rv-time muted">${fmtT(it.start, false)}</span>
+    <div><b>${fmtT(it.start)}–${fmtT(it.end)}</b><span class="chip ${it.cls}">${esc(it.title)}</span>
+      ${it.why ? `<span class="d">${esc(it.why)}</span>` : ""}${it.text ? `<span class="d">${esc(it.text)}</span>` : ""}</div></div>`;
 }
 function rvShowSelected() {
   // A row chosen from the timeline or "Needs a look" is brought into view, and the list
@@ -504,7 +572,11 @@ function rvListWire() {
   box.querySelectorAll("[data-flag]").forEach((row) => (row.onclick = () => rvGoFlag(Number(row.dataset.flag))));
   box.querySelectorAll("[data-region]").forEach((row) => (row.onclick = () => {
     const r = regionsNow().find((x) => x.id === row.dataset.region);
-    RV.sel = { type: "region", id: r.id }; rvSeek(r.start); rvInspector();
+    RV.sel = { type: "region", id: r.id }; rvSeek(r.start); rvList(); rvInspector();
+  }));
+  box.querySelectorAll("[data-kept-line], [data-kept-cue]").forEach((row) => (row.onclick = () => {
+    RV.sel = row.dataset.keptLine ? { type: "line", id: Number(row.dataset.keptLine) } : { type: "cue", id: row.dataset.keptCue };
+    rvSeek(Number(row.dataset.a)); rvList(); rvInspector();
   }));
   const mode = $("#rvRuleMode");
   if (mode) {
@@ -879,7 +951,7 @@ function rvWhy(q, ln) {
   if (flaggedLine(ln.id)) return `Held notes over music (${ln.sung.toFixed(2)}): the lyrics check decides unless you choose.`;
   if (ln.kind === "speech" && RV.data.flags.some((f) => f.kind === "nosub" && f.lines.includes(ln.id)))
     return "No English subtitle here: translated from what was heard.";
-  return ln.kind === "speech" ? "Spoken line: dubbed." : "Kept in the original (no words to dub).";
+  return ln.kind === "speech" ? "Spoken line: dubbed." : `Kept in the original. ${RV_KEPT_WHY[ln.kind] || "No words to dub"}.`;
 }
 
 // Timeline ---------------------------------------------------------------------------------------------------

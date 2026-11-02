@@ -87,6 +87,11 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
                 "originals": len(svc.store.originals())}
 
     # Browsing --------------------------------------------------------------------------------
+    def dubbed_paths() -> set[str]:
+        """Delivered by a job whose dub wasn't undone afterwards (its original may be gone)."""
+        return {j["path"] for j in svc.store.list({J.DONE})
+                if (j.get("record") or {}).get("delivered") and (j.get("record") or {}).get("verify") not in ("restored", "redo")}
+
     @app.get("/api/browse")
     def browse(path: str = ""):
         if not path:
@@ -99,9 +104,7 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
         if not p.is_dir():
             bad(404, "not a folder")
         queued = {j["path"] for j in svc.store.list(J.ACTIVE)}
-        # Dubbed: delivered by a job whose dub wasn't undone afterwards (its original may be gone).
-        dubbed = {j["path"] for j in svc.store.list({J.DONE})
-                  if (j.get("record") or {}).get("delivered") and (j.get("record") or {}).get("verify") not in ("restored", "redo")}
+        dubbed = dubbed_paths()
         entries = []
         try:
             items = sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower()))
@@ -149,6 +152,10 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
                 files.append(e)
         every = files + [Path(v) for vs in folders.values() for v in vs]
         info, pending = tracks.lookup(every, wait=3.0)
+        # In the queue or dubbed: the language filter treats these as having English, even
+        # while a line redo has the original back in place.
+        handled = {j["path"] for j in svc.store.list(J.ACTIVE)} | dubbed_paths()
+        info = {k: {**v, "handled": True} if k in handled else v for k, v in info.items()}
         return {"files": info, "folders": folders, "pending": pending,
                 "names": {c: tracks_mod.language_name(c) for c in media.LANGUAGES}}
 
@@ -225,8 +232,7 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
         if not root.is_dir():
             bad(404, "not a folder")
         queued = {j["path"] for j in svc.store.list(J.ACTIVE)}
-        dubbed = {j["path"] for j in svc.store.list({J.DONE})
-                  if (j.get("record") or {}).get("delivered") and (j.get("record") or {}).get("verify") not in ("restored", "redo")}
+        dubbed = dubbed_paths()
         out, skipped = [], 0
         for f in sorted(root.rglob("*"), key=lambda x: str(x).lower()):
             if f.name.startswith(".") or not f.is_file() or f.suffix.lower() not in media.VIDEO_EXT:

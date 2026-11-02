@@ -155,12 +155,12 @@ def videos_in(folder: Path, depth: int = 2) -> list[Path]:
 
 
 def matches(info: dict, want: set[str], hide: set[str]) -> bool:
-    """want: show only files with dialogue audio in one of these languages ("und" = untagged).
-    hide: leave out files whose own dialogue audio includes one of these. Tracks Ai Dub added
-    don't count either way: a dubbed file shows as dubbed instead."""
+    """want: show only files with their own dialogue audio in one of these languages ("und" =
+    untagged). hide: leave out files with audio in one of these, a dub Ai Dub added included.
+    Commentary doesn't count either way."""
     if "error" in info:
         return not want  # unreadable: shown unless a language is required
-    langs = {a["lang"] or "und" for a in info.get("audio", []) if not a["aidub"] and not a["commentary"]}
-    if want and not langs & want:
+    audio = [a for a in info.get("audio", []) if not a["commentary"]]
+    if want and not {a["lang"] or "und" for a in audio if not a["aidub"]} & want:
         return False
-    return not langs & hide
+    return not {a["lang"] or "und" for a in audio} & hide

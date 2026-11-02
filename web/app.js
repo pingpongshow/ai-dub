@@ -229,6 +229,13 @@ const langName = (c) => (c ? langNames[c] || c.toUpperCase() : "Unknown");
 function audioLangs(info) {
   return new Set((info.audio || []).filter((a) => !a.aidub && !a.commentary).map((a) => a.lang || "und"));
 }
+// What "Hide if it already has audio in" looks at: a dub Ai Dub added counts, and a title in
+// the queue or already dubbed has, or is getting, English.
+function hideLangs(info) {
+  const langs = new Set((info.audio || []).filter((a) => !a.commentary).map((a) => a.lang || "und"));
+  if (info.handled) langs.add("en");
+  return langs;
+}
 
 // A folder passes when any video in it does (a film's folder: its film).
 function folderPasses(e) {
@@ -256,10 +263,10 @@ function folderLine(e) {
 
 function passesFilter(info) {
   if (!info) return true;  // not read yet
+  const had = hideLangs(info);
+  if (trackFilter.hide.some((l) => had.has(l))) return false;
   if (info.error) return !trackFilter.audio;
-  const langs = audioLangs(info);
-  if (trackFilter.audio && !langs.has(trackFilter.audio)) return false;
-  return !trackFilter.hide.some((l) => langs.has(l));
+  return !trackFilter.audio || audioLangs(info).has(trackFilter.audio);
 }
 
 function trackLine(info) {

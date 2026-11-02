@@ -36,7 +36,7 @@ button.chip { border: 0; cursor: pointer; font: inherit; font-size: 12px; font-w
 .seg button.on { background: var(--bar); color: var(--text); }
 .rv-right { display: flex; flex-direction: column; min-width: 0; min-height: 0; max-height: max(420px, calc(100vh - 430px)); overflow: hidden; }
 .rv-tabs { display: flex; gap: 2px; padding: 8px 10px 0; border-bottom: 1px solid var(--line); overflow-x: auto; }
-.rv-tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; color: var(--muted); padding: 6px 9px; white-space: nowrap; }
+.rv-tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; background: none; color: var(--muted); padding: 6px 7px; white-space: nowrap; }
 .rv-tabs button.on { color: var(--text); border-bottom-color: var(--accent); }
 .rv-tabs .n { font-size: 11px; color: var(--muted); margin-left: 3px; }
 .rv-filter { display: flex; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
@@ -81,7 +81,7 @@ button.chip { border: 0; cursor: pointer; font: inherit; font-size: 12px; font-w
 .frow.open.sel, .frow.done.sel { outline: 2px solid var(--accent); outline-offset: -2px; }
 .frow .chip { display: flex; width: fit-content; }
 .frow b { display: block; font-size: 13px; }
-.frow span.d { color: var(--muted); font-size: 12px; }
+.frow span.d { display: block; color: var(--muted); font-size: 12px; }
 .switch { display: flex; align-items: flex-start; gap: 8px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
 .switch input { margin-top: 3px; }
 .switch small { display: block; color: var(--muted); }
