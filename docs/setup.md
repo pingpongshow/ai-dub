@@ -55,7 +55,7 @@ service it talks to, and only if you switch it on.
 |---|---|---|
 | `/config` | Settings (`config.yaml`), keys (`secrets.yaml`), the job database (`aidub.db`), show profiles, generic voices, the queue pause flag | Small; **back this up** |
 | `/models` | Model environments (`envs/`), weights (`hf/`, `modelscope/`, …), the uv cache | Large; can be downloaded again |
-| `/work` | One `job-<id>` folder per job | Temporary |
+| `/work` | One `job-<id>` folder per job | Temporary; can have its own drive (see [below](#putting-the-work-folder-on-another-drive)) |
 | `/media/movies`, `/media/shows`, `/media/anime` | Your media | Must be **read-write**: the new track is added to the file in place |
 
 The three media paths are the defaults in `config.yaml`. To use other folder
@@ -130,7 +130,8 @@ services:
 
    The template's defaults put models and work under
    `/mnt/user/appdata/ai-dub/`. Point them at a cache pool or other fast disk
-   if you can.
+   if you can. To change this later, see
+   [Putting the work folder on another drive](#putting-the-work-folder-on-another-drive).
 4. Leave **PUID 99 / PGID 100**, which match Unraid's usual media owner.
 
 ### The image
@@ -220,6 +221,57 @@ only if the release notes say so (**Models → Reinstall**).
 Old images build up. Remove the previous one by its ID (`docker images`,
 then `docker rmi <id>`).
 
+## Putting the work folder on another drive
+
+Every job's working files go in `/work`. It's the most heavily written folder:
+allow about 15 GB for each title that is running or waiting to be checked. You
+can put it on any local drive, such as a dedicated SSD, by changing which
+folder on the host is mapped to `/work`. The web page has no setting for this,
+because the container can only see folders that are mapped into it.
+
+**Choosing the drive.** Use a local SSD or NVMe, not a network share. It must
+be mounted before Docker starts. If it isn't, Docker creates an empty folder
+in its place and the work goes to the wrong disk (on Unraid, into RAM). On
+Unraid, add the drive as its own pool under **Main**, and use its direct path
+(`/mnt/scratch/…`) rather than `/mnt/user/…`.
+
+**Moving it:**
+
+1. Pause the queue and let the running job finish. Dubs waiting for review or
+   a check can stay as they are; step 3 takes their files along.
+2. Stop the container.
+3. Copy the folder's contents to the new place. Keep the trailing slashes:
+
+   ```bash
+   rsync -a /old/path/work/ /mnt/scratch/ai-dub-work/
+   ```
+
+4. Change the host side of the mapping, and leave the container side as `/work`:
+   - **Unraid:** Docker → **ai-dub** → **Edit**, set **Work** to
+     `/mnt/scratch/ai-dub-work`, then **Apply**.
+   - **Compose or `docker run`:** change the left side of the volume, as in
+     `/mnt/scratch/ai-dub-work:/work`, and create the container again.
+5. Check that it took. This should name the new drive:
+
+   ```bash
+   docker exec ai-dub df -h /work
+   ```
+
+   Then open a dub that's waiting to be checked and play it.
+6. Resume the queue, and delete the old folder once you're happy.
+
+Don't change the container side or `paths.work`. Saved jobs store full paths
+under `/work`, so they would stop working. If you skip step 3, jobs in progress
+or waiting to be checked lose their working files.
+
+**What stays where it is:**
+
+- **The finished file.** It's written next to the original on your media drive,
+  so that it can be swapped in safely. Delivery needs room there, whichever
+  drive `/work` is on.
+- **Model weights.** `/models` is a separate mapping. Move it the same way if
+  you want it on the new drive too.
+
 ## Backups
 
 Back up `/config`. It holds everything you've taught Ai Dub:
@@ -233,7 +285,8 @@ Copy it while the container is stopped, or at least while no job is running.
 `aidub.db` is SQLite, so copying it mid-write can give a torn copy.
 
 `/models` can be downloaded again. `/work` is temporary, except for dubs
-waiting to be checked: their check previews live there.
+waiting to be checked: their check previews live there. It's large and changes
+constantly, so leave it out of scheduled backups.
 
 ## Removing Ai Dub
 

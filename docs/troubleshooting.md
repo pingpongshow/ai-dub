@@ -164,7 +164,8 @@ changed.
 - **`/work` grows.** Failed jobs keep their working folders so **Retry** can
   resume them, which can be several GB each. Removing a failed job from
   History deletes its folder. So does setting
-  `cleanup.keep_failed_work: false`.
+  `cleanup.keep_failed_work: false`. To give it a drive of its own, see
+  [Putting the work folder on another drive](setup.md#putting-the-work-folder-on-another-drive).
 
   Dubs waiting to be checked keep their check files until you choose
   **Keep the dub** or **Put the original back**. An episode paused at review

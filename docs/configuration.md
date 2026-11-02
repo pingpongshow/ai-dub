@@ -47,7 +47,7 @@ section that should be a mapping isn't (see
 | `TZ` | UTC | Time zone for the times in the logs. |
 | `AIDUB_INSTALL_ON_START` | `false` | `true` installs every missing model when the container starts. |
 | `AIDUB_CONFIG` | `/config/config.yaml` | Another settings file. |
-| `AIDUB_APPDATA`, `AIDUB_MODELS`, `AIDUB_WORK` | `/config`, `/models`, `/work` | Move a data folder inside the container. |
+| `AIDUB_APPDATA`, `AIDUB_MODELS`, `AIDUB_WORK` | `/config`, `/models`, `/work` | Move a data folder inside the container. To use another drive, change the mount instead: see [Putting the work folder on another drive](setup.md#putting-the-work-folder-on-another-drive). |
 | `HF_TOKEN` | — | A Hugging Face token, for a gated model you switched to. The defaults don't need one. Also settable as a key. |
 
 ## Keys
