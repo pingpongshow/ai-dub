@@ -1741,7 +1741,7 @@ def test_faces_name_characters_only_when_their_lines_agree():
     got = F.characters_by_face(lines, rows)
     assert got[6] == "c1" and got[1] == "c1"  # five lines of one face name it; the sixth goes with them
     # Two faces talking, or none: the picture says nothing.
-    both = {"faces": [{"score": 2.0, "print": a}, {"score": 1.0, "print": b}]}
+    both = {"faces": [{"score": 2.0, "print": a}, {"score": 1.8, "print": b}]}
     assert F.speaking_face(both) is None and F.speaking_face({"faces": [{"score": -1.0, "print": a}]}) is None
     # Too few lines, or lines that disagree: no name.
     assert F.characters_by_face(lines[:2], {1: talking(a), 2: talking(a)}) == {}

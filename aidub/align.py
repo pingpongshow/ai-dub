@@ -869,6 +869,7 @@ def classify(job: Job, lines: list[L.Line]) -> None:
     # ordinary dialogue. With English subtitles, a line at the usual dialogue level that
     # has its own subtitle is dialogue; lyrics and chatter have none.
     subtitled = bool(load_chosen(job, "english"))
+    talk = [q for q in load_chosen(job, "english") if q.kind == DIALOGUE and q.text.strip()]
     levels = [ln.loudness_db for ln in lines if ln.kind == L.SPEECH]
     usual = float(np.median(levels)) if levels else 0.0
     for ln in lines:
@@ -894,9 +895,9 @@ def classify(job: Job, lines: list[L.Line]) -> None:
         elif top_lang == "en" and lang != "en" and ln.duration >= 0.8 and not NON_LATIN.search(ln.source_text):
             ln.kind = L.ENGLISH
         elif (ln.kind == L.SPEECH and ln.music_db >= BACKGROUND_DB
-              and not (subtitled and ln.english_ref and ln.loudness_db > usual - BACKGROUND_QUIET_DB)):
+              and not (subtitled and (ln.english_ref or _subtitled(ln, talk)) and ln.loudness_db > usual - BACKGROUND_QUIET_DB)):
             ln.kind = L.BACKGROUND  # the voice is in the music & effects track; a dub can't replace it
-        elif (ln.kind == L.SPEECH and ln.duration <= CROWD_MAX_S
+        elif (ln.kind == L.SPEECH and ln.duration <= CROWD_MAX_S and not _subtitled(ln, talk)
               and overlap_share(turns, ln.start, ln.end) >= CROWD_SHARE):
             ln.kind = L.CROWD     # several people at once: one dubbed voice can't stand in for them
         elif ln.heard_chars == 0 and ln.kind == L.SPEECH:

@@ -14,6 +14,7 @@ from pathlib import Path
 
 from . import lines as L
 
+REACTION_S = 3.0
 FIELDS = ("id", "start", "end", "kind", "kept_why", "music_db", "sung", "loudness_db", "heard_chars", "character",
           "source_text", "english_ref", "events")
 
@@ -45,8 +46,12 @@ def save(appdata: Path, name: str, job_id: int | str, work: Path, qc: dict) -> P
     return out
 
 
-def _dubbed(kind: str) -> bool:
-    return kind == L.SPEECH
+def _dubbed(row: dict) -> bool:
+    """Dubbed in the end: speech, or a short subtitled reply the script step dubs anyway."""
+    if row["kind"] == L.SPEECH:
+        return True
+    return (row["kind"] in (L.WORDLESS, L.BACKGROUND, L.CROWD) and bool(row.get("english_ref"))
+            and row["end"] - row["start"] <= REACTION_S)
 
 
 def compare(saved: dict, lines: list[dict]) -> dict:
@@ -54,18 +59,18 @@ def compare(saved: dict, lines: list[dict]) -> dict:
     gets dubbed: the choice a viewer hears. `before` is the first automatic label."""
     final = [x for x in saved["final"] if x.get("kind")]
 
-    def label(rows: list[dict], a: float, b: float) -> str | None:
+    def label(rows: list[dict], a: float, b: float) -> dict | None:
         best, most = None, 0.0
         for x in rows:
             o = min(x["end"], b) - max(x["start"], a)
             if o > most:
                 best, most = x, o
-        return best["kind"] if best else None
+        return best
 
     wrong_before = wrong_now = same = 0
     missed, extra = [], []
     for x in final:
-        want = _dubbed(x["kind"])
+        want = _dubbed(x)
         was, now = label(saved["automatic"], x["start"], x["end"]), label(lines, x["start"], x["end"])
         if now is None:
             continue
@@ -73,7 +78,7 @@ def compare(saved: dict, lines: list[dict]) -> dict:
         wrong_before += was is not None and _dubbed(was) != want
         if _dubbed(now) != want:
             wrong_now += 1
-            (missed if want else extra).append({"start": x["start"], "text": x.get("source_text", ""), "now": now,
+            (missed if want else extra).append({"start": x["start"], "text": x.get("source_text", ""), "now": now["kind"],
                                                 "final": x["kind"], "english": x.get("english_ref", "")})
     return {"name": saved.get("name"), "lines": same, "wrong_before": wrong_before, "wrong_now": wrong_now,
             "should_dub": missed, "should_keep": extra}

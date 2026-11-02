@@ -10,6 +10,7 @@ DETECT_EVERY = 5     # frames between face searches; boxes are drawn in between
 MAX_LINE_S = 12.0
 MIN_FRAMES = 10
 FACE_MIN = 40        # pixels, in the 640 wide search frame
+WATCH_WIDTH = 960    # frames are read this wide: plenty for the model's 112 pixel faces
 WEIGHTS = {
     "pretrain_AVA_CVPR.model": "https://github.com/Junhua-Liao/Light-ASD/raw/main/weight/pretrain_AVA_CVPR.model",
     "face_detection_yunet_2023mar.onnx": "https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx",
@@ -142,7 +143,7 @@ def _read(cap, start, end):
             at = cap.get(cv2.CAP_PROP_POS_MSEC) / 1000
         if not ok:
             break
-        out.append(frame)
+        out.append(cv2.resize(frame, (WATCH_WIDTH, frame.shape[0] * WATCH_WIDTH // frame.shape[1])))
         t += 0.04
     return out
 
@@ -153,12 +154,10 @@ def analyse(args):
     import numpy as np
     import python_speech_features
     import soundfile as sf
-    audio, sr = sf.read(args["audio"], dtype="int16")
-    if audio.ndim > 1:
-        audio = audio[:, 0]
+    audio, sr = sf.read(args["audio"], dtype="float32")  # (reading a float file as int16 gives zeros)
+    audio = (audio[:, 0] if audio.ndim > 1 else audio) * 32767
     cap = cv2.VideoCapture(args["video"])
-    width = cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 640
-    scale = min(1.0, 640 / width)
+    scale = min(1.0, 640 / WATCH_WIDTH)
     out = []
     try:
         for ln in args["lines"]:

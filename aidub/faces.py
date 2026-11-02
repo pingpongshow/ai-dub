@@ -18,8 +18,8 @@ from . import lines as L
 from . import workers
 from .job import Job
 
-TALKING = 0.0         # a face's mean talking score over this is talking ...
-OTHERS_BELOW = 0.0    # ... when no other face in the line is
+TALKING = 0.3         # a face's mean talking score over this is talking ...
+CLEAR_BY = 0.5        # ... when no other face in the line comes within this of it
 SAME_FACE = 0.40      # face prints this alike are one person
 MIN_VOTES = 4         # a face names a character from at least this many of its lines ...
 MIN_SHARE = 0.6       # ... this many of them agreeing
@@ -29,7 +29,7 @@ BATCH = 40
 def speaking_face(row: dict) -> list[float] | None:
     """The print of the one face clearly talking in a line; None if none or several are."""
     faces = sorted(row.get("faces", []), key=lambda f: -f["score"])
-    if not faces or faces[0]["score"] <= TALKING or (len(faces) > 1 and faces[1]["score"] > OTHERS_BELOW):
+    if not faces or faces[0]["score"] <= TALKING or (len(faces) > 1 and faces[0]["score"] - faces[1]["score"] < CLEAR_BY):
         return None
     return faces[0].get("print") or None
 
