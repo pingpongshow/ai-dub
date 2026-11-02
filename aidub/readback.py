@@ -77,16 +77,17 @@ def voice_channels(data: np.ndarray) -> np.ndarray:
     return data[:, :3].mean(axis=1, keepdims=True) if data.shape[1] >= 6 else data
 
 
-def hard_to_hear(text: str, heard: str, missed: list[str]) -> bool:
-    """Key words lost in the mix: any in a short line, two or more in a long one. (A line
-    the recogniser hears with nothing of it at all counts whatever its length.)"""
+def hard_to_hear(text: str, heard: str, lost: list[str]) -> bool:
+    """Lost in the mix: nothing of it heard, or key words the take alone said clearly: all of
+    a short line's, or two or more. (One word heard differently in a sentence is more often
+    the recogniser's slip over music than anything a viewer would miss.)"""
     from .speak import _words
     words = _words(text)
     if not words:
         return False
     if not _words(heard):
         return True
-    return len(missed) >= (1 if len(words) <= 6 else 2)
+    return len(lost) >= 2 or (len(words) <= 3 and len(lost) >= 1)
 
 
 def run(job: Job) -> None:
@@ -129,24 +130,25 @@ def run(job: Job) -> None:
             heard += w.call("transcribe", {"items": [{"path": p} for p in items[i:i + 16]], "language": "en",
                                            "timestamps": False})["results"]
             job.status(f"listening back {min(i + 16, len(items))}/{len(items)}", progress=min(1.0, (i + 16) / len(items)))
-    lost = 0
+    hard = 0
     for ln, r in zip(todo, heard):
         text = r.get("text", "")
-        missed = [] if speak.pronounce.only_sounds(speak._words(ln.en)) else [
-            w for w in speak.missed_words(ln.en, text, names) if w != "not" or speak._negations(speak._words(ln.en))]
+        sounds = speak.pronounce.only_sounds(speak._words(ln.en))
+        # Only what the take itself said clearly counts: a word it mangled is flagged already.
+        unclear_before = set(speak.missed_words(ln.en, str(ln.fit.get("heard", "")), names)) if ln.fit.get("heard") else set()
+        lost = [] if sounds else [w for w in speak.missed_words(ln.en, text, names) if w != "not" and w not in unclear_before]
         ln.fit.update({"mix_heard": text, "mix_wer": round(speak.wer(ln.en, text, names), 3)})
-        # (A neighbouring line at the clip's edge can't make a line count as lost: only its own words count.)
-        if hard_to_hear(ln.en, text, missed) and not speak.pronounce.only_sounds(speak._words(ln.en)):
-            ln.fit["mix_missed"] = missed or ["all of it"]
-            lost += 1
+        if not sounds and hard_to_hear(ln.en, text, lost):
+            ln.fit["mix_missed"] = lost or ["all of it"]
+            hard += 1
         else:
             ln.fit.pop("mix_missed", None)
     L.save(lines, job.path("lines.json"))
     for p in items:
         Path(p).unlink(missing_ok=True)
-    clear = 1 - lost / len(todo)
-    job.qc["readback"].update({"lines": len(todo), "hard_to_hear": lost, "clear_share": round(clear, 4)})
+    clear = 1 - hard / len(todo)
+    job.qc["readback"].update({"lines": len(todo), "hard_to_hear": hard, "clear_share": round(clear, 4)})
     least = float(job.cfg.get("readback.min_clear", 0.5))
     if clear < least and len(todo) >= 20 and not job.options.get("preview_s"):
         raise ReadbackError(f"only {clear:.0%} of the English lines can be heard in the finished track; nothing was delivered")
-    job.status(f"{len(todo) - lost} of {len(todo)} lines heard clearly in the finished track")
+    job.status(f"{len(todo) - hard} of {len(todo)} lines heard clearly in the finished track")

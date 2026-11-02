@@ -23,6 +23,7 @@ import difflib
 import queue
 import re
 import threading
+import unicodedata
 from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -56,7 +57,7 @@ CONTRACTIONS = {"it's": "it is", "i'm": "i am", "you're": "you are", "we're": "w
                 "don't": "do not", "doesn't": "does not", "didn't": "did not", "can't": "cannot", "won't": "will not",
                 "isn't": "is not", "aren't": "are not", "wasn't": "was not", "i'll": "i will", "you'll": "you will",
                 "we'll": "we will", "i've": "i have", "you've": "you have", "i'd": "i would", "let's": "let us",
-                "gonna": "going to", "wanna": "want to", "gotta": "got to", "outta": "out of", "kinda": "kind of",
+                "o'clock": "oclock", "gonna": "going to", "wanna": "want to", "gotta": "got to", "outta": "out of", "kinda": "kind of",
                 "sorta": "sort of", "lemme": "let me", "gimme": "give me", "dunno": "do not know",
                 "alright": "all right", "ok": "okay", "dammit": "damn it", "goddammit": "god damn it", "c'mon": "come on"}
 
@@ -106,6 +107,7 @@ def said_as(text: str) -> str:
     text = re.sub(r"(?<=\d),(?=\d{3}\b)", "", text)
     text = re.sub(r"¥\s*(\d+)(?:\s+yen\b)?", r"\1 yen", text, flags=re.I)
     text = UNIT_RE.sub(_unit, text)
+    text = re.sub(r"(?<![\d:])(\d{1,2}):00\b(?!:)", r"\1 o'clock", text)
     text = re.sub(r"\$(\d+)\.(\d\d)\b", r"\1 dollars \2", text)
     text = re.sub(r"\$(\d+)\b", lambda m: m.group(1) + (" dollar" if m.group(1) == "1" else " dollars"), text)
     text = re.sub(r"(?<=\d)\.(\d+)", lambda m: " point " + " ".join(m.group(1)), text)
@@ -113,9 +115,14 @@ def said_as(text: str) -> str:
     return re.sub(r"\bNo\.\s*(?=\d)", "Number ", text)
 
 
+def _plain(text: str) -> str:
+    """Without accents: "Consommé" is one word to compare, not "consomm"."""
+    return "".join(c for c in unicodedata.normalize("NFKD", text) if not unicodedata.combining(c))
+
+
 def _words(text: str) -> list[str]:
     out = []
-    for w in re.findall(r"[a-z0-9']+", said_as(text).lower().replace("’", "'")):
+    for w in re.findall(r"[a-z0-9']+", _plain(said_as(text)).lower().replace("’", "'")):
         if w not in CONTRACTIONS:
             if w.endswith("'s") and w[:-2] in IS_CONTRACTED:  # "who's" = "who is" (not a possessive)
                 w = w[:-2] + " is"
@@ -282,7 +289,7 @@ def missed_words(text: str, heard: str, names: frozenset = frozenset()) -> list[
     Names (capitalised mid-sentence) are left out: recognition spells them its own
     way. A word heard with another spelling that sounds the same counts as heard
     (see pronounce). A negation lost or added counts as missed."""
-    found = list(re.finditer(r"[A-Za-z0-9'’]+(?:-[A-Za-z0-9'’]+)*", text))
+    found = list(re.finditer(r"[A-Za-z0-9'’]+(?:-[A-Za-z0-9'’]+)*", _plain(text)))
     raw = [m.group(0) for m in found]
 
     def opens_sentence(pos: int) -> bool:
@@ -407,9 +414,9 @@ def _past_cleanup(text: str) -> str:
     """The voice model rewrites text before reading it, in ways that change the line
     (tested against its normaliser): "No." is read "number" and "Gen." "general"; "Sat
     down" "Saturday down"; "TV" "television"; "it's", "what's", "that's" (and "she's
-    gotten") "it is", "what is", "she is gotten"; a line of only digits is read in
-    Chinese ("73000." came out "seventy-three zero"). These forms get past that."""
-    text = re.sub(r"(?<=[A-Za-z])'(?=[a-z])", "’", text)
+    gotten") "it is", "what is", "she is gotten" (stopped in the voice worker); a line of
+    only digits is read in Chinese ("73000." came out "seventy-three zero"). These forms
+    get past the rest."""
     text = re.sub(r"\b(No|NO)(\.+)", r"\1 \2", text)
     text = re.sub(r"\bGen\.(?=\s*$|\s+[a-z]|\s+(?:" + "|".join(sorted(w.capitalize() for w in STOPWORDS)) + r")\b)", "Gen .", text)
     text = re.sub(r"\b(Sat|Sun|Mon|Wed|Fri|Tu|Th|Thur|Thurs)\b", lambda m: m.group(1).lower(), text)

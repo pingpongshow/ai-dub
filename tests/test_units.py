@@ -1571,12 +1571,13 @@ def test_relisten_skips_lines_past_the_audio(tmp_path):
 def test_voice_text_gets_past_its_normaliser():
     from aidub import speak
     assert speak.spoken("No.") == "No ." and speak.spoken("No... No.") == "No ... No ."
-    assert speak.spoken("It's been fun.") == "It’s been fun." and speak.spoken("Oh no.") == "Oh no."
+    assert speak.spoken("It's been fun.") == "It's been fun." and speak.spoken("Oh no.") == "Oh no."
     assert speak.spoken("Room No. 12.") == "Room Number 12."
     assert speak.spoken("Sat down. Unlike you, Gen. You must see TV.") == "sat down. Unlike you, Gen . You must see T V."
     assert speak.spoken("Gen. Yamada.") == "Gen. Yamada."
     assert speak.spoken("73,000.") == "Seventy three thousand." and speak.spoken("1980.") == "Nineteen eighty."
-    assert speak.spoken("7:00.") == "Seven o’clock." and speak.spoken("7:05") == "Seven oh five"
+    assert speak.spoken("7:00.") == "7 o'clock." and speak.spoken("7:05") == "Seven oh five"
+    assert speak.wer("7:00.", "Seven o'clock.") == 0
     assert speak.spoken("¥1,224,560 Yen.") == "1224560 yen." and speak.spoken("Those are 25cm guns.") == "Those are 25 centimeters guns."
 
 
@@ -1639,9 +1640,9 @@ def test_listen_back_finds_a_silent_stretch():
 def test_listen_back_hard_to_hear():
     from aidub import readback as R
     assert R.hard_to_hear("Get out of here.", "", [])
-    assert R.hard_to_hear("Watch the door.", "Watch.", ["door"])
-    assert not R.hard_to_hear("I told you to wait for me at the old station.", "I told you to wait at the old station.", ["wait"][:0])
-    assert not R.hard_to_hear("I told you to wait for me at the old station.", "I told you to wait for me at the old stat.", ["station"])
+    assert R.hard_to_hear("Watch out.", "Watch.", ["out"])
+    assert not R.hard_to_hear("Leave his hat on the table.", "Leave his hut on the table.", ["hat"])
+    assert R.hard_to_hear("I want fatty pork in mine.", "I want ninety.", ["fatty", "pork", "mine"])
     ln = L.Line(1, 10.0, 12.0, fit={"placed": 10.5, "final": 2.6, "paced_tempo": 1.3})
     assert R.placed(ln) == (10.5, 12.5)
 
@@ -1771,3 +1772,10 @@ def test_one_face_two_characters_is_said_not_acted_on():
     rows = {i: {"faces": [{"score": 2.0, "print": a}]} for i in range(1, 13)}
     assert F.split_people(lines, rows) == [["c1", "c2"]]
     assert F.split_people(lines[:6], rows) == []
+
+
+def test_backcheck_keeps_accented_words_whole():
+    from aidub import speak
+    assert speak._words("Consommé. Sole meunière.") == ["consomme", "sole", "meuniere"]
+    assert speak.wer("Consommé, please.", "Consomme please.") == 0
+    assert speak.missed_words("Sole meunière, please.", "Sole meuniere please.") == []

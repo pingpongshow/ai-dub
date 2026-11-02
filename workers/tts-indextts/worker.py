@@ -25,6 +25,10 @@ def _weights(repo: str) -> Path:
 
 def load(args):
     from indextts.infer_v2_5 import IndexTTS2
+    from indextts.utils.front import TextNormalizer
+    # The model's text step turns every "it's", "what's", "she's" into "it is", "what is", "she is"
+    # ("She is gotten to you"). Never matching keeps people's contractions as they speak.
+    TextNormalizer.ENGLISH_CONTRACTION_PATTERN = r"(?!)(x)"
     repo = args.get("model") or REPO
     d = _weights(repo)
     state["tts"] = IndexTTS2(cfg_path=str(d / "config.yaml"), model_dir=str(d), use_bf16=device() == "cuda",

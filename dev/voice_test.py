@@ -1,7 +1,7 @@
 """A blind listening page for #10: lines the voice check moved off their character.
 
 Each line the app voiced from its own short clip (because its voice print "didn't match")
-is voiced again in the character's usual voice. The page plays the original and, in random
+is voiced again both ways, from that clip and in the character's usual voice. The page plays the original and, in random
 order with no labels, the two versions, each on its own row to mark Acceptable or Poor.
 Results stay on the server: feedback.json next to the page, key.json says which was which.
 Works on copies; nothing of the job changes.
@@ -63,22 +63,28 @@ def main():
         dlg, sr = media.read_wav(live / "audio" / "dialogue.wav", mono=True)
         reqs = []
         for ln in pool:
+            # Both voiced now, the same way: the voice is the only difference.
             voice = str(prof.root / prof.refs(ln.character)[0]["file"])
-            r = S._requests(job, ln, ln.en, 1, "bank", dlg, sr, voice=voice)[0]
-            r["speaker_ref"] = voice
-            ln.fit["bank"] = r["out"]
-            reqs.append(r)
+            own = S._requests(job, ln, ln.en, 1, "own", dlg, sr)[0]
+            own["speaker_ref"] = str(S._orig_clip(job, ln, dlg, sr))
+            bank = S._requests(job, ln, ln.en, 1, "bank", dlg, sr, voice=voice)[0]
+            bank["speaker_ref"] = voice
+            ln.fit["own"], ln.fit["bank"] = own["out"], bank["out"]
+            reqs += [own, bank]
         if reqs:
             with job.worker("speak") as w:
                 S._load_tts(job, w)
                 S._synthesize(job, w, reqs, "voice test")
+            for r in reqs:
+                if Path(r["out"]).exists():
+                    S.F.trim(Path(r["out"]))
         cfg.data["paths"]["work"] = str(live_work)
         for ln in pool:
             item = f"j{jid}-{ln.id}"
             orig = dlg[int(ln.start * sr): int(ln.end * sr)]
             media.write_wav(page / "o.wav", orig, sr)
             enc(page / "o.wav", page / f"{item}-source.m4a")
-            versions = [("own", live / "lines" / f"{ln.id:05d}" / "final.wav"), ("bank", Path(ln.fit["bank"]))]
+            versions = [("own", Path(ln.fit["own"])), ("bank", Path(ln.fit["bank"]))]
             rnd.shuffle(versions)
             for k, (which, p) in enumerate(versions):
                 if not p.exists():

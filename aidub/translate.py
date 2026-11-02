@@ -903,6 +903,8 @@ def split_two_voices(job: Job, lines: list[L.Line]) -> list[L.Line]:
         if abs(len(" ".join(parts[:k])) / len(ln.en) - share) > 0.3:
             continue
         second = next(t["speaker"] for t in here if t["speaker"] != first and t["start"] >= change)
+        if chars.get(second, ln.character) == chars.get(first, ln.character):
+            continue
         other = dc_replace(ln, id=next_id, start=round(change, 3), en=" ".join(parts[k:]), en_short="", words=[w for w in ln.words if w.start >= change],
                            speaker=second, character=chars.get(second, ln.character), voice="", voice_note="",
                            source_text=join_words_of(ln, change, True), take_scores={}, fit={})
