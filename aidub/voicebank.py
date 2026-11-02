@@ -307,6 +307,7 @@ def assign_voices(job: Job, prof: Profile, lines: list[L.Line], voices: dict[int
     own = 0
     by_face = faces.characters_by_face(lines, faces.load(job))
     moved_by_face = 0
+    prefer_own = bool(job.cfg.get("speakers.prefer_own_clip", True))
     elsewhere = own_voice_clips(job, prof, lines, own_min)
     for ln in lines:
         if ln.kind != L.SPEECH:
@@ -346,6 +347,10 @@ def assign_voices(job: Job, prof: Profile, lines: list[L.Line], voices: dict[int
                 if face and face != ln.character and face_fits(prof, face, v):
                     ln.character = face
                     moved_by_face += 1
+        # By ear, blind, over 48 lines: voiced from their own clip 36 acceptable, in the character's
+        # usual voice 16. A line too short to clone from, or with a second voice in it, stays as above.
+        if prefer_own and ln.voice and ln.duration >= own_min and not ln.overlap:
+            ln.voice, ln.voice_note = "", "own line as reference"
                 what = "gender" if wrong_gender else "age" if wrong_age else "voice"
                 ln.voice_note = f"own line as reference ({what} didn't match {ch.get('name') or 'the character'})"
                 own += 1

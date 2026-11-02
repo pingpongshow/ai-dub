@@ -254,10 +254,11 @@ function vfActionHtml(lid) {
   const r = VF.redo[lid];
   if (!r) {
     return `<div class="row" style="gap:6px"><button class="sm" data-vo="${lid}" title="Voice this line again with the same words: fresh takes, the best one is kept">↻ Voice again</button>
+      <button class="sm" data-vv="${lid}" title="Voice it again with the other voice: from this line's own clip, or in the character's usual voice">Try the other voice</button>
       <button class="sm ghost" data-vw="${lid}" title="Change the English, then voice it again">Change words…</button>
       <a class="button sm ghost" href="#review/${VF.id}/${lid}" title="Give the line to another speaker on the review page">Other speaker…</a></div>`;
   }
-  return `<div class="vf-marked"><span class="chip dub">↻ Will be voiced again${r.en != null ? " with your words" : ""}</span>
+  return `<div class="vf-marked"><span class="chip dub">↻ Will be voiced again${r.other_voice ? " in the other voice" : ""}${r.en != null ? " with your words" : ""}</span>
       ${r.en != null ? `<textarea rows="2" data-ven="${lid}" aria-label="English to voice">${esc(r.en)}</textarea>
         <span class="small muted">Saved as you type. Sent with the others when you press “Voice them again”.</span>` : ""}
       <div class="row" style="gap:6px">${r.en == null ? `<button class="sm ghost" data-vw="${lid}">Change words…</button>` : ""}
@@ -270,6 +271,12 @@ function vfActions() {
     e.stopPropagation();
     const box = b.closest(".vf-act");
     VF.redo[b.dataset.vo] = {}; vfRedoSave(); vfActions();
+    box.scrollIntoView({ block: "nearest" });
+  }));
+  root.querySelectorAll("[data-vv]").forEach((b) => (b.onclick = (e) => {
+    e.stopPropagation();
+    const box = b.closest(".vf-act");
+    VF.redo[b.dataset.vv] = { other_voice: true }; vfRedoSave(); vfActions();
     box.scrollIntoView({ block: "nearest" });
   }));
   root.querySelectorAll("[data-vw]").forEach((b) => (b.onclick = (e) => {
@@ -315,7 +322,7 @@ async function vfRedoGo() {
   const lines = {};
   for (const lid of ids) {
     const en = (VF.redo[lid].en || "").trim();
-    lines[lid] = en && en !== (VF.en[lid] || "") ? { en } : {};
+    lines[lid] = { ...(en && en !== (VF.en[lid] || "") ? { en } : {}), ...(VF.redo[lid].other_voice ? { other_voice: true } : {}) };
   }
   const words = Object.values(lines).filter((x) => x.en).length;
   if (!confirm(`Voice ${ids.length} line${ids.length === 1 ? "" : "s"} again${words ? ` (${words} with your words)` : ""}?\n\n`

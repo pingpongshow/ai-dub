@@ -213,8 +213,8 @@ Before any of this, the **Listen back** step has already heard the finished
 track: a track silent while the original plays, or one where most lines can't be
 made out, stops the job with the original untouched.
 
-A line that came out wrong (a word missing or mangled) can be fixed right
-there:
+A line that came out wrong (a word missing or mangled, or a voice that isn't
+them: **Try the other voice**) can be fixed right there:
 
 - **↻ Voice again** keeps the same words.
 - **Change words…** lets you edit the English first.

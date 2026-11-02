@@ -171,6 +171,7 @@ ones you're most likely to want are below.
 | `songs.detect_by_pitch` | `true` | Find sung passages by held notes over music |
 | `songs.match_episodes` | `true` | Find the opening and ending shared with neighbouring episodes in the folder |
 | `speakers.link_threshold` | `0.62` | How alike two voices must sound (cosine similarity) to be treated as one speaker. Raise it if different people get merged; lower it if one person is split in two. |
+| `speakers.prefer_own_clip` | `true` | Voice each line from its own clip, not the character's usual voice. In a blind listening test the own clip was acceptable on 36 of 48 lines, the usual voice on 16. On the check screen, **Try the other voice** swaps one line. |
 | `speak.takes` | `2` | Takes voiced per line; the best one is kept |
 | `speak.redo_takes` | `4` | Takes for a line you send back from the check screen, with new seeds each time |
 | `speak.processes` | `2` | Voice-model processes sharing the GPU |

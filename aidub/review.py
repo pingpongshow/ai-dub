@@ -417,6 +417,16 @@ def can_redo_lines(work: Path) -> bool:
     return can_redub(work) and (work / "lines").is_dir() and (work / "lines.json").exists()
 
 
+def other_voice(prof, ln: L.Line) -> None:
+    """Swap a line between its own clip and its character's usual voice. By ear, nearly every
+    time exactly one of the two is right (23 of 24 lines), and nothing measured says which."""
+    refs = prof.refs(ln.character)
+    if ln.voice or not refs:
+        ln.voice, ln.voice_note = "", "own line as reference (your choice)"
+    else:
+        ln.voice, ln.voice_note = str(prof.root / refs[0]["file"]), "usual voice (your choice)"
+
+
 def reset_for_lines(work: Path, live: Path, changes: dict[int, dict], prof) -> list[int]:
     """Back to just before voicing, with every take kept but those of the lines to redo;
     their English and speaker as the user set them. The original is back at `live` by now."""
@@ -432,6 +442,8 @@ def reset_for_lines(work: Path, live: Path, changes: dict[int, dict], prof) -> l
             ln.en, ln.en_short, ln.en_from = str(ch["en"]).strip(), "", "user"
         if prof:
             choose_voice(prof, ln, ch)
+            if ch.get("other_voice"):
+                other_voice(prof, ln)
         if ln.kind != L.SPEECH:
             ln.kind, ln.kept_why = L.SPEECH, ""
         ln.decided, ln.fallback, ln.take, ln.take_scores, ln.fit, ln.check_note = "dub", "", "", {}, {}, ""

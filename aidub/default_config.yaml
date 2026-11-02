@@ -104,6 +104,8 @@ speakers:
   max_refs_per_character: 8
   ref_min_s: 3.0
   ref_max_s: 15.0
+  own_line_min_s: 0.5       # shortest line that can be voiced from its own clip
+  prefer_own_clip: true     # voice each line from its own clip (36 of 48 acceptable by ear); false: the character's usual voice (16 of 48)
 
 speak:
   takes: 2

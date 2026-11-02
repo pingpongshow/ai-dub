@@ -1779,3 +1779,18 @@ def test_backcheck_keeps_accented_words_whole():
     assert speak._words("Consommé. Sole meunière.") == ["consomme", "sole", "meuniere"]
     assert speak.wer("Consommé, please.", "Consomme please.") == 0
     assert speak.missed_words("Sole meunière, please.", "Sole meuniere please.") == []
+
+
+def test_other_voice_swaps_between_own_clip_and_usual_voice():
+    from pathlib import Path
+    from types import SimpleNamespace
+    from aidub import review
+    prof = SimpleNamespace(root=Path("/p"), refs=lambda c: [{"file": "a.flac"}] if c == "c1" else [])
+    ln = L.Line(1, 0, 1, character="c1", voice="", voice_note="own line as reference")
+    review.other_voice(prof, ln)
+    assert ln.voice == "/p/a.flac" and ln.voice_note.endswith("(your choice)")
+    review.other_voice(prof, ln)
+    assert ln.voice == "" and ln.voice_note.endswith("(your choice)")
+    nobody = L.Line(2, 0, 1, character="c9", voice="")
+    review.other_voice(prof, nobody)
+    assert nobody.voice == ""
