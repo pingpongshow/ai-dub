@@ -64,6 +64,7 @@ ingest:
   song_chapters: [opening, op, intro, ending, ed, outro, preview, insert song, song, credits]  # kept in the original
 
 subtitles:
+  require: true            # no English subtitle fit to be the script: wait for your OK per file, instead of dubbing from the speech
   min_score: 0.65          # a subtitle for another episode scores under ~0.5
   providers:
     embedded:      { enabled: true }

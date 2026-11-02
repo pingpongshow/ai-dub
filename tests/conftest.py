@@ -22,6 +22,7 @@ def cfg(tmp_path, monkeypatch):
         "gpu": {"wait": False},
         "speak": {"takes": 2},
         "readback": {"min_clear": 0.0},  # the stand-in recogniser hears nothing English in a mix
+        "subtitles": {"require": False},  # most tests' files have no subtitles; test_subtitles_are_required turns this on
     }
     path = tmp_path / "config.yaml"
     path.write_text(yaml.safe_dump(conf))

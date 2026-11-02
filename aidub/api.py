@@ -296,6 +296,21 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
             bad(409, str(exc))
         return {"ok": True}
 
+    @app.post("/api/jobs/{jid}/subtitles/{action}")
+    def job_subtitles(jid: int, action: str):
+        try:
+            if action == "dub-from-speech":
+                svc.allow_speech(jid)
+            elif action == "recheck":
+                svc.recheck_subtitles(jid)
+            else:
+                bad(404, "no such action")
+        except KeyError:
+            bad(404, "no such job")
+        except ValueError as exc:
+            bad(409, str(exc))
+        return {"ok": True}
+
     @app.post("/api/jobs/{jid}/review/start")
     def review_start(jid: int, body: dict = Body(...)):
         try:
@@ -604,7 +619,8 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
             r = j.get("record") or {}
             name = Path(j["path"]).name
             if j["status"] == J.REVIEW:
-                out.append({"t": r.get("paused_at") or j.get("started") or j.get("created"), "kind": "review", "id": j["id"],
+                out.append({"t": r.get("paused_at") or j.get("started") or j.get("created"),
+                            "kind": "subtitles" if r.get("needs_subtitles") else "review", "id": j["id"],
                             "name": name, "text": j.get("message") or "waiting for review"})
             elif j["status"] == J.DONE and j.get("finished"):
                 v = r.get("verify")

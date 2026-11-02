@@ -27,6 +27,20 @@ class Paused(Exception):
     from the step that paused."""
 
 
+class NeedsSubtitles(Paused):
+    """No English subtitle fit to be the script. A dub from the speech is much worse, so it
+    only happens when the user says so for this file (options: speech_ok)."""
+
+    def __init__(self, why: str):
+        super().__init__(why)
+        self.why = why
+
+
+def require_subtitles(job: "Job", why: str) -> None:
+    if job.cfg.get("subtitles.require", True) and not job.options.get("speech_ok") and not job.options.get("preview_s"):
+        raise NeedsSubtitles(why)
+
+
 class Job:
     def __init__(self, cfg: Config, job_id: int | str, src: Path, profile, options: dict | None = None,
                  *, on_status: Callable[[dict], None] | None = None,

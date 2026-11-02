@@ -55,6 +55,12 @@ lines that don't fit → restore full bandwidth → mix → listen back → deli
 file) → [check]
 ```
 
+A dub from subtitles is far more accurate than one from the speech, so a file with no
+English subtitles (in the file, next to it or from Bazarr) waits under **Waiting for
+you** as soon as it is added, before any work starts. Add a subtitle and look again, or
+choose to dub that one file from the speech. So does a file whose subtitles turn out not
+to match the speech, though that can only be told after its speech is analysed.
+
 Each step is checkpointed: a job that is stopped or interrupted (a container
 restart, say) carries on from its first unfinished step.
 

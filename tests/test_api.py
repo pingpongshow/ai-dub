@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import synth
+from aidub import jobs as J
 from aidub.api import create_app
 from aidub.service import Service
 
@@ -400,3 +401,96 @@ def test_pause_events_episodes_originals_and_bazarr_test(client, cfg, media_root
     assert o["items"] and o["items"][0]["check_pending"] and o["disks"] and o["disks"][0]["free"] > 0
     # Bazarr: no address or key, a plain answer rather than an error.
     assert c.post("/api/bazarr/test", json={"url": ""}).json()["ok"] is False
+
+
+def _requiring_subtitles(cfg):
+    cfg.data["subtitles"]["require"] = True
+    return Service(cfg)
+
+
+def test_no_subtitles_waits_before_any_work_starts(cfg, media_root):
+    show = media_root / "No Subs"
+    show.mkdir()
+    ep = synth.episode(show / "No Subs - S01E01.mkv")
+    other = synth.episode(show / "No Subs - S01E02.mkv")
+    (other.with_suffix(".en.srt")).write_text("1\n00:00:01,000 --> 00:00:02,000\nHello there\n")
+    svc = _requiring_subtitles(cfg)
+    before = ep.read_bytes()
+    jid = svc.add(str(ep))
+    svc.run_one(svc.store.next_queued())
+    j = svc.store.get(jid)
+    assert j["status"] == J.REVIEW and "No English subtitles" in j["record"]["needs_subtitles"] and "Bazarr" in j["message"]
+    assert not (cfg.work / f"job-{jid}").exists() and ep.read_bytes() == before  # nothing started
+    # Others carry on: it isn't picked again.
+    second = svc.add(str(other))
+    assert svc.store.next_queued()["id"] == second
+    svc.store.update(second, status=J.CANCELLED)
+    # Looking again with nothing new: waits again, still with nothing started.
+    svc.recheck_subtitles(jid)
+    svc.run_one(svc.store.next_queued())
+    assert svc.store.get(jid)["status"] == J.REVIEW and not (cfg.work / f"job-{jid}").exists()
+    # The override, for this file only.
+    svc.allow_speech(jid)
+    assert svc.store.get(jid)["options"]["speech_ok"] is True
+    svc.run_one(svc.store.next_queued())
+    assert svc.store.get(jid)["status"] == J.DONE
+    # Only a job waiting for this can be overridden.
+    with pytest.raises(ValueError):
+        svc.allow_speech(jid)
+    # Removing one that never started.
+    third = svc.add(str(synth.episode(show / "No Subs - S01E03.mkv")))
+    svc.run_one(svc.store.next_queued())
+    assert svc.store.get(third)["status"] == J.REVIEW
+    svc.cancel(third)
+    assert svc.store.get(third)["status"] != J.REVIEW
+
+
+def test_a_subtitle_next_to_the_file_or_from_bazarr_passes_the_first_check(cfg, media_root, monkeypatch):
+    from aidub.subtitles import preflight
+    show = media_root / "Subs"
+    show.mkdir()
+    ep = synth.episode(show / "Subs - S01E01.mkv")
+    assert "isn't set up" in preflight.missing_subtitles(cfg, ep)
+    ep.with_suffix(".ja.srt").write_text("1\n00:00:01,000 --> 00:00:02,000\nこんにちは\n")
+    assert preflight.missing_subtitles(cfg, ep)  # Japanese isn't English
+    cfg.data["subtitles"].setdefault("providers", {})["bazarr"] = {"enabled": True, "url": "http://b", "api_key": "k"}
+
+    class Fake:
+        found = {"type": "movie", "radarrid": 1, "subtitles": []}
+        def __init__(self, *a): pass
+        def close(self): pass
+        def find(self, path): return self.found
+        def search(self, rec, lang): ep.with_suffix(".en.srt").write_text("1\n00:00:01,000 --> 00:00:02,000\nHello\n")
+    monkeypatch.setattr(preflight, "Bazarr", Fake)
+    Fake.found = None
+    assert "doesn't manage" in preflight.missing_subtitles(cfg, ep)
+    Fake.found = {"type": "movie", "radarrid": 1, "subtitles": []}
+    assert preflight.missing_subtitles(cfg, ep) == ""
+    assert preflight.missing_subtitles(cfg, ep) == ""  # and now it is next to the file
+
+
+def test_a_subtitle_that_does_not_match_stops_after_the_analysis(cfg, media_root):
+    show = media_root / "Bad Subs"
+    show.mkdir()
+    ep = synth.episode(show / "Bad Subs - S01E01.mkv")
+    ep.with_suffix(".en.srt").write_text("1\n00:00:01,000 --> 00:00:02,000\nNothing like what is said\n")
+    svc = _requiring_subtitles(cfg)
+    jid = svc.add(str(ep))
+    svc.run_one(svc.store.next_queued())
+    j = svc.store.get(jid)
+    assert j["status"] == J.REVIEW and "matches" in j["record"]["needs_subtitles"]
+    import json
+    assert "recognize" in json.loads((cfg.work / f"job-{jid}" / "state.json").read_text())["done"]
+    svc.allow_speech(jid)
+    svc.run_one(svc.store.next_queued())
+    assert svc.store.get(jid)["status"] == J.DONE
+
+
+def test_files_the_skip_rules_end_are_not_asked_about(cfg, media_root):
+    show = media_root / "Has English"
+    show.mkdir()
+    ep = synth.episode(show / "Has English - S01E01.mkv", english_audio=True)
+    svc = _requiring_subtitles(cfg)
+    jid = svc.add(str(ep))
+    svc.run_one(svc.store.next_queued())
+    assert svc.store.get(jid)["status"] == J.SKIPPED

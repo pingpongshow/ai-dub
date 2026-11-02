@@ -29,7 +29,7 @@ import numpy as np
 
 from . import lines as L
 from . import media
-from .job import Job, Paused
+from .job import Job, Paused, require_subtitles
 
 MODES = ("off", "unsure", "always")
 MEDIA = {"preview.mp4": "video/mp4", "voices.m4a": "audio/mp4", "music.m4a": "audio/mp4",
@@ -134,6 +134,10 @@ def reset_for_redub(work: Path, live: Path) -> None:
 
 
 def run(job: Job) -> None:
+    from . import translate
+    trusted, why = translate.subtitles_trusted(job)
+    if not trusted:
+        require_subtitles(job, f"The English subtitles aren't reliable enough to be the script: {why}")
     snapshot(job.work)
     lines = L.load(job.path("lines.json"))
     d = load_decisions(job.work)
@@ -220,7 +224,8 @@ def needs_look(job, lines: list[L.Line]) -> list[dict]:
         run = [q] if quoted else []
     sub = (job.get("subtitles") or {}).get("english")
     tried = [c for c in (job.get("subtitles") or {}).get("candidates", []) if c.get("language") == "en"]
-    if not sub and tried and lines:
+    said_ok = getattr(job, "options", {}).get("speech_ok")  # asked already, before dubbing started
+    if not sub and tried and lines and not said_ok:
         best = max((c.get("score", {}).get("total", 0) for c in tried), default=0)
         add("subtitles", (0.0, min(5.0, duration or 5.0)), "English subtitles weren't good enough to use",
             f"{len(tried)} English subtitle track{'s' if len(tried) != 1 else ''} found, the best scoring {best:.2f}. "
@@ -230,7 +235,9 @@ def needs_look(job, lines: list[L.Line]) -> list[dict]:
             ok, why = translate.subtitles_trusted(job)
         except Exception:
             ok, why = True, ""
-        if not ok:
+        if not ok and said_ok:
+            pass
+        elif not ok:
             add("subtitles", (0.0, min(5.0, duration or 5.0)), "English subtitles won't be the script",
                 f"{why}. The episode would be translated from the speech instead.", [])
         elif talk:

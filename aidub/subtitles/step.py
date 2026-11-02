@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 
 from .. import media
-from ..job import Job
+from ..job import Job, require_subtitles
 from . import score, sources
 from .bazarr import Bazarr
 from .model import DIALOGUE, Candidate, Cue
@@ -212,6 +212,12 @@ def run(job: Job) -> None:
     if best_src:
         parts.append(f"{src_lang}: {best_src.label} ({best_src.score['total']:.2f})")
     job.status("; ".join(parts) if parts else "no usable subtitle; using speech recognition")
+    if not best_en:
+        bazarr = (job.cfg.get("subtitles.providers.bazarr") or {}).get("enabled")
+        tried = [c.score.get("total", 0) for c in english]
+        require_subtitles(job, f"{len(tried)} English subtitle track{'s' if len(tried) != 1 else ''} found, but none matches the "
+                               f"speech well enough (best {max(tried):.2f}, needs {min_score:.2f})" if tried else
+                          "No English subtitles found in the file or next to it" + (" or from Bazarr" if bazarr else " (Bazarr isn't set up)"))
 
 
 def load_chosen(job: Job, which: str) -> list[Cue]:

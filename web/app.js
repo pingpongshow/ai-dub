@@ -82,7 +82,7 @@ const store = {  // per-browser conveniences; the page works without them
   get(k, d) { try { const v = localStorage.getItem("aidub." + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
   set(k, v) { try { localStorage.setItem("aidub." + k, JSON.stringify(v)); } catch { /* private window */ } },
 };
-const EVENT = { review: ["warn", "Waiting for your review"], check: ["ok", "Dubbed: ready to check"], done: ["", "Dubbed"],
+const EVENT = { review: ["warn", "Waiting for your review"], subtitles: ["warn", "Needs subtitles"], check: ["ok", "Dubbed: ready to check"], done: ["", "Dubbed"],
   failed: ["bad", "Failed"], skipped: ["", "Skipped"] };
 async function refreshEvents() {
   const ev = await api("/events").catch(() => null);
@@ -95,7 +95,7 @@ async function refreshEvents() {
 }
 function renderBell() {
   const ev = refreshEvents.list || [], seen = store.get("seen", 0);
-  const href = (e) => (e.kind === "review" ? `#review/${e.id}` : e.kind === "check" ? `#verify/${e.id}` : "#history");
+  const href = (e) => (e.kind === "subtitles" ? "#queue" : e.kind === "review" ? `#review/${e.id}` : e.kind === "check" ? `#verify/${e.id}` : "#history");
   $("#bellpop").innerHTML = `<div class="bellpop-head"><b>Lately</b></div>` + (ev.length ? ev.map((e) => `
     <a class="bell-item ${(e.t || 0) > seen ? "new" : ""}" href="${href(e)}"><span class="tag ${EVENT[e.kind][0]}">${EVENT[e.kind][1]}</span>
       <span class="bell-name">${epLabel(e.name)}</span><span class="small muted">${esc(ago(e.t))}${e.kind === "failed" || e.kind === "skipped" ? ` · ${esc(e.text)}` : ""}</span></a>`).join("")
@@ -451,7 +451,14 @@ async function loadNeeds() {
   if (!items.length && !reviews.length) { box.innerHTML = ""; return; }
   box.innerHTML = `<div class="section-head"><h2>Waiting for you</h2><span class="tag warn">${items.length + reviews.length}</span></div>
     <div class="needs-list">
-    ${reviews.map((j) => `<div class="panel job needs" data-id="${j.id}">
+    ${reviews.map((j) => (j.record || {}).needs_subtitles ? `<div class="panel job needs" data-id="${j.id}">
+      <div><div class="title">${epLabel(j.path)}</div>
+        <div class="sub">${episode(j.path).show ? `<span class="ep-show">${esc(episode(j.path).show)}</span>` : ""}<span class="tag warn">Needs subtitles</span>
+          <span>${esc(j.record.needs_subtitles)}. Not dubbed unless you say so: a dub from the speech is much less accurate.</span></div></div>
+      <div class="btn-group"><button class="ghost sm" data-act="cancel" data-id="${j.id}">Remove</button>
+        ${j.started ? `<button class="sm" data-log="${j.id}" data-name="${esc(j.path)}">Log</button>` : ""}
+        <button class="sm" data-speech="${j.id}" title="Dub this file by translating what recognition hears. Much less accurate than subtitles.">Dub from the speech anyway…</button>
+        <button class="primary" data-recheck="${j.id}" title="Add a subtitle next to the file or in Bazarr first. The analysis so far is kept.">Look for subtitles again</button></div></div>` : `<div class="panel job needs" data-id="${j.id}">
       <div><div class="title">${epLabel(j.path)}</div>
         <div class="sub">${episode(j.path).show ? `<span class="ep-show">${esc(episode(j.path).show)}</span>` : ""}<span class="tag warn">Review before dubbing</span>
           <span>${esc(j.message.replace(/^waiting for review:?\s*/, "") || "nothing flagged")}</span></div></div>
@@ -466,6 +473,15 @@ async function loadNeeds() {
         <a class="button primary" href="#verify/${x.id}">Check the dub</a></div></div>`).join("")}
     </div>`;
   box.querySelectorAll("[data-log]").forEach((b) => (b.onclick = () => openLog(Number(b.dataset.log), b.dataset.name)));
+  box.querySelectorAll("[data-recheck]").forEach((b) => (b.onclick = async () => {
+    await api(`/jobs/${b.dataset.recheck}/subtitles/recheck`, { method: "POST" }).catch(fail);
+    loadNeeds(); loadQueue(); refreshStatus();
+  }));
+  box.querySelectorAll("[data-speech]").forEach((b) => (b.onclick = async () => {
+    if (!confirm("Dub this file from the speech, with no subtitles to follow?\n\nThe English comes from what speech recognition hears, which is much less accurate. This applies to this file only.")) return;
+    await api(`/jobs/${b.dataset.speech}/subtitles/dub-from-speech`, { method: "POST" }).catch(fail);
+    loadNeeds(); loadQueue(); refreshStatus();
+  }));
   box.querySelectorAll("[data-act=cancel]").forEach((b) => (b.onclick = async () => {
     if (!confirm("Remove this episode from the queue? Its working files are deleted.")) return;
     await api(`/jobs/${b.dataset.id}`, { method: "DELETE" }).catch(fail);

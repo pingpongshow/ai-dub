@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import queue
 import shutil
 import threading
 import time
@@ -13,7 +14,7 @@ from pathlib import Path
 from . import jobs as J
 from . import media, originals, pipeline
 from .config import Config
-from .job import Cancelled, Job, Paused, Skipped
+from .job import Cancelled, Job, NeedsSubtitles, Paused, Skipped
 from .profiles import Profiles, guess_name
 
 log = logging.getLogger("aidub")
@@ -33,6 +34,8 @@ class Service:
         self._wake = threading.Event()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._to_check: queue.Queue = queue.Queue()
+        self._check_lock = threading.Lock()
 
     # Paths ----------------------------------------------------------------------------------
     def media_roots(self) -> list[Path]:
@@ -63,8 +66,50 @@ class Service:
             name, {"honorifics": self.cfg.get("translate.honorifics", "keep"),
                    "style": self.cfg.get("translate.style", "natural")})
         jid = self.store.add(str(p), prof.slug, options or {})
+        self._to_check.put(jid)
         self._wake.set()
         return jid
+
+    def _subtitle_problem(self, j: dict) -> str:
+        """Why this file must wait for the user before any work starts on it; empty if it needn't."""
+        from .ingest import classify
+        from .subtitles.preflight import missing_subtitles
+        opts = j.get("options") or {}
+        if not self.cfg.get("subtitles.require", True) or opts.get("speech_ok") or opts.get("subs_checked") or opts.get("preview_s"):
+            return ""
+        state = self.cfg.work / f"job-{j['id']}" / "state.json"
+        if state.exists() and "subtitles" in json.loads(state.read_text()).get("done", []):
+            return ""  # already past this
+        path = Path(j["path"])
+        pr = media.probe(path)
+        info = classify(pr)
+        # The skip rules end this job at once: nothing to ask about.
+        if not opts.get("redo") and (info["aidub_present"] or (info["english_audio"] and self.cfg.get("ingest.skip_english_audio", True))):
+            return ""
+        return missing_subtitles(self.cfg, path, pr)
+
+    def _hold_if_no_subtitles(self, jid: int) -> bool:
+        """True if the job waits for the user. Checked once per job."""
+        with self._check_lock:
+            j = self.store.get(jid)
+            if not j or j["status"] not in (J.QUEUED, J.WAITING):
+                return False
+            try:
+                why = self._subtitle_problem(j)
+            except Exception as exc:  # an unreadable file fails with its own message when it runs
+                log.warning("subtitle check of %s: %s", j["path"], exc)
+                return False
+            if why:
+                self.store.update(jid, status=J.REVIEW, message=why, record={"needs_subtitles": why, "paused_at": time.time()})
+                return True
+            self.store.update(jid, options={**(j.get("options") or {}), "subs_checked": True})
+            return False
+
+    def _check_added(self) -> None:
+        """Files just added are checked straight away, so one that needs an answer says so
+        while it is still far down the queue."""
+        while True:
+            self._hold_if_no_subtitles(self._to_check.get())
 
     def inspect(self, path: str) -> dict:
         """What the queue form needs: audio tracks, skip-rule verdict, guessed profile."""
@@ -142,6 +187,37 @@ class Service:
         if start:
             self.store.requeue_front(jid)
             self._wake.set()
+
+    def _needing_subtitles(self, jid: int) -> dict:
+        j = self.store.get(jid)
+        if not j:
+            raise KeyError(jid)
+        if j["status"] != J.REVIEW or not (j.get("record") or {}).get("needs_subtitles"):
+            raise ValueError("this job isn't waiting for subtitles")
+        return j
+
+    def allow_speech(self, jid: int) -> None:
+        """The user's override for this one file: dub it from the speech."""
+        j = self._needing_subtitles(jid)
+        self.store.update(jid, options={**(j.get("options") or {}), "speech_ok": True}, message="dubbing from the speech, as you chose")
+        self.store.requeue_front(jid)
+        self._wake.set()
+
+    def recheck_subtitles(self, jid: int) -> None:
+        """Look again (a subtitle added next to the file, or Bazarr has one now): back to the
+        subtitle step, keeping the analysis before it."""
+        from .pipeline import STEP_NAMES
+        j = self._needing_subtitles(jid)
+        f = self.cfg.work / f"job-{jid}" / "state.json"
+        if f.exists():
+            st = json.loads(f.read_text())
+            st["done"] = [x for x in st.get("done", []) if x in STEP_NAMES[:STEP_NAMES.index("subtitles")]]
+            f.write_text(json.dumps(st, ensure_ascii=False))
+        opts = {k: v for k, v in (j.get("options") or {}).items() if k != "subs_checked"}
+        self.store.update(jid, options=opts, message="looking for subtitles again")
+        self.store.requeue_front(jid)
+        self._to_check.put(jid)
+        self._wake.set()
 
     def review_redub(self, jid: int, decisions: dict) -> str:
         """Dub a finished episode again with the review's changes: the original goes back,
@@ -247,6 +323,9 @@ class Service:
     # Runner ---------------------------------------------------------------------------------
     def start(self) -> None:
         self.store.recover()
+        for j in self.store.list({J.QUEUED, J.WAITING}):
+            self._to_check.put(j["id"])
+        threading.Thread(target=self._check_added, name="aidub-subtitle-check", daemon=True).start()
         self._thread = threading.Thread(target=self._loop, name="aidub-runner", daemon=True)
         self._thread.start()
         threading.Thread(target=self._scan_originals, daemon=True).start()
@@ -292,6 +371,9 @@ class Service:
 
     def run_one(self, j: dict) -> None:
         jid = j["id"]
+        if self._hold_if_no_subtitles(jid):
+            return
+        j = self.store.get(jid) or j
         cancel = threading.Event()
         self._cancel[jid] = cancel
         if not self.store.claim(jid):  # cancelled or removed after it was picked
@@ -342,7 +424,9 @@ class Service:
                               message="done", record=rec)
         except Paused as exc:
             job.log(f"paused: {exc}")
-            self.store.update(jid, status=J.REVIEW, message=str(exc), record={**pipeline.record(job), "paused_at": time.time()})
+            self.store.update(jid, status=J.REVIEW, message=str(exc), record={
+                **pipeline.record(job), "paused_at": time.time(),
+                **({"needs_subtitles": exc.why} if isinstance(exc, NeedsSubtitles) else {})})
         except Skipped as exc:
             job.remove_work()
             self.store.update(jid, status=J.SKIPPED, finished=time.time(), message=f"skipped: {exc}",

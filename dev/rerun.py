@@ -94,7 +94,8 @@ def main():
         (work / "review" / "decisions.json").unlink(missing_ok=True)
     row = Store(live_app / "aidub.db").get(int(args.job)) or {}
     prof = Profiles(cfg.appdata).get_or_create(row.get("profile") or name)
-    job = Job(cfg, args.job, src, prof, {**(row.get("options") or {}), **({"review": "off"} if args.no_review else {})})
+    job = Job(cfg, args.job, src, prof, {**(row.get("options") or {}), **({"review": "off"} if args.no_review else {}),
+                                                **({"speech_ok": True} if args.no_subtitles else {})})
     try:
         pipeline.run(job, until=args.until)
     except Paused as exc:
