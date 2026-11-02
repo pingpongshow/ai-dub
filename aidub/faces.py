@@ -2,9 +2,9 @@
 
 Diarization and voice matching only hear. Where a face is clearly the one talking,
 the same face's other lines say which character it is: a line the voice check doubted
-stays in that character's voice if its face agrees, instead of being voiced from its
-own short clip, and a line given to the wrong speaker goes to the right one. Optional:
-without the Models page's "Who is talking on screen" installed, this step is skipped.
+is given to the right character (it keeps its own voice), and one person split into two
+characters is pointed out. Optional: without the Models page's "Who is talking on
+screen" installed, this step is skipped.
 """
 
 from __future__ import annotations

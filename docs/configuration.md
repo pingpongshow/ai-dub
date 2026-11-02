@@ -179,7 +179,7 @@ ones you're most likely to want are below.
 | `condense.enabled` | `true` | Write shorter English for lines that still don't fit |
 | `readback.enabled`, `readback.min_clear` | `true`, `0.5` | Listen to the finished track before delivery; stop the job if it is silent while the original plays, or if less than this share of its lines can be heard |
 | `mix.min_level_db` | `-12` | No dubbed line quieter than this under the film's usual dialogue level, however quiet the original voice was |
-| `stages.faces.enabled` | `true` | Use the picture, once **Who is talking on screen** is installed on the Models page: a line the voice check doubts stays with the character whose face is talking, or moves to them |
+| `stages.faces.enabled` | `true` | Use the picture, once **Who is talking on screen** is installed on the Models page: a line the voice check doubts is given to the character whose face is talking, and one person split into two characters is pointed out. About 7 minutes a film. |
 | `deliver.surround`, `deliver.surround_bitrate` | `true`, `384k` | A 5.1 original gets a 5.1 English track, the dub in its front and centre channels and its music, effects and surrounds as they were. Other layouts get stereo. |
 | `stages.bwe.enabled` | `true` | Restore full 48 kHz brightness to the cloned voice (`mode: auto` does it only when the original is brighter) |
 | `deliver.track_title` | `English (AI dub)` | The name of the added audio track |

@@ -34,14 +34,16 @@ def main():
     ap.add_argument("root")
     ap.add_argument("jobs")
     ap.add_argument("--lines", type=int, default=8)
+    ap.add_argument("--usual", action="store_true", help="lines voiced in the character's usual voice today, not those moved off it")
+    ap.add_argument("--page", default="voice-consistency")
     args = ap.parse_args()
     cfg = config.load(None)
     live_work = cfg.work
-    page = live_work / "listen" / "voice-consistency"
+    page = live_work / "listen" / args.page
     page.mkdir(parents=True, exist_ok=True)
     rnd = random.Random(10)
     rows, key = [], {}
-    root = Path(args.root) / "voice-test"
+    root = Path(args.root) / f"voice-test-{args.page}"
     for jid in args.jobs.split(","):
         live = live_work / f"job-{jid}"
         state = json.loads((live / "state.json").read_text())
@@ -54,7 +56,8 @@ def main():
             counts[ln.character] = counts.get(ln.character, 0) + 1
         main_chars = {c for c, n in counts.items() if c and n >= 40}
         pool = [ln for ln in lines if ln.kind == L.SPEECH and ln.take and not ln.fallback and ln.character in main_chars
-                and ln.voice_note.startswith("own line as reference (") and ln.duration >= 0.8 and prof.refs(ln.character)]
+                and (not ln.voice_note if args.usual else ln.voice_note.startswith("own line as reference ("))
+                and ln.duration >= (0.5 if args.usual else 0.8) and prof.refs(ln.character)]
         rnd.shuffle(pool)
         pool = pool[: args.lines]
         cfg.data["paths"]["work"] = str(root)
@@ -92,7 +95,7 @@ def main():
                 v = f"{item}-{'ab'[k]}"
                 enc(p, page / f"{v}-orig.m4a")
                 key[v] = which
-                rows.append(f"<tr><td>{escape(ln.en)}<br><small>{'ab'[k].upper()} of this line, film {jid}, {ln.voice_note.split('(')[-1].rstrip(')')}</small></td>"
+                rows.append(f"<tr><td>{escape(ln.en)}<br><small>{'ab'[k].upper()} of this line, film {jid}, {ln.duration:.1f} s</small></td>"
                             f"<td><audio controls preload=none src='{item}-source.m4a'></audio></td>"
                             f"<td><audio controls preload=none src='{v}-orig.m4a'></audio></td></tr>")
     (page / "o.wav").unlink(missing_ok=True)
