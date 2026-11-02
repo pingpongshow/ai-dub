@@ -30,6 +30,8 @@ from .subtitles.sources import write_srt
 LANG_TITLE = {"ja": "Japanese", "ko": "Korean", "zh": "Chinese", "yue": "Cantonese", "en": "English",
               "es": "Spanish", "fr": "French", "de": "German"}
 AI_TITLES = ("(AI dub)", "(AI transcript)", "(AI translation)")
+DECODE_MEMORY_KB = 8_000_000
+DECODE_TIMEOUT_S = 180
 
 
 class DeliveryError(RuntimeError):
@@ -215,11 +217,30 @@ def verify(src: Path, out: Path, dropped: set[int], added_audio: int, added_subs
     if len(ours) != 1:
         problems.append("dub track not found in the new file")
     for at in (0.0, max(0.0, b.duration - 8)):
-        proc = subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-ss", f"{at:.2f}", "-i", str(out), "-t", "3",
-                               "-map", "0:v?", "-map", "0:a", "-f", "null", "-"], capture_output=True, text=True)
-        if proc.returncode != 0 or "Error" in proc.stderr:
-            problems.append(f"decode check at {at:.0f}s failed: {proc.stderr.strip()[-200:]}")
+        for kind in ("v", "a"):
+            if kind == "a" or b.of_type("video"):
+                problem = decode_check(out, kind, at)
+                if problem:
+                    problems.append(f"decode check at {at:.0f}s failed: {problem}")
     return problems
+
+
+def decode_check(path: Path, kind: str, at: float) -> str:
+    """Decode a few seconds of a file's video or audio ("v" / "a"); empty = OK. ffprobe, because
+    `ffmpeg -t 3 -f null` kept decoding past its end on some H.264 films, holding every frame
+    until the kernel killed it at 100 GB. The limits keep any file from doing that to the host."""
+    cmd = ["ffprobe", "-v", "error", "-threads", "2", "-select_streams", kind, "-read_intervals",
+           f"{at:.2f}%+3", "-show_entries", "frame=pts_time", "-of", "csv=p=0", str(path)]
+    try:
+        proc = subprocess.run(["sh", "-c", f'ulimit -v {DECODE_MEMORY_KB}; exec "$@"', "sh", *cmd],
+                              capture_output=True, text=True, timeout=DECODE_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        return f"{kind}: no answer after {DECODE_TIMEOUT_S} s"
+    if proc.returncode != 0 or "Error" in proc.stderr:
+        return f"{kind}: {proc.stderr.strip()[-200:] or f'exit code {proc.returncode}'}"
+    if not proc.stdout.strip():
+        return f"{kind}: nothing could be decoded"
+    return ""
 
 
 def _copy_owner(src_stat: os.stat_result, dst: Path, owner: dict | None) -> None:

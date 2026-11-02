@@ -131,6 +131,16 @@ def test_preview_never_touches_source(cfg, media_root, tmp_path):
     assert pr.duration == pytest.approx(synth.DURATION, abs=1.0)
 
 
+def test_decode_check_finds_what_cant_be_played(media_root):
+    from aidub import deliver
+    ep = synth.episode(media_root / "Decode.mkv")
+    assert deliver.decode_check(ep, "a", 0.0) == "" and deliver.decode_check(ep, "v", 0.0) == ""
+    assert "nothing could be decoded" in deliver.decode_check(ep, "a", 100000.0)
+    bad = media_root / "Garbage.mkv"
+    bad.write_bytes(b"not a video " * 5000)
+    assert deliver.decode_check(bad, "v", 0.0)
+
+
 def test_failed_delivery_keeps_original(cfg, media_root, monkeypatch):
     from aidub import deliver
     ep = synth.episode(media_root / "Broken.mkv")
