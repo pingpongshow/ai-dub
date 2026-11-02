@@ -474,7 +474,7 @@ def test_thin_characters_speak_with_their_own_audio(tmp_path, monkeypatch):
     monkeypatch.setattr(voicebank, "generic_voices", lambda job: [
         {"name": "female young 1", "gender": "female", "age": "young", "path": "/v/f.wav"}])
     from aidub import media
-    job = _StubJob({}, {})
+    job = _StubJob({"speakers.prefer_own_clip": False}, {})
     job.qc = {}
     job.path = lambda *parts: (tmp_path / "job").joinpath(*parts)
     (tmp_path / "job" / "audio").mkdir(parents=True)
@@ -1794,3 +1794,25 @@ def test_other_voice_swaps_between_own_clip_and_usual_voice():
     nobody = L.Line(2, 0, 1, character="c9", voice="")
     review.other_voice(prof, nobody)
     assert nobody.voice == ""
+
+
+def test_lines_are_voiced_from_their_own_clip_by_default(tmp_path, monkeypatch):
+    from aidub import media, voicebank
+    prof = profiles.Profiles(tmp_path).get_or_create("Spy")
+    loid = prof.new_character("Loid", gender="male", age="adult")
+    prof.characters[loid]["embedding"] = [1.0, 0.0, 0.0]
+    prof.characters[loid]["refs"] = [{"file": "refs/loid/a.flac", "duration": 9.0, "score": 0.9}]
+    prof.characters[loid]["clean_seconds"] = 60.0
+    monkeypatch.setattr(voicebank, "generic_voices", lambda job: [])
+    monkeypatch.setattr(prof, "clean_seconds", lambda c: 60.0)
+    job = _StubJob({}, {})
+    job.qc = {}
+    job.path = lambda *parts: (tmp_path / "job").joinpath(*parts)
+    (tmp_path / "job" / "audio").mkdir(parents=True)
+    (tmp_path / "job" / "voices").mkdir(parents=True)
+    media.write_wav(job.path("audio", "dialogue.wav"), np.zeros((48000 * 20, 1), np.float32), 48000)
+    lines = [L.Line(1, 0.0, 2.0, character=loid), L.Line(2, 3.0, 3.3, character=loid),
+             L.Line(3, 5.0, 7.0, character=loid, overlap=True)]
+    voicebank.assign_voices(job, prof, lines, {})
+    assert lines[0].voice == "" and lines[0].voice_note == "own line as reference"
+    assert lines[1].voice.endswith("a.flac") and lines[2].voice.endswith("a.flac")  # too short; a second voice in it
