@@ -233,13 +233,14 @@ function audioLangs(info) {
 // A folder passes when any video in it does (a film's folder: its film).
 function folderPasses(e) {
   const vids = (loadBrowser.folders || {})[e.path];
-  if (!loadBrowser.tracks || !vids || !vids.length) return true;
+  if (!loadBrowser.tracks || !vids) return true;  // not listed yet
+  if (!vids.length) return !(trackFilter.audio || trackFilter.hide.length);  // nothing in it can match
   return vids.some((v) => passesFilter(loadBrowser.tracks[v]));
 }
 function folderLine(e) {
   const vids = (loadBrowser.folders || {})[e.path];
   if (!vids) return "";
-  if (!vids.length) return `<div class="tracks faint">No videos directly inside</div>`;
+  if (!vids.length) return `<div class="tracks faint">No videos in this folder</div>`;
   const infos = vids.map((v) => (loadBrowser.tracks || {})[v]);
   if (vids.length === 1) return trackLine(infos[0]);
   const read = infos.filter(Boolean);
@@ -343,7 +344,7 @@ function renderBrowser() {
   $("#selall").hidden = !renderBrowser.visible.some((e) => !e.dir && !e.queued);
   box.innerHTML = shown.length ? shown.map(([e, i]) => e.dir
     ? `<div class="entry dir" data-i="${i}"><span class="ico">${ICON.folder}</span><span class="name">${esc(e.name)}${data.path ? folderLine(e) : ""}</span>
-        <span>${data.path ? `<button class="sm ghost" data-addall="${i}" title="Every episode in this folder and its season folders that isn't queued or dubbed yet (and matches the language filter)">Add all…</button>` : ""}</span><span class="size"></span></div>`
+        <span>${data.path && (loadBrowser.folders || {})[e.path]?.length !== 0 ? `<button class="sm ghost" data-addall="${i}" title="Every episode in this folder and its season folders that isn't queued or dubbed yet (and matches the language filter)">Add all…</button>` : ""}</span><span class="size"></span></div>`
     : `<div class="entry ${selected.has(e.path) ? "on" : ""} ${e.queued ? "disabled" : ""}" data-i="${i}">
         <input type="checkbox" ${selected.has(e.path) ? "checked" : ""} ${e.queued ? "disabled" : ""} aria-label="Select ${esc(e.name)}">
         <span class="name">${esc(e.name)}${data.path ? trackLine(info(e)) : ""}</span>
