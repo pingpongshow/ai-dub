@@ -1697,3 +1697,68 @@ def test_unsubtitled_scraps_keep_the_original():
     assert A.unsubtitled_scraps(lines, [q], "ja") == 2
     assert [l.kind for l in lines] == [L.SPEECH, L.BACKGROUND, L.SPEECH, L.BACKGROUND]
     assert A.unsubtitled_scraps(lines, [], "ja") == 0
+
+
+def test_corrections_compare_by_what_gets_dubbed(tmp_path):
+    from aidub import corrections as C
+    row = lambda i, a, b, k: {"id": i, "start": a, "end": b, "kind": k, "source_text": "x", "english_ref": ""}
+    saved = {"name": "a", "automatic": [row(1, 0, 1, "song"), row(2, 2, 3, "speech"), row(3, 4, 5, "speech")],
+             "final": [row(1, 0, 1, "speech"), row(2, 2, 3, "song"), row(3, 4, 5, "speech")]}
+    c = C.compare(saved, saved["automatic"])
+    assert (c["wrong_before"], c["wrong_now"], len(c["should_dub"]), len(c["should_keep"])) == (2, 2, 1, 1)
+    assert C.compare(saved, saved["final"])["wrong_now"] == 0
+    # A file is kept per job, with what the review changed.
+    work = tmp_path / "job-7"
+    (work / "review").mkdir(parents=True)
+    (work / "review" / "base-lines.json").write_text(__import__("json").dumps(saved["automatic"]))
+    (work / "lines.json").write_text(__import__("json").dumps(saved["final"]))
+    C.save(tmp_path, "Film", 7, work, {"review_changes": [{"was": "song"}]})
+    assert C.summary(tmp_path) == [{"job": 7, "name": "Film", "lines": 3, "changed": 2, "kept_to_dubbed": 1, "dubbed_to_kept": 1}]
+
+
+def test_check_list_leaves_nothing_out_and_puts_problems_first():
+    from aidub import verify as V
+    say = lambda i, a, en, **kw: L.Line(id=i, start=a, end=a + 2, en=en, kind=L.SPEECH, take="t.wav", **kw)
+    lines = [L.Line(id=1, start=0, end=30, kind=L.SONG, kept_why="lyric"),
+             say(2, 40, "Hello.", check_note="the subtitle says something different from the speech"),
+             say(3, 50, "Lost.", fit={"mix_missed": ["lost"], "mix_heard": ""}),
+             L.Line(id=4, start=60, end=61, en="No.", kind=L.SPEECH, fallback="every take failed"),
+             say(5, 70, "Fast.", fit={"paced_tempo": 1.3, "placed": 70.8})]
+    got = V.moments(lines, 100.0)
+    by = {}
+    for m in got:
+        by.setdefault(m["group"], []).append(m["kind"])
+    assert by["songs"] == ["song"] and got[0]["end"] == 30
+    assert by["check"] == ["masked", "kept", "late"] and by["notes"] == ["note", "fast"]
+
+
+def test_faces_name_characters_only_when_their_lines_agree():
+    from aidub import faces as F
+    a, b = [1.0] + [0.0] * 9, [0.0, 1.0] + [0.0] * 8
+    talking = lambda p: {"faces": [{"score": 2.0, "print": p}]}
+    lines = [L.Line(i, i, i + 1, character="c1") for i in range(1, 6)] + [L.Line(6, 6, 7, character="c2")]
+    rows = {i: talking(a) for i in range(1, 7)}
+    got = F.characters_by_face(lines, rows)
+    assert got[6] == "c1" and got[1] == "c1"  # five lines of one face name it; the sixth goes with them
+    # Two faces talking, or none: the picture says nothing.
+    both = {"faces": [{"score": 2.0, "print": a}, {"score": 1.0, "print": b}]}
+    assert F.speaking_face(both) is None and F.speaking_face({"faces": [{"score": -1.0, "print": a}]}) is None
+    # Too few lines, or lines that disagree: no name.
+    assert F.characters_by_face(lines[:2], {1: talking(a), 2: talking(a)}) == {}
+    mixed = [L.Line(i, i, i + 1, character="c1" if i % 2 else "c2") for i in range(1, 7)]
+    assert F.characters_by_face(mixed, {i: talking(a) for i in range(1, 7)}) == {}
+    assert F.cluster([a, a, b]) == [0, 0, 1]
+
+
+def test_audit_finds_what_was_never_heard():
+    from types import SimpleNamespace
+    from aidub import audit
+    cue = lambda t, x: SimpleNamespace(start=t, end=t + 1, text=x)
+    cues = [cue(0, "Good morning everyone."), cue(10, "The river is very high and the bridge is out today."), cue(20, "Go home now.")]
+    heard = audit._words("good morning everyone go home now")
+    share, missing = audit.missing_stretches(cues, heard)
+    assert share < 0.5 and len(missing) == 1 and missing[0]["t"] == "0:10"
+    assert audit.missing_stretches(cues[:1], audit._words("Good morning, everyone."))[0] == 1.0
+    data = np.zeros(16000 * 40, np.float32)
+    data[:16000 * 5] = 0.2
+    assert audit.silent_stretches(data, 16000) == [[5, 40]]

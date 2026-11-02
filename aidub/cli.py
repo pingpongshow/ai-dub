@@ -145,6 +145,38 @@ def cmd_originals(cfg, args) -> None:
         print(f"deleted {n} files, {freed / 1e9:.2f} GB")
 
 
+def cmd_audit(cfg, args) -> None:
+    """Read back the English track of finished dubs against their subtitles. Changes nothing."""
+    from . import audit
+    from .jobs import Store
+    paths = [Path(p) for p in args.files]
+    if args.all:
+        store = Store(cfg.appdata / "aidub.db")
+        paths += [Path(j["path"]) for j in store.list({"done"}) if (j.get("record") or {}).get("delivered")
+                  and (j.get("record") or {}).get("verify") not in ("restored", "redo")]
+    paths = [p for p in dict.fromkeys(paths) if p.exists()]
+    audit.run(cfg, paths, Path(args.output) if args.output else None)
+
+
+def cmd_corrections(cfg, args) -> None:
+    """What reviews changed (appdata/corrections); with --against, how a job's current labels compare."""
+    from . import corrections
+    if args.keep_from:
+        for d in sorted(Path(args.keep_from).glob("job-*")):
+            state = d / "state.json"
+            if state.exists() and (d / "review" / "base-lines.json").exists():
+                data = json.loads(state.read_text())["data"]
+                print(corrections.save(cfg.appdata, Path((data.get("ingest") or {}).get("source", d.name)).name,
+                                       d.name.removeprefix("job-"), d, data.get("qc") or {}))
+    if args.against:
+        lines = json.loads(Path(args.against).read_text())
+        saved = next(s for s in corrections.load_all(cfg.appdata) if str(s.get("job")) == str(args.job))
+        print(json.dumps(corrections.compare(saved, lines), ensure_ascii=False, indent=1))
+        return
+    for row in corrections.summary(cfg.appdata):
+        print(row)
+
+
 def cmd_voices(cfg, args) -> None:
     """Design the small library of generic voices used for minor speakers."""
     from .voices import design_library
@@ -188,13 +220,23 @@ def main(argv: list[str] | None = None) -> None:
     s.add_argument("ids", nargs="*", type=int)
     s.add_argument("--yes", action="store_true")
 
+    s = sub.add_parser("audit", help="read back the English track of finished dubs (changes nothing)")
+    s.add_argument("files", nargs="*")
+    s.add_argument("--all", action="store_true", help="every delivered dub in the job history")
+    s.add_argument("--output", help="write the report to this JSON file")
+
+    s = sub.add_parser("corrections", help="what reviews changed, kept for testing rule changes")
+    s.add_argument("--keep-from", help="save corrections from every job folder under this path")
+    s.add_argument("--against", help="compare this lines.json with a job's corrections (needs --job)")
+    s.add_argument("--job")
+
     s = sub.add_parser("voices", help="design the generic minor-speaker voices")
     s.add_argument("--force", action="store_true")
 
     args = ap.parse_args(argv)
     cfg = config.load(args.config)
     {"serve": cmd_serve, "run": cmd_run, "setup": cmd_setup, "doctor": cmd_doctor,
-     "originals": cmd_originals, "voices": cmd_voices}[args.cmd](cfg, args)
+     "originals": cmd_originals, "voices": cmd_voices, "audit": cmd_audit, "corrections": cmd_corrections}[args.cmd](cfg, args)
 
 
 if __name__ == "__main__":

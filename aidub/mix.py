@@ -4,8 +4,8 @@ The original dialogue stem stays everywhere except under dubbed lines, so
 wordless sounds, English lines, songs and lines that fell back are carried
 straight into the mix at their original times. Each dubbed line is matched to
 the original line's loudness, rough EQ and stereo position. The result is
-normalised to the original track's integrated loudness (EBU R128) and, for
-5.1 and up, folded down to stereo with standard coefficients.
+normalised to the original track's integrated loudness (EBU R128). A 5.1 original
+keeps its layout; other layouts over stereo are folded down with standard coefficients.
 """
 
 from __future__ import annotations
@@ -237,6 +237,8 @@ def run(job: Job) -> None:
     for v in groups.values():
         v["out"] = v["mne"] * duck_env + v["dlg"] * g + v["dub"]
 
+    surround = n_ch == 6 and bool(cfg.get("deliver.surround", True))
+    full = None
     if n_ch >= 6 and "front" in groups and "centre" in groups:
         rest = _fit_len(media.resample(src[:, 3:], src_sr, SR), total)  # LFE, back, side
         fl, fr = groups["front"]["out"][:, 0], groups["front"]["out"][:, 1]
@@ -245,6 +247,9 @@ def run(job: Job) -> None:
         sl = surr[:, 0::2].sum(axis=1) if surr.shape[1] else 0
         sr_ = surr[:, 1::2].sum(axis=1) if surr.shape[1] else 0
         k = 1 / np.sqrt(2)
+        if surround:  # the original's own layout, with the dub in its front and centre channels
+            lfe = rest[:, 0]
+            full = np.stack([fl, fr, fc, lfe, surr[:, 0], surr[:, 1]], axis=1)
         out = np.stack([fl + k * fc + k * sl, fr + k * fc + k * sr_], axis=1)
         orig_st = np.stack([src[:, 0] + k * src[:, 2] + k * src[:, 4::2].sum(axis=1),
                             src[:, 1] + k * src[:, 2] + k * src[:, 5::2].sum(axis=1)], axis=1)
@@ -256,6 +261,8 @@ def run(job: Job) -> None:
         orig_st = orig_st[:, :2]
 
     out = out[: int(job["ingest"]["duration"] * SR)]
+    if full is not None:
+        full = full[: len(out)]
     meter = pyln.Meter(SR)
     orig48 = media.resample(orig_st.astype(np.float32), src_sr, SR)
     try:
@@ -263,11 +270,14 @@ def run(job: Job) -> None:
         now = meter.integrated_loudness(out)
         if np.isfinite(target) and np.isfinite(now):
             out = out * 10 ** ((target - now) / 20)
+            if full is not None:
+                full = full * 10 ** ((target - now) / 20)
         job.qc["loudness_lufs"] = round(float(target), 1)
     except ValueError:
         pass
-    out = soft_limit(out.astype(np.float32))
+    out = soft_limit((full if full is not None else out).astype(np.float32))
     media.write_wav(job.path("mix", "dub.wav"), out, SR)
+    job.qc["dub_channels"] = out.shape[1]
     job.qc["dubbed_lines"] = placed
     job.qc["quiet_lines_raised"] = raised
     if free:

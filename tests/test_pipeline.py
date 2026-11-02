@@ -231,3 +231,16 @@ def test_free_timing_starts_with_the_original(cfg, media_root):
     job = run_service_job(svc, ep)
     assert job["status"] == J.DONE, job["message"]
     assert "free_timing" in job["record"]["qc"]
+
+
+def test_a_5_1_original_gets_a_5_1_dub(cfg, media_root):
+    src = media_root / "Show" / "Season 1" / "Show - S01E03.mkv"
+    src.parent.mkdir(parents=True)
+    plain = src.with_name("plain.mkv")
+    synth.episode(plain)
+    subprocess.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(plain), "-map", "0", "-c", "copy", "-c:a", "aac",
+                    "-af", "pan=5.1|FL=c0|FR=c0|FC=c0|LFE=c0|BL=c0|BR=c0", str(src)], check=True)
+    plain.unlink()
+    job = run_service_job(Service(cfg), src)
+    assert job["status"] == J.DONE
+    assert any(t.is_aidub and t.channels == 6 for t in media.probe(src).audio)

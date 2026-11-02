@@ -121,6 +121,8 @@ takes.
 | One person is split into several voices | Merge them on **Shows → Voices**, or try the "sound like the same person?" suggestions. You can also lower `speakers.link_threshold`. |
 | Names are wrong or mispronounced | Fix them on **Shows → Glossary**. Glossary names are also accepted by the back-check. |
 | The English came from the wrong subtitle | A subtitle for another episode or cut scores low and is dropped; raise `subtitles.min_score` if a bad one got through. Check the sidecar file's name and language tag (`.en.srt`). |
+| Reviews keep correcting the same thing | `aidub corrections` lists what each review changed; the files in `appdata/corrections` (no audio) survive **Keep the dub**. Worth including in an issue, with the film's name removed. |
+| You want to know a finished dub is all there | `docker exec ai-dub aidub audit --all --output /work/audit.json` hears the English track of every delivered dub against its subtitles: stretches with no English, and subtitles never heard. It changes nothing. |
 | Lines are rushed or cut off | Raise `condense.rounds` to give lines more tries at shorter English. With `fit.timing: start`, lines can run on past the mouth movement. |
 | The voice sounds muffled | Check that the bandwidth-extension model is installed and `stages.bwe.enabled` is on |
 

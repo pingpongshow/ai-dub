@@ -219,6 +219,12 @@ def needs_look(job, lines: list[L.Line]) -> list[dict]:
                     "keep them.", [ln.id for ln in ls])
         run = [q] if quoted else []
     sub = (job.get("subtitles") or {}).get("english")
+    tried = [c for c in (job.get("subtitles") or {}).get("candidates", []) if c.get("language") == "en"]
+    if not sub and tried and lines:
+        best = max((c.get("score", {}).get("total", 0) for c in tried), default=0)
+        add("subtitles", (0.0, min(5.0, duration or 5.0)), "English subtitles weren't good enough to use",
+            f"{len(tried)} English subtitle track{'s' if len(tried) != 1 else ''} found, the best scoring {best:.2f}. "
+            "The episode would be translated from the speech instead.", [])
     if sub and lines:
         try:
             ok, why = translate.subtitles_trusted(job)

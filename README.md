@@ -49,9 +49,10 @@ All screenshots use a made-up demo library.
 ```
 ingest → separate dialogue from music & effects → find scenes → who speaks when
 → speech recognition → sound events → subtitles (find, sync, score) → align lines
-→ the show's voice bank → [review] → English script (local LLM) → voice-cloned takes
-→ back-check takes → choose takes → shorten lines that don't fit → restore full
-bandwidth → mix → deliver (new file) → [check]
+→ who is talking on screen (optional) → the show's voice bank → [review] → English
+script (local LLM) → voice-cloned takes → back-check takes → choose takes → shorten
+lines that don't fit → restore full bandwidth → mix → listen back → deliver (new
+file) → [check]
 ```
 
 Each step is checkpointed: a job that is stopped or interrupted (a container
@@ -66,6 +67,7 @@ restart, say) carries on from its first unfinished step.
 | Text similarity (subtitle vs speech) | [LaBSE](https://huggingface.co/sentence-transformers/LaBSE) | Apache-2.0 |
 | Speech recognition + word timing | [Qwen3-ASR 1.7B + ForcedAligner 0.6B](https://github.com/QwenLM/Qwen3-ASR) | Apache-2.0 |
 | Sound events / emotion / sung pitch | [SenseVoice-Small](https://github.com/FunAudioLLM/SenseVoice), FCPE | FunASR model licence; FCPE MIT |
+| Who is talking on screen (optional) | [Light-ASD](https://github.com/Junhua-Liao/Light-ASD), [YuNet and SFace](https://github.com/opencv/opencv_zoo) | MIT, MIT, Apache-2.0 |
 | Picture subtitles (PGS OCR) | [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) PP-OCRv6 (ONNX, CPU) | Apache-2.0 |
 | Translation | [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B), 4-bit, on [vLLM](https://github.com/vllm-project/vllm) | Apache-2.0 |
 | Voice cloning | [IndexTTS-2.5](https://github.com/index-tts/index-tts) | bilibili Model Use License |
@@ -193,11 +195,23 @@ a few lines only, voice them again from the check screen (below).
 
 When a dub finishes, Ai Dub deletes its working files but keeps a small
 preview and the review data. Then it asks you to check the dub. The check
-screen plays the preview with the original sound or the dub. It lists the
-moments worth a listen (lines left in the original language, late lines, takes
-with an unclear word); tick each moment off as you go. For each moment,
-**A/B** plays the original and then the dub. Keys: Space, ←/→, N/P, D (hear
-the dub), O (hear the original).
+screen plays the preview with the original sound or the dub, and nothing is
+left off its three lists:
+
+- **To check**: lines left in the original language, subtitles nothing voiced,
+  lines hard to hear in the mix, takes with an unclear word, doubtful voices,
+  two people sharing a line, late lines.
+- **Songs**: each kept song or title sequence, as one row.
+- **Notes**: everything else worth knowing (lines sped up, subtitles that differ
+  from the speech, lines voiced from their own clip).
+
+Tick each one off as you go. For each, **A/B** plays the original and then the
+dub. Keys: Space, ←/→, N/P (within the list), D (hear the dub), O (hear the
+original).
+
+Before any of this, the **Listen back** step has already heard the finished
+track: a track silent while the original plays, or one where most lines can't be
+made out, stops the job with the original untouched.
 
 A line that came out wrong (a word missing or mangled) can be fixed right
 there:

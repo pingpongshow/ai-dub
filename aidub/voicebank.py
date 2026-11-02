@@ -12,6 +12,7 @@ from collections import Counter, defaultdict
 import numpy as np
 import soundfile as sf
 
+from . import faces
 from . import lines as L
 from . import media, speakers
 from .job import Job
@@ -244,6 +245,14 @@ def own_voice_clips(job: Job, prof: Profile, lines: list[L.Line], min_s: float) 
     return out
 
 
+def face_fits(prof: Profile, cid: str, v: dict) -> bool:
+    """The character a line's face says it is, if they have a voice to use and the line doesn't
+    sound like the wrong gender or age for them."""
+    ch = prof.characters.get(prof.voice_source(cid), {})
+    return (bool(prof.refs(cid)) and not (v.get("gender") and ch.get("gender") and v["gender"] != ch["gender"])
+            and not (v.get("age") and ch.get("age") and (v["age"] == "child") != (ch["age"] == "child")))
+
+
 def assign_voices(job: Job, prof: Profile, lines: list[L.Line], voices: dict[int, dict] | None = None) -> None:
     """Pick the reference clip for every dubbed line.
 
@@ -296,6 +305,8 @@ def assign_voices(job: Job, prof: Profile, lines: list[L.Line], voices: dict[int
     voices = voices or {}
     min_match = float(job.cfg.get("speakers.line_voice_min", 0.35))
     own = 0
+    by_face = faces.characters_by_face(lines, faces.load(job))
+    kept_by_face = moved_by_face = 0
     elsewhere = own_voice_clips(job, prof, lines, own_min)
     for ln in lines:
         if ln.kind != L.SPEECH:
@@ -327,11 +338,20 @@ def assign_voices(job: Job, prof: Profile, lines: list[L.Line], voices: dict[int
             wrong_voice = bool(ref_emb) and speakers.cosine(v["emb"], ref_emb) < min_match
             wrong_gender = bool(v.get("gender") and ch.get("gender") and v["gender"] != ch["gender"])
             wrong_age = bool(v.get("age") and ch.get("age") and (v["age"] == "child") != (ch["age"] == "child"))
-            if wrong_voice or wrong_gender or wrong_age:
+            face = by_face.get(ln.id)
+            if (wrong_voice or wrong_gender or wrong_age) and face and face == ln.character and not wrong_gender:
+                kept_by_face += 1  # the picture says it is them: a short line's voice print is the weaker evidence
+            elif (wrong_voice or wrong_gender or wrong_age) and face and face != ln.character and face_fits(prof, face, v):
+                ln.character = face
+                ln.voice, ln.voice_note = str(prof.root / prof.refs(face)[0]["file"]), "speaker from the picture"
+                moved_by_face += 1
+            elif wrong_voice or wrong_gender or wrong_age:
                 ln.voice = ""  # speak with the line's own audio as the voice reference
                 what = "gender" if wrong_gender else "age" if wrong_age else "voice"
                 ln.voice_note = f"own line as reference ({what} didn't match {ch.get('name') or 'the character'})"
                 own += 1
+    if by_face:
+        job.qc["faces_kept_voice"], job.qc["faces_moved_speaker"] = kept_by_face, moved_by_face
     job.qc["minor_speaker_substitutions"] = dict(used)
     job.qc["lines_voiced_from_own_audio"] = own + sum(1 for ln in lines if ln.voice_note == "own line as reference")
 

@@ -72,6 +72,11 @@ def placed(ln: L.Line) -> tuple[float, float]:
     return float(start), float(start) + length
 
 
+def voice_channels(data: np.ndarray) -> np.ndarray:
+    """In a 5.1 track the voices are in front: the surrounds and LFE would only hide them."""
+    return data[:, :3].mean(axis=1, keepdims=True) if data.shape[1] >= 6 else data
+
+
 def hard_to_hear(text: str, heard: str, missed: list[str]) -> bool:
     """Key words lost in the mix: any in a short line, two or more in a long one. (A line
     the recogniser hears with nothing of it at all counts whatever its length.)"""
@@ -109,7 +114,7 @@ def run(job: Job) -> None:
         for ln in todo:
             a, b = placed(ln)
             f.seek(min(f.frames, max(0, int((a - EDGE_S) * sr))))
-            data = f.read(int((b - a + 2 * EDGE_S) * sr), dtype="float32", always_2d=True)
+            data = voice_channels(f.read(int((b - a + 2 * EDGE_S) * sr), dtype="float32", always_2d=True))
             p = clips / f"{ln.id:05d}.wav"
             media.write_wav(p, data if len(data) else np.zeros((sr // 10, data.shape[1]), np.float32), sr)
             items.append(str(p))

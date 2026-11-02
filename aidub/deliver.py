@@ -21,6 +21,8 @@ import time
 from pathlib import Path
 from xml.sax.saxutils import escape
 
+import soundfile as sf
+
 from . import __version__
 from . import lines as L
 from . import media, originals
@@ -303,6 +305,13 @@ def _finish_swap(job: Job) -> bool:
     return True
 
 
+def dub_format(job: Job, channels: int) -> list[str]:
+    """Encoder settings for the English track: 5.1 where the mix kept the original's 5.1."""
+    if channels == 6:
+        return ["-b:a", str(job.cfg.get("deliver.surround_bitrate", "384k")), "-ac", "6", "-channel_layout", "5.1"]
+    return ["-b:a", str(job.cfg.get("deliver.audio_bitrate", "192k")), "-ac", "2"]
+
+
 def run(job: Job) -> None:
     if _finish_swap(job):
         return
@@ -316,8 +325,7 @@ def run(job: Job) -> None:
     dub = job.path("deliver", "dub.mka")
     job.status("encoding the dub track")
     media.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-i", str(job.path("mix", "dub.wav")),
-               "-c:a", "aac", "-b:a", str(job.cfg.get("deliver.audio_bitrate", "192k")), "-ar", "48000",
-               "-ac", "2", str(dub)])
+               "-c:a", "aac", "-ar", "48000", *dub_format(job, sf.info(str(job.path("mix", "dub.wav"))).channels), str(dub)])
     subs = subtitle_tracks(job, lines)
 
     if job.options.get("preview_s"):

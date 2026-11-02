@@ -30,6 +30,7 @@ stages:
                  linear_backend: marlin, attention_backend: TRITON_ATTN,
                  max_num_seqs: 32, enforce_eager: false }   # all scenes at once; CUDA graphs: ~3.5x faster writing
   speak:       { worker: tts-indextts, model: IndexTeam/IndexTTS-2.5 }
+  faces:       { worker: faces, enabled: true }  # optional: who is talking on screen, for lines the voice check doubts
   bwe:         { worker: bwe-flashsr, enabled: true, mode: auto }   # auto: only when the original is brighter
   voicedesign: { worker: voicedesign, model: Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign }
 
@@ -51,6 +52,7 @@ gpu:
     events: 2000
     translate: 26000
     speak: 10000
+    faces: 3000
     bwe: 4000
     ocr: 2000
   poll_seconds: 30
@@ -155,6 +157,8 @@ mix:
 
 deliver:
   audio_bitrate: 192k
+  surround: true            # a 5.1 original gets a 5.1 English track (other layouts: stereo)
+  surround_bitrate: 384k
   track_title: "English (AI dub)"
   add_subtitle_tracks: true
   owner: { uid: 99, gid: 100 }

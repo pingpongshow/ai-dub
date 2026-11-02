@@ -1,0 +1,11 @@
+{
+ "python": "3.12",
+ "index_urls": [
+  "https://download.pytorch.org/whl/cu128"
+ ],
+ "index_strategy": "unsafe-best-match",
+ "title": "Who is talking on screen (optional)",
+ "models": "Light-ASD active speaker detection, YuNet faces, SFace face matching",
+ "licence": "MIT (Light-ASD, YuNet); Apache-2.0 (SFace)",
+ "download": "~40 MB plus PyTorch"
+}

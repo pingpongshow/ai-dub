@@ -16,6 +16,7 @@ async function pageVerify(id) {
   }
   VF = { id: Number(id), d, hear: "dub", m: -1, ab: null, ticks: new Set(store.get(`ticks.${id}`, [])),
     redo: store.get(`redo.${id}`, {}), now: null };
+  VF.tab = d.moments.some((m) => (m.group || "check") === "check") ? "check" : d.moments.some((m) => m.group === "songs") ? "songs" : "notes";
   VF.en = Object.fromEntries((d.lines || []).map(([lid, , , en]) => [lid, en]));
   d.moments.forEach((m) => { if (m.line != null && m.en != null) VF.en[m.line] = m.en; });
   const frees = (d.original.exists ? d.original.size : 0) + (d.work_size || 0);
@@ -59,11 +60,11 @@ async function pageVerify(id) {
         ${d.can_redo_lines ? `<div class="vf-now" id="vfNow"><span class="muted small">Hear a line that's wrong? Its controls show here while it plays.</span></div>` : ""}
       </div>
       <div class="rv-right">
-        <div class="rv-tabs"><button class="on">Moments to check<span class="n" id="vfTicked"></span></button></div>
+        <div class="rv-tabs" id="vfTabs">${vfTabs(d)}</div>
         <div class="vf-redo" id="vfRedoBar" hidden><span class="grow" id="vfRedoN"></span>
           <button class="sm ghost" id="vfRedoClear">Clear</button><button class="sm primary" id="vfRedoGo"></button></div>
         <div class="rv-list" id="vfList">${d.moments.length ? d.moments.map((m, i) => `
-          <div class="frow vfm" data-m="${i}"><button class="tick" data-tick="${i}" title="Tick it off once you've listened" aria-label="Listened">✓</button>
+          <div class="frow vfm" data-m="${i}" data-group="${m.group || "check"}"><button class="tick" data-tick="${i}" title="Tick it off once you've listened" aria-label="Listened">✓</button>
             <div><span class="rv-time muted">${fmtT(m.t, false)}</span> <b>${esc(m.title)}</b>${m.detail ? `<span class="d">${esc(m.detail)}</span>` : ""}
               <div class="row" style="margin-top:6px;gap:6px"><button class="sm" data-ab="${i}" title="Play these few seconds as the original, then as the dub">A/B</button>
               ${m.line != null && !d.can_redo_lines && d.can_redub ? `<a class="button sm" href="#review/${id}/${m.line}" title="Open this line on the review page: new English, another speaker, or just voice it again">Fix this line…</a>` : ""}</div>
@@ -87,6 +88,19 @@ async function pageVerify(id) {
   </div>`;
   vfWire();
   vfDraw();
+}
+
+// Nothing is left out: what most needs a listen first, each song as one row, then every other note.
+const VF_TABS = [["check", "To check"], ["songs", "Songs"], ["notes", "Notes"]];
+function vfTabs(d) {
+  return VF_TABS.map(([g, label]) => `<button data-tab="${g}" class="${VF.tab === g ? "on" : ""}">${label}<span class="n" data-count="${g}"></span></button>`).join("");
+}
+function vfShowTab() {
+  document.querySelectorAll("#vfTabs button").forEach((b) => b.classList.toggle("on", b.dataset.tab === VF.tab));
+  document.querySelectorAll("#vfList .vfm").forEach((r) => (r.hidden = r.dataset.group !== VF.tab));
+}
+function vfInTab() {
+  return VF.d.moments.map((m, i) => ((m.group || "check") === VF.tab ? i : -1)).filter((i) => i >= 0);
 }
 
 // A/B: the same few seconds as the original, then as the dub.
@@ -155,15 +169,16 @@ function vfDraw() {
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, W, H);
   g.fillStyle = rvCss("--bg"); rr(g, 0, 0, W, H, 5); g.fill();
-  const col = { song: rvCss("--keep") || rvCss("--warn"), kept: rvCss("--bad"), voice: rvCss("--accent"), unclear: rvCss("--warn"), late: rvCss("--muted") };
+  const col = { song: rvCss("--keep") || rvCss("--warn"), kept: rvCss("--bad"), masked: rvCss("--bad"), unvoiced: rvCss("--bad"), voice: rvCss("--accent"),
+    voices: rvCss("--accent"), unclear: rvCss("--warn"), late: rvCss("--muted") };
   const ms = VF.d.moments;
-  for (let i = 0; i + 1 < ms.length; i++) {  // song stretches as bands between their start and end marks
-    if (ms[i].kind === "song" && /starts/.test(ms[i].title)) {
-      const end = ms.slice(i + 1).find((x) => x.kind === "song" && /ends/.test(x.title));
-      if (end) { g.fillStyle = rvCss("--keep-bg"); g.fillRect((ms[i].t / d) * W, 3, ((end.t - ms[i].t) / d) * W, H - 6); }
-    }
+  for (const m of ms) {  // song stretches as bands
+    if (m.kind === "song" && m.end) { g.fillStyle = rvCss("--keep-bg"); g.fillRect((m.t / d) * W, 3, ((m.end - m.t) / d) * W, H - 6); }
   }
-  for (const m of ms) { g.fillStyle = col[m.kind] || col.late; g.fillRect((m.t / d) * W - 1, 4, 2, H - 8); }
+  for (const m of ms) {
+    if ((m.group || "check") !== "check" && m.kind !== "song") continue;  // the bar shows what most needs a listen
+    g.fillStyle = col[m.kind] || col.late; g.fillRect((m.t / d) * W - 1, 4, 2, H - 8);
+  }
   g.fillStyle = rvCss("--text"); g.fillRect((vfNow() / d) * W - 1, 0, 2, H);
 }
 function vfLoop() {
@@ -185,6 +200,8 @@ function vfWire() {
   segWire("#vfRate", (val) => { v.playbackRate = Number(val); vfSync(false); });
   segWire("#vfSubs", (val) => { for (const t of v.textTracks) t.mode = val === "en" ? "showing" : "hidden"; });
   document.querySelectorAll("#vfList .frow").forEach((r) => (r.onclick = () => vfGo(Number(r.dataset.m))));
+  document.querySelectorAll("#vfTabs button").forEach((b) => (b.onclick = () => { VF.tab = b.dataset.tab; VF.m = -1; vfShowTab(); }));
+  vfShowTab();
   const bar = $("#vfBar");
   bar.onclick = (ev) => { const r = bar.getBoundingClientRect(); vfSeek(((ev.clientX - r.left) / r.width) * d.duration); };
   const decide = async (verdict, question, done) => {
@@ -196,14 +213,18 @@ function vfWire() {
     } catch (e) { toast(e.message); }
   };
   $("#vfGood").onclick = () => {
-    const left = d.moments.length - VF.ticks.size;
-    decide("good", (left > 0 ? `You haven't ticked ${left} of the ${d.moments.length} moments yet.\n\n` : "")
+    const main = d.moments.map((m, i) => i).filter((i) => (d.moments[i].group || "check") === "check");
+    const left = main.filter((i) => !VF.ticks.has(i)).length;
+    decide("good", (left > 0 ? `You haven't ticked ${left} of the ${main.length} moments to check yet.\n\n` : "")
       + `Keep this dub and permanently delete the original${d.original.exists ? ` (${(d.original.size / 1e9).toFixed(2)} GB)` : ""} and the working files? This can't be undone.`, "Kept");
   };
   // Ticks: which moments you've listened to (kept in this browser, per dub).
   const ticks = () => {
     document.querySelectorAll("#vfList .vfm").forEach((r) => r.classList.toggle("ticked", VF.ticks.has(Number(r.dataset.m))));
-    $("#vfTicked").textContent = d.moments.length ? `${VF.ticks.size} / ${d.moments.length}` : "0";
+    for (const [g] of VF_TABS) {
+      const all = d.moments.map((m, i) => [m, i]).filter(([m]) => (m.group || "check") === g);
+      $(`#vfTabs [data-count="${g}"]`).textContent = `${all.filter(([, i]) => VF.ticks.has(i)).length} / ${all.length}`;
+    }
   };
   document.querySelectorAll("#vfList [data-tick]").forEach((b) => (b.onclick = (e) => {
     e.stopPropagation();
@@ -309,12 +330,12 @@ async function vfRedoGo() {
 document.addEventListener("keydown", (ev) => {
   if (!VF || !location.hash.startsWith("#verify/")) return;
   if ((ev.target.closest && ev.target.closest("input, select, textarea")) || ev.metaKey || ev.ctrlKey || ev.altKey) return;
-  const v = $("#vfv"), k = ev.key, n = VF.d.moments.length;
+  const v = $("#vfv"), k = ev.key, tab = vfInTab(), n = tab.length;
   if (!v) return;
   if (k === " ") { ev.preventDefault(); $("#vfPlay").click(); }
   else if (k === "ArrowLeft" || k === "ArrowRight") { ev.preventDefault(); vfSeek(vfNow() + (k === "ArrowLeft" ? -1 : 1) * (ev.shiftKey ? 5 : 1)); }
-  else if ((k === "n" || k === "N") && n) vfGo((VF.m + 1) % n);
-  else if ((k === "p" || k === "P") && n) vfGo((VF.m - 1 + n) % n);
+  else if ((k === "n" || k === "N") && n) vfGo(tab[(tab.indexOf(VF.m) + 1) % n]);
+  else if ((k === "p" || k === "P") && n) vfGo(tab[(Math.max(tab.indexOf(VF.m), 0) - 1 + n) % n]);
   else if (k === "d" || k === "D") vfHear("dub");
   else if (k === "o" || k === "O") vfHear("orig");
 });

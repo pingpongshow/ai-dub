@@ -175,7 +175,12 @@ ones you're most likely to want are below.
 | `speak.redo_takes` | `4` | Takes for a line you send back from the check screen, with new seeds each time |
 | `speak.processes` | `2` | Voice-model processes sharing the GPU |
 | `fit.timing` | `auto` | `window` fits each line to the time the character's mouth moves. `start` starts with the original line at its natural length. `auto` uses `start` for word-for-word subtitle dubs and `window` otherwise. |
+| `fit.free_early_ms`, `fit.free_max_late_ms`, `fit.free_gentle_tempo` | `400`, `350`, `1.12` | With `start` timing: how early a line may start when that leaves the next on time (never back over a shot change or a line kept in the original), how late one may run, and how far the lines running into it are sped up together before any goes up to `fit.force_stretch_max` |
 | `condense.enabled` | `true` | Write shorter English for lines that still don't fit |
+| `readback.enabled`, `readback.min_clear` | `true`, `0.5` | Listen to the finished track before delivery; stop the job if it is silent while the original plays, or if less than this share of its lines can be heard |
+| `mix.min_level_db` | `-12` | No dubbed line quieter than this under the film's usual dialogue level, however quiet the original voice was |
+| `stages.faces.enabled` | `true` | Use the picture, once **Who is talking on screen** is installed on the Models page: a line the voice check doubts stays with the character whose face is talking, or moves to them |
+| `deliver.surround`, `deliver.surround_bitrate` | `true`, `384k` | A 5.1 original gets a 5.1 English track, the dub in its front and centre channels and its music, effects and surrounds as they were. Other layouts get stereo. |
 | `stages.bwe.enabled` | `true` | Restore full 48 kHz brightness to the cloned voice (`mode: auto` does it only when the original is brighter) |
 | `deliver.track_title` | `English (AI dub)` | The name of the added audio track |
 | `deliver.add_subtitle_tracks` | `true` | Add the subtitle tracks Ai Dub found, or made, for languages the file has none in |

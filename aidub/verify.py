@@ -13,17 +13,19 @@ back and dubs again with a review.
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import time
 from pathlib import Path
 
 from . import lines as L
-from . import media, originals, review
+from . import corrections, media, originals, review
 from .jobs import Store
 from .speak import UNCLEAR, VOICE_DOUBT
 
 MEDIA = {"preview.mp4": "video/mp4", "dub.m4a": "audio/mp4", "subs.en.vtt": "text/vtt"}
-LATE_S = 1.0
+LATE_S = 0.5
+FAST_TEMPO = 1.2
 
 
 def folder(work: Path) -> Path:
@@ -56,8 +58,12 @@ def prepare(job, rec: dict) -> dict:
         shutil.copyfile(work / "review" / "subs.en.vtt", d / "subs.en.vtt")
     lines = L.load(work / "lines.json") if (work / "lines.json").exists() else []
     meta = {"name": job.src.name, "duration": float(ing.get("duration", 0) or 0), "created": time.time(),
-            "original": str(aside) if aside.name else "", "moments": moments(lines, float(ing.get("duration", 0) or 0))}
+            "original": str(aside) if aside.name else "", "moments": moments(lines, float(ing.get("duration", 0) or 0), job)}
     (d / "meta.json").write_text(json.dumps(meta, ensure_ascii=False))
+    try:
+        corrections.save(job.cfg.appdata, job.src.name, job.id, work, job.qc)
+    except Exception as exc:  # worth having, not worth losing a finished dub over
+        job.log(f"corrections not kept: {exc}")
     # What the job had when it reached the review stays until the check, so the review
     # page can open on the finished dub and dub it again with changes; the voiced takes
     # stay too, so one line can be redone; mixes and the rest go.
@@ -69,35 +75,102 @@ def prepare(job, rec: dict) -> dict:
     return meta
 
 
-def moments(lines: list[L.Line], duration: float) -> list[dict]:
-    """The places worth listening to in a finished dub."""
+CHECK, SONGS, NOTES = "check", "songs", "notes"  # the check screen's tabs: nothing is left out, the rest is out of the way
+TITLE_LIKE = re.compile(r"[^a-z]+")
+
+
+def _clock(t: float) -> str:
+    t = int(t)
+    return f"{t // 3600}:{t // 60 % 60:02d}:{t % 60:02d}" if t >= 3600 else f"{t // 60}:{t % 60:02d}"
+
+
+def unvoiced_cues(job, lines: list[L.Line]) -> list[dict]:
+    """Every dialogue subtitle no dubbed line covers: "left in Japanese" only counts lines,
+    and a subtitle can lose its line altogether."""
+    from .align import load_chosen
+    from .subtitles.model import DIALOGUE
+    out = []
+    spans = [(ln.start, ln.end) for ln in lines if ln.kind == L.SPEECH and ln.take and not ln.fallback]
+    flagged = [(ln.start, ln.end) for ln in lines if ln.kind == L.SPEECH and ln.fallback]
+    def covered(a, b, rows):
+        return sum(max(0.0, min(b, y) - max(a, x)) for x, y in rows)
+    for q in load_chosen(job, "english"):
+        if q.kind != DIALOGUE or not q.text.strip():
+            continue
+        length = max(0.01, q.end - q.start)
+        # (A line voiced late or early still counts: speech rarely fills its subtitle.)
+        if covered(q.start - 0.3, q.end + 0.3, spans) >= 0.2 * length or covered(q.start, q.end, flagged) >= 0.2 * length:
+            continue
+        under = max((ln for ln in lines if min(ln.end, q.end) > max(ln.start, q.start)),
+                    key=lambda ln: min(ln.end, q.end) - max(ln.start, q.start), default=None)
+        title = bool(TITLE_LIKE.fullmatch(q.text)) or q.text.startswith(('"', "“", "[", "("))
+        out.append({"t": q.start, "kind": "unvoiced", "group": NOTES if title or (under is not None and under.kind == L.SONG) else CHECK,
+                    "title": "Subtitle not voiced", "line": under.id if under is not None else None,
+                    "detail": f"“{q.text[:80]}”" + (f" ({under.kept_why or under.kind})" if under is not None else " (no one was heard here)")})
+    return out
+
+
+def two_voices(job, lines: list[L.Line]) -> list[dict]:
+    from .align import main_speaker
+    turns = ((job.get("diarization") or {}).get("segments", []) if job is not None else [])
+    out = []
+    for ln in lines:
+        if ln.kind != L.SPEECH or not ln.take or ln.fallback:
+            continue
+        ranked = main_speaker(turns, ln.start, ln.end)[2]
+        total = sum(v for _, v in ranked)
+        if len(ranked) >= 2 and ranked[1][1] >= 0.4 and ranked[1][1] / total >= 0.25:
+            out.append({"t": ln.start, "kind": "voices", "group": CHECK, "title": "Two people may share this line", "line": ln.id,
+                        "detail": f"one voice says all of “{ln.en[:60]}”"})
+    return out
+
+
+def moments(lines: list[L.Line], duration: float, job=None) -> list[dict]:
+    """Everything worth a listen in a finished dub, each in one of the screen's three groups."""
     out = []
     for r in review.regions(lines, duration):
         label = {"opening": "Opening", "ending": "Ending"}.get(r["kind"], "Song")
-        out.append({"t": r["start"], "kind": "song", "title": f"{label} starts: original kept",
+        out.append({"t": r["start"], "end": r["end"], "kind": "song", "group": SONGS,
+                    "title": f"{label} {_clock(r['start'])} to {_clock(r['end'])}: original kept",
                     "detail": "; ".join(r.get("reasons", []))})
-        out.append({"t": r["end"], "kind": "song", "title": f"{label} ends: dub resumes", "detail": ""})
     for ln in lines:
         if ln.kind != L.SPEECH:
             continue
         if ln.fallback:
-            out.append({"t": ln.start, "kind": "kept", "title": "Left in Japanese", "detail": ln.fallback, "line": ln.id})
+            out.append({"t": ln.start, "kind": "kept", "group": CHECK, "title": "Left in Japanese", "detail": f"“{ln.en[:60]}”: {ln.fallback}" if ln.en else ln.fallback, "line": ln.id})
         elif UNCLEAR in ln.check_note:
-            out.append({"t": ln.start, "kind": "unclear", "title": "One word may be unclear", "line": ln.id,
+            out.append({"t": ln.start, "kind": "unclear", "group": CHECK, "title": "One word may be unclear", "line": ln.id,
                         "detail": f"“{ln.en[:60]}”: " + ln.check_note.split(UNCLEAR + ": ", 1)[-1]})
         elif ln.voice_note in ("moved by pitch", "your choice") or ln.voice_note.endswith("(your choice)"):
-            out.append({"t": ln.start, "kind": "voice", "title": "Voice changed", "line": ln.id,
+            out.append({"t": ln.start, "kind": "voice", "group": CHECK, "title": "Voice changed", "line": ln.id,
                         "detail": f"{ln.voice_note}: “{ln.en[:60]}”"})
         elif VOICE_DOUBT in ln.check_note:
-            out.append({"t": ln.start, "kind": "voice", "title": "Voice may not match", "line": ln.id,
+            out.append({"t": ln.start, "kind": "voice", "group": CHECK, "title": "Voice may not match", "line": ln.id,
                         "detail": f"every word came out right: “{ln.en[:60]}”"})
         if (ln.fit or {}).get("mix_missed"):
-            out.append({"t": ln.start, "kind": "masked", "title": "May be hard to hear in the mix", "line": ln.id,
+            out.append({"t": ln.start, "kind": "masked", "group": CHECK, "title": "May be hard to hear in the mix", "line": ln.id,
                         "detail": f"“{ln.en[:60]}”: heard “{str(ln.fit.get('mix_heard', ''))[:60]}”"})
         placed = (ln.fit or {}).get("placed")
         if placed is not None and placed - ln.start > LATE_S:
-            out.append({"t": ln.start, "kind": "late", "title": f"Starts {placed - ln.start:.1f} s late", "line": ln.id,
+            out.append({"t": ln.start, "kind": "late", "group": CHECK, "title": f"Starts {placed - ln.start:.1f} s late", "line": ln.id,
                         "detail": f"“{ln.en[:60]}”"})
+        tempo = (ln.fit or {}).get("paced_tempo") or 1.0
+        if tempo > FAST_TEMPO:
+            out.append({"t": ln.start, "kind": "fast", "group": NOTES, "title": f"Played {tempo:.2f} times as fast", "line": ln.id,
+                        "detail": f"“{ln.en[:60]}”"})
+        for note in (ln.check_note or "").split("; "):
+            if note and UNCLEAR not in note and VOICE_DOUBT not in note and note != ln.fallback:
+                out.append({"t": ln.start, "kind": "note", "group": NOTES, "title": note[:1].upper() + note[1:], "line": ln.id,
+                            "detail": f"“{ln.en[:60]}”" + (f" under “{ln.source_text[:30]}”" if ln.source_text else "")})
+        if ln.voice_note.startswith("own line as reference ("):
+            out.append({"t": ln.start, "kind": "note", "group": NOTES, "title": "Voiced from its own clip", "line": ln.id,
+                        "detail": f"{ln.voice_note}: “{ln.en[:60]}”"})
+    if job is not None:
+        out += unvoiced_cues(job, lines) + two_voices(job, lines)
+        track = job.qc.get("subtitle_track") or {}
+        if track.get("trusted") is False:
+            out.append({"t": 0.0, "kind": "subs", "group": CHECK, "title": "Dubbed from the speech, not the subtitles",
+                        "detail": str(track.get("why") or "")})
     out.sort(key=lambda m: m["t"])
     return [{**m, "t": round(m["t"], 2)} for m in out]
 
