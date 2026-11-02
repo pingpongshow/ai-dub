@@ -1762,3 +1762,12 @@ def test_audit_finds_what_was_never_heard():
     data = np.zeros(16000 * 40, np.float32)
     data[:16000 * 5] = 0.2
     assert audit.silent_stretches(data, 16000) == [[5, 40]]
+
+
+def test_one_face_two_characters_is_said_not_acted_on():
+    from aidub import faces as F
+    a = [1.0] + [0.0] * 9
+    lines = [L.Line(i, i, i + 1, character="c1" if i <= 6 else "c2") for i in range(1, 13)]
+    rows = {i: {"faces": [{"score": 2.0, "print": a}]} for i in range(1, 13)}
+    assert F.split_people(lines, rows) == [["c1", "c2"]]
+    assert F.split_people(lines[:6], rows) == []

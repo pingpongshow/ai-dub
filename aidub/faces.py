@@ -18,8 +18,8 @@ from . import lines as L
 from . import workers
 from .job import Job
 
-TALKING = 0.3         # a face's mean talking score over this is talking ...
-CLEAR_BY = 0.5        # ... when no other face in the line comes within this of it
+TALKING = 0.0         # a face's mean talking score over this is talking ...
+CLEAR_BY = 0.3        # ... when no other face in the line comes within this of it
 SAME_FACE = 0.40      # face prints this alike are one person
 MIN_VOTES = 4         # a face names a character from at least this many of its lines ...
 MIN_SHARE = 0.6       # ... this many of them agreeing
@@ -76,6 +76,26 @@ def characters_by_face(lines: list[L.Line], rows: dict[int, dict]) -> dict[int, 
         if sum(v.values()) >= MIN_VOTES and n / sum(v.values()) >= MIN_SHARE:
             named[person] = top
     return {lid: named[p] for lid, p in zip(ids, people) if p in named}
+
+
+def split_people(lines: list[L.Line], rows: dict[int, dict], least: int = 5, share: float = 0.2) -> list[list[str]]:
+    """Characters that are one face: the voice side split one person in two. Only said, not
+    acted on: a face can also be someone listening while another speaks off screen."""
+    ids, prints = [], []
+    for ln in lines:
+        p = speaking_face(rows.get(ln.id, {}))
+        if p and ln.kind == L.SPEECH and ln.character:
+            ids.append(ln.character)
+            prints.append(p)
+    votes: dict[int, Counter] = defaultdict(Counter)
+    for c, person in zip(ids, cluster(prints)):
+        votes[person][c] += 1
+    out = []
+    for v in votes.values():
+        top = v.most_common(2)
+        if len(top) == 2 and top[1][1] >= least and top[1][1] / sum(v.values()) >= share:
+            out.append([top[0][0], top[1][0]])
+    return out
 
 
 def load(job: Job) -> dict[int, dict]:

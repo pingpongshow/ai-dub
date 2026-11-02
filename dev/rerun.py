@@ -35,7 +35,7 @@ def link_tree(src: Path, dst: Path, skip: set[str]) -> None:
             q.mkdir(parents=True, exist_ok=True)
         else:
             q.parent.mkdir(parents=True, exist_ok=True)
-            if rel.parts[0] == "audio" and p.suffix in (".wav", ".npy"):
+            if (rel.parts[0] == "audio" and p.suffix in (".wav", ".npy")) or p.suffix in (".mp4", ".m4a"):
                 os.link(p, q)
             else:
                 shutil.copy2(p, q)
@@ -49,6 +49,7 @@ def main():
     ap.add_argument("--until", default="listen")
     ap.add_argument("--file")
     ap.add_argument("--no-decisions", action="store_true", help="labels only: leave the review's decisions out")
+    ap.add_argument("--no-review", action="store_true", help="don't stop for review")
     args = ap.parse_args()
 
     live = config.load(None)
@@ -89,7 +90,7 @@ def main():
         (work / "review" / "decisions.json").unlink(missing_ok=True)
     row = Store(live_app / "aidub.db").get(int(args.job)) or {}
     prof = Profiles(cfg.appdata).get_or_create(row.get("profile") or name)
-    job = Job(cfg, args.job, src, prof, row.get("options") or {})
+    job = Job(cfg, args.job, src, prof, {**(row.get("options") or {}), **({"review": "off"} if args.no_review else {})})
     try:
         pipeline.run(job, until=args.until)
     except Paused as exc:

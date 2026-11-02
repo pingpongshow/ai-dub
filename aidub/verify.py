@@ -103,7 +103,7 @@ def unvoiced_cues(job, lines: list[L.Line]) -> list[dict]:
             continue
         under = max((ln for ln in lines if min(ln.end, q.end) > max(ln.start, q.start)),
                     key=lambda ln: min(ln.end, q.end) - max(ln.start, q.start), default=None)
-        title = bool(TITLE_LIKE.fullmatch(q.text)) or q.text.startswith(('"', "“", "[", "("))
+        title = bool(TITLE_LIKE.fullmatch(q.text)) or q.text.startswith(("[", "("))
         out.append({"t": q.start, "kind": "unvoiced", "group": NOTES if title or (under is not None and under.kind == L.SONG) else CHECK,
                     "title": "Subtitle not voiced", "line": under.id if under is not None else None,
                     "detail": f"“{q.text[:80]}”" + (f" ({under.kept_why or under.kind})" if under is not None else " (no one was heard here)")})
@@ -167,6 +167,9 @@ def moments(lines: list[L.Line], duration: float, job=None) -> list[dict]:
                         "detail": f"{ln.voice_note}: “{ln.en[:60]}”"})
     if job is not None:
         out += unvoiced_cues(job, lines) + two_voices(job, lines)
+        for a, b in job.qc.get("faces_one_person") or []:
+            out.append({"t": 0.0, "kind": "note", "group": NOTES, "title": "Two voices may be one person",
+                        "detail": f"{a} and {b} have the same face on screen. To merge them, see Shows → Voices."})
         track = job.qc.get("subtitle_track") or {}
         if track.get("trusted") is False:
             out.append({"t": 0.0, "kind": "subs", "group": CHECK, "title": "Dubbed from the speech, not the subtitles",
@@ -207,7 +210,9 @@ def view(store: Store, work_root: Path, jid: int) -> dict:
     # What every dubbed line says, so any of them can be voiced again from here: the
     # flagged ones, or one you hear going wrong.
     redo = rec.get("verify") == "pending" and review.can_redo_lines(work)
-    moments, spoken = meta.get("moments", []), []
+    # (Dubs checked from before the lists were grouped have no group.)
+    moments = [{"group": SONGS if m.get("kind") == "song" else CHECK, **m} for m in meta.get("moments", [])]
+    spoken = []
     if (work / "lines.json").exists():
         lines = L.load(work / "lines.json")
         en = {ln.id: ln.en for ln in lines}
@@ -218,7 +223,7 @@ def view(store: Store, work_root: Path, jid: int) -> dict:
             "moments": moments, "verify": rec.get("verify", ""),
             "original": {"path": str(orig), "exists": orig.exists() if orig.name else False,
                          "size": orig.stat().st_size if orig.name and orig.exists() else 0},
-            "qc": {k: (rec.get("qc") or {}).get(k) for k in ("fallback_rate", "dubbed_lines", "free_timing")},
+            "qc": {k: (rec.get("qc") or {}).get(k) for k in ("fallback_rate", "dubbed_lines", "free_timing", "readback", "dub_channels")},
             "can_redub": review.can_redub(work),
             "can_redo_lines": redo, "lines": spoken,
             "work_size": sum(f.stat().st_size for f in (work_root / f"job-{jid}").rglob("*") if f.is_file())}

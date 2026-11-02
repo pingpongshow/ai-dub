@@ -352,6 +352,8 @@ def assign_voices(job: Job, prof: Profile, lines: list[L.Line], voices: dict[int
                 own += 1
     if by_face:
         job.qc["faces_kept_voice"], job.qc["faces_moved_speaker"] = kept_by_face, moved_by_face
+        job.qc["faces_one_person"] = [[prof.characters.get(c, {}).get("name", c) for c in pair]
+                                      for pair in faces.split_people(lines, faces.load(job))]
     job.qc["minor_speaker_substitutions"] = dict(used)
     job.qc["lines_voiced_from_own_audio"] = own + sum(1 for ln in lines if ln.voice_note == "own line as reference")
 

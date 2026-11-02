@@ -75,6 +75,7 @@ async function pageVerify(id) {
           <div class="grid">
             <span class="lab">Original</span><span>${d.original.exists ? `${gbs(d.original.size)}, set aside next to the dub` : "already gone"}</span>
             <span class="lab">Dubbed lines</span><span>${d.qc.dubbed_lines ?? "?"}${d.qc.fallback_rate != null ? ` · ${(d.qc.fallback_rate * 100).toFixed(1)} % left in Japanese` : ""}</span>
+            ${d.qc.readback && d.qc.readback.lines ? `<span class="lab">Listened back</span><span>${d.qc.readback.lines - d.qc.readback.hard_to_hear} of ${d.qc.readback.lines} lines heard clearly in the finished track${d.qc.dub_channels === 6 ? " · 5.1" : ""}</span>` : ""}
             ${d.qc.free_timing ? `<span class="lab">Timing</span><span>latest start ${d.qc.free_timing.max_wait_s} s after its original</span>` : ""}
           </div>
           ${d.can_redub ? `<div class="grid" style="margin-top:6px"><span class="lab">Working files</span><span>${gbs(d.work_size)}, kept so you can change and redub</span></div>` : ""}
