@@ -163,6 +163,10 @@ def is_dialogue_audio(s: Stream) -> bool:
     return not any(w in title for w in NOT_DIALOGUE_WORDS)
 
 
+WAV_LIMIT = 2 ** 32 - 1024  # bytes a plain WAV can hold; RF64 (same .wav name) holds more
+SAMPLE_BYTES = {"FLOAT": 4, "DOUBLE": 8, "PCM_16": 2, "PCM_24": 3, "PCM_32": 4}
+
+
 def extract_audio(src: Path, stream_index: int, dst: Path, *, rate: int = 48000, channels: int | None = None,
                   start: float | None = None, duration: float | None = None, pan: str | None = None) -> Path:
     cmd = ["ffmpeg", "-nostdin", "-v", "error", "-y"]
@@ -176,12 +180,17 @@ def extract_audio(src: Path, stream_index: int, dst: Path, *, rate: int = 48000,
         cmd += ["-af", pan]
     if channels:
         cmd += ["-ac", str(channels)]
-    cmd += ["-ar", str(rate), "-c:a", "pcm_f32le", str(dst)]
+    cmd += ["-ar", str(rate), "-c:a", "pcm_f32le", "-rf64", "auto", str(dst)]
     run(cmd)
     return dst
 
 
 def read_wav(path: str | Path, *, mono: bool = False) -> tuple[np.ndarray, int]:
+    info = sf.info(str(path))
+    size = SAMPLE_BYTES.get(info.subtype)
+    # Past 4 GiB a plain WAV's header can't count its audio, and it reads back cut short.
+    if info.format == "WAV" and size and Path(path).stat().st_size - info.frames * info.channels * size > 1 << 20:
+        raise ValueError(f"{Path(path).name} is over 4 GiB and would read back cut short")
     data, sr = sf.read(str(path), dtype="float32", always_2d=True)
     if mono:
         data = data.mean(axis=1, keepdims=True)
@@ -191,7 +200,7 @@ def read_wav(path: str | Path, *, mono: bool = False) -> tuple[np.ndarray, int]:
 def write_wav(path: str | Path, data: np.ndarray, sr: int, subtype: str = "FLOAT") -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    sf.write(str(path), data, sr, subtype=subtype)
+    sf.write(str(path), data, sr, subtype=subtype, format="RF64" if data.size * 4 > WAV_LIMIT else "WAV")
     return path
 
 

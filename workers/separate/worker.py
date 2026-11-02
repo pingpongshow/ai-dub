@@ -9,8 +9,22 @@ state = {"sep": None, "model": None}
 MODELS = Path(model_dir()) / "audio-separator"
 
 
+def _large_wavs():
+    """The separator writes plain WAVs, which read back cut short past 4 GiB (a stereo film
+    over about 3 hours). RF64 keeps the .wav name and holds any length."""
+    import soundfile as sf
+    plain = sf.write
+
+    def write(file, data, samplerate, subtype=None, **kw):
+        if data.size * 4 > 2 ** 32 - 1024:
+            kw["format"] = "RF64"
+        return plain(file, data, samplerate, subtype, **kw)
+    sf.write = write
+
+
 def _separator(out_dir: str):
     from audio_separator.separator import Separator
+    _large_wavs()
     MODELS.mkdir(parents=True, exist_ok=True)
     return Separator(model_file_dir=str(MODELS), output_dir=out_dir, output_format="WAV", sample_rate=48000,
                      use_autocast=device() == "cuda", chunk_duration=600, use_soundfile=True)

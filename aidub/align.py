@@ -426,6 +426,9 @@ def relisten(job: Job, lines: list[L.Line], lang: str, only: list[L.Line] | None
     if not todo or not job.cfg.get("stages.recognize.worker"):
         return {}
     data, sr = media.read_wav(job.path("audio", "dialogue16k.wav"), mono=True)
+    todo = [ln for ln in todo if ln.start < len(data) / sr]  # a subtitle can outlast the audio
+    if not todo:
+        return {}
     pad = 0.15
     items = []
     for i, ln in enumerate(todo):

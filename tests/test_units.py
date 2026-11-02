@@ -1499,3 +1499,58 @@ def test_tracks_read_in_background_and_cached(tmp_path):
     assert left == 0 and info[str(ep)]["audio"][0]["lang"] == "ja"
     again, left = Tracks(tmp_path).lookup([ep], wait=0)   # from tracks.json, no reading
     assert left == 0 and again[str(ep)]["audio"][0]["lang"] == "ja"
+
+
+def test_long_audio_keeps_its_end(tmp_path, monkeypatch):
+    import soundfile as sf
+    from aidub import media
+    data = np.zeros((1000, 2), np.float32)
+    assert sf.info(str(media.write_wav(tmp_path / "plain.wav", data, 48000))).format == "WAV"
+    monkeypatch.setattr(media, "WAV_LIMIT", 1000)
+    big = media.write_wav(tmp_path / "big.wav", data, 48000)
+    assert sf.info(str(big)).format == "RF64"
+    assert media.read_wav(big)[0].shape == (1000, 2)
+    seen = []
+    monkeypatch.setattr(media, "run", seen.append)
+    media.extract_audio(tmp_path / "film.mkv", 1, tmp_path / "out.wav")
+    assert seen[0][seen[0].index("-rf64") + 1] == "auto"
+
+
+def test_read_wav_refuses_a_file_cut_short(tmp_path):
+    from aidub import media
+    path = media.write_wav(tmp_path / "cut.wav", np.zeros((1000, 2), np.float32), 48000)
+    assert len(media.read_wav(path)[0]) == 1000
+    with open(path, "ab") as f:  # what a WAV past 4 GiB looks like: more audio than its header counts
+        f.write(b"\0" * (2 << 20))
+    with pytest.raises(ValueError, match="cut short"):
+        media.read_wav(path)
+
+
+def test_relisten_skips_lines_past_the_audio(tmp_path):
+    import soundfile as sf
+    from types import SimpleNamespace
+    from aidub import align, media
+    media.write_wav(tmp_path / "dialogue16k.wav", np.zeros((16000 * 10, 1), np.float32), 16000)
+    sent = []
+
+    class Worker:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def call(self, op, args):
+            if op != "transcribe":
+                return {}
+            sent.extend(sf.info(it["path"]).frames for it in args["items"])
+            return {"results": [{"text": ""} for _ in args["items"]]}
+
+    job = SimpleNamespace(cfg=SimpleNamespace(get=lambda k, d=None: {"stages.recognize.worker": "asr"}.get(k, {})),
+                          path=lambda *p: tmp_path.joinpath(*p[1:]), worker=lambda name: Worker(), qc={},
+                          log=lambda m: None)
+    inside, past = L.Line(1, 2.0, 3.0), L.Line(2, 20.0, 21.0)
+    align.relisten(job, [inside, past], "ja")
+    assert len(sent) == 1 and sent[0] > 0
+    assert align.relisten(job, [past], "ja") == {}
+    assert len(sent) == 1
