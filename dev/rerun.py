@@ -50,6 +50,7 @@ def main():
     ap.add_argument("--file")
     ap.add_argument("--no-decisions", action="store_true", help="labels only: leave the review's decisions out")
     ap.add_argument("--no-review", action="store_true", help="don't stop for review")
+    ap.add_argument("--no-subtitles", action="store_true", help="as if the file had no subtitles: translated from the speech")
     args = ap.parse_args()
 
     live = config.load(None)
@@ -80,6 +81,9 @@ def main():
         state = json.loads((work / "state.json").read_text())
         keep = pipeline.STEP_NAMES[: pipeline.STEP_NAMES.index(args.start)]
         state["done"] = [s for s in state["done"] if s in keep]
+        if args.no_subtitles:
+            subs = state["data"]["subtitles"]
+            subs["english"], subs["source"], subs["candidates"] = None, None, []
         (work / "state.json").write_text(json.dumps(state, ensure_ascii=False))
         src = Path(state["data"]["ingest"]["source"])
         name = guess_name(src)
