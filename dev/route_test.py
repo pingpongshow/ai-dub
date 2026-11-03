@@ -25,6 +25,8 @@ PLANS = {
     "speech": [("window", ["--no-subtitles", "--set", "fit.timing=window", "--set", "translate.repair_speech=false"]),
                ("natural", ["--no-subtitles", "--set", "fit.timing=start", "--set", "translate.repair_speech=false"]),
                ("repaired", ["--no-subtitles", "--set", "fit.timing=start", "--set", "translate.repair_speech=true"])],
+    "other": [("translated", []),
+              ("speech", ["--no-subtitles", "--set", "fit.timing=start", "--set", "translate.repair_speech=true"])],
 }
 COMMON = ["--no-review", "--set", "stages.faces.enabled=false", "--set", "subtitles.providers.bazarr.enabled=false",
           "--set", "subtitles.require=false"]
@@ -76,7 +78,7 @@ def main():
     rnd = random.Random(11)
     rows, key, record = [], {}, []
     for k, film in enumerate(films):
-        jid = str(900 + k + (50 if plan == "speech" else 0))
+        jid = str(900 + k + {"routes": 0, "speech": 50, "other": 80}[plan])
         base = root / f"base-{jid}"
         work = base / "work" / f"job-{jid}"
         state = work / "state.json"
