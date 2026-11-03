@@ -13,14 +13,11 @@ import json
 import random
 import subprocess
 import sys
-from html import escape
 from pathlib import Path
 
 import numpy as np
 
-from aidub import media
 from aidub import lines as L
-from aidub.subtitles import clean
 
 PLANS = {
     "routes": [("english", ["--route", "english"]), ("japanese", ["--route", "source"]),
@@ -29,7 +26,8 @@ PLANS = {
                ("natural", ["--no-subtitles", "--set", "fit.timing=start", "--set", "translate.repair_speech=false"]),
                ("repaired", ["--no-subtitles", "--set", "fit.timing=start", "--set", "translate.repair_speech=true"])],
 }
-COMMON = ["--no-review", "--set", "stages.faces.enabled=false", "--set", "subtitles.providers.bazarr.enabled=false"]
+COMMON = ["--no-review", "--set", "stages.faces.enabled=false", "--set", "subtitles.providers.bazarr.enabled=false",
+          "--set", "subtitles.require=false"]
 SCENE_S = 45.0
 SCENES = 6
 
@@ -82,8 +80,8 @@ def main():
         base = root / f"base-{jid}"
         work = base / "work" / f"job-{jid}"
         state = work / "state.json"
-        if not (state.exists() and "events" in json.loads(state.read_text())["done"]):
-            if not rerun(str(base), jid, "--file", film, "--until", "events", *COMMON):
+        if not (state.exists() and "subtitles" in json.loads(state.read_text())["done"]):
+            if not rerun(str(base), jid, "--file", film, "--until", "subtitles", *COMMON):
                 continue
         data = json.loads(state.read_text())["data"]
         scenes = busiest(data["asr"], float(data["ingest"]["duration"]))
@@ -112,7 +110,9 @@ def main():
                 scene["versions"][name] = [ln.en for ln in said]
                 scene["source"] = [ln.source_text for ln in said]
                 st = json.loads((versions[name] / "state.json").read_text())["data"]
-                scene["subs_english"] = scene["subs_english"] or human_english(st, versions[name], a, b)
+                scene.setdefault("qc", {})[name] = {k: st.get("qc", {}).get(k) for k in ("readback", "free_timing", "transcript_repaired")}
+                scene["subs_english"] = scene["subs_english"] or human_english(data, work, a, b)
+                scene.setdefault("track", {})[name] = (st.get("qc", {}).get("subtitle_track") or {}).get("why", "")
                 rows.append(f"<tr><td>Film {k + 1}, scene {n + 1}: version {'ABC'[t]}</td>"
                             f"<td><audio controls preload=none src='{item}-source.m4a'></audio></td>"
                             f"<td><audio controls preload=none src='{v}-orig.m4a'></audio></td></tr>")
