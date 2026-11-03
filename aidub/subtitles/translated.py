@@ -26,7 +26,9 @@ CJK = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]")  # a word left un
 NAMES_SYSTEM = ("You list the names in a film's subtitles. Answer with JSON only. A person's or place's name is written in "
                 "the subtitle's language, but it has to be said in English as the film's characters pronounce it, and the "
                 "speech recognition transcript beside each line shows how that sounds, though it garbles other words. Read "
-                "names by the sound, not by how their characters read in the subtitle's language.")
+                "names by the sound, not by how their characters read in the subtitle's language. Only proper names: not "
+                "titles or roles (chairman, boss, section chief, teacher), which are translated, and not common words. "
+                "A place's or company's ordinary part stays English (Hirai City, Yonezawa News). Western order: given name first.")
 SYSTEM = ("You translate a film's subtitles into natural spoken English, to be read aloud as a dub. Answer with JSON "
           "only. Keep the meaning, tone and register of each line; don't add or explain anything. Japanese and Chinese "
           "often leave out who is speaking or being spoken about: work it out from the lines around it.")
