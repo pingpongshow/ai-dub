@@ -421,6 +421,7 @@ def _past_cleanup(text: str) -> str:
     text = re.sub(r"\bGen\.(?=\s*$|\s+[a-z]|\s+(?:" + "|".join(sorted(w.capitalize() for w in STOPWORDS)) + r")\b)", "Gen .", text)
     text = re.sub(r"\b(Sat|Sun|Mon|Wed|Fri|Tu|Th|Thur|Thurs)\b", lambda m: m.group(1).lower(), text)
     text = re.sub(r"\bTV\b", "T V", text)
+    text = re.sub(r"\b[A-Z](?:\.[A-Z])+\.?", lambda m: " ".join(m.group(0).replace(".", "")), text)  # "G.I." came out "gee"
     if re.search(r"\d", text) and COUNT.fullmatch(text):
         text = DIGITS.sub(_digits_said, text)
     return text

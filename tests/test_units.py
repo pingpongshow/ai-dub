@@ -1909,3 +1909,10 @@ def test_name_list_covers_the_film_in_pieces_short_enough_for_the_model():
     talk = [(i, Cue(start=float(i), end=i + 1.0, text="如果也能挽回他的名声，事情就很难说了", raw="")) for i in range(1100)]
     got = X.name_list(Llm(), talk, [{"start": float(i), "end": i + 1.0, "text": "もし彼の名誉も取り戻せるなら"} for i in range(1100)], "Chinese")
     assert got == {"角田": "Tsunoda"} and len(sizes) == 10 and max(sizes) < 14000  # most common spelling wins
+
+
+def test_initials_are_said_letter_by_letter():
+    from aidub import speak
+    assert speak.spoken("The initials were G.I., right?") == "The initials were G I, right?"
+    assert speak.spoken('Signed only "G.I."') == 'Signed only "G I"'
+    assert speak.spoken("Mr. Tanaka.") == "Mr. Tanaka."

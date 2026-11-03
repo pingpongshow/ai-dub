@@ -79,12 +79,12 @@
       const name = "fb-" + item;
       td.innerHTML = `<label><input type="radio" name="${name}" value="acceptable"> Acceptable</label>` +
         `<label><input type="radio" name="${name}" value="poor"> Poor</label>` +
-        `<div class="note" hidden><textarea placeholder="What's wrong? (voice, emotion, timing, wording, should stay original...)"></textarea>` +
+        `<div class="note" hidden><textarea placeholder="Anything to say about it? (voice, emotion, timing, wording, should stay original...)"></textarea>` +
         `<button type="button">Save</button></div><div class="st"></div>`;
       const st = td.querySelector(".st"), note = td.querySelector(".note"), box = td.querySelector("textarea");
       const radios = [...td.querySelectorAll("input")];
       const show = v => {
-        note.hidden = v !== "poor";
+        note.hidden = !v;  // a comment can go with either answer
         tr.classList.toggle("fb-ok", v === "acceptable");
         tr.classList.toggle("fb-poor", v === "poor");
       };
@@ -97,7 +97,7 @@
       const saveNow = () => { clearTimeout(timer); save(item, verdict(), box.value, st); };
       for (const r of radios) r.addEventListener("change", () => {
         show(r.value);
-        if (r.value === "poor") box.focus();
+        box.focus();
         saveNow();
       });
       box.addEventListener("input", () => {
