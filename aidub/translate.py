@@ -23,6 +23,7 @@ from . import lines as L
 from . import media
 from .job import Job
 from .profiles import Profile
+from .workers import WorkerError
 
 BATCH = 36
 LANG_NAMES = {"ja": "Japanese", "ko": "Korean", "zh": "Mandarin Chinese", "yue": "Cantonese", "es": "Spanish",
@@ -64,6 +65,10 @@ def target_syllables(seconds: float, rate: float, overhead: float = 0.25, borrow
 
 
 # LLM backends ---------------------------------------------------------------------------
+LOAD_TRIES = 3
+LOAD_WAIT_S = 30
+
+
 class LLM:
     def __init__(self, job: Job):
         self.job = job
@@ -74,9 +79,19 @@ class LLM:
 
     def __enter__(self):
         if not self.endpoint.get("enabled"):
-            self.worker = self.job.worker("translate").__enter__()
             stage = dict(self.job.cfg.get("stages.translate") or {})
-            info = self.worker.call("load", stage)
+            # The model before this one can take a moment to give its memory back.
+            for attempt in range(LOAD_TRIES):
+                self.worker = self.job.worker("translate").__enter__()
+                try:
+                    info = self.worker.call("load", stage)
+                    break
+                except WorkerError as exc:
+                    self.worker.__exit__(None, None, None)
+                    if "Free memory" not in str(exc) and "Engine core initialization" not in str(exc) or attempt == LOAD_TRIES - 1:
+                        raise
+                    self.job.log(f"translator couldn't start yet ({str(exc)[:80]}); trying again")
+                    time.sleep(LOAD_WAIT_S)
             self.job.models["translation"] = info.get("model", stage.get("model", ""))
         else:
             self.job.models["translation"] = f"{self.endpoint.get('model')} (local endpoint)"

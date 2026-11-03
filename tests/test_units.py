@@ -1893,3 +1893,19 @@ def test_translated_subtitles_say_names_as_heard_and_leave_no_characters(monkeyp
     assert got[0].text == "Tsunoda left." and len(rounds) == 2  # the line with 慰劳 went round again
     assert "ツノダさん" in asked[0] and "Tsunoda" in asked[1]
     assert X.heard_between([{"start": 5, "end": 6, "text": "x"}], 0, 1) == ""
+
+
+def test_name_list_covers_the_film_in_pieces_short_enough_for_the_model():
+    import json as J
+    from aidub.subtitles import translated as X
+    from aidub.subtitles.model import Cue
+    sizes = []
+
+    class Llm:
+        def chat_many(self, convs, max_tokens=0):
+            sizes.extend(len(c[1]["content"]) for c in convs)
+            return [J.dumps({"names": [{"subtitle": "角田", "english": "Tsunoda"}]}) for _ in convs[:-1]] + \
+                [J.dumps({"names": [{"subtitle": "角田", "english": "Kakuta"}]})]
+    talk = [(i, Cue(start=float(i), end=i + 1.0, text="如果也能挽回他的名声，事情就很难说了", raw="")) for i in range(1100)]
+    got = X.name_list(Llm(), talk, [{"start": float(i), "end": i + 1.0, "text": "もし彼の名誉も取り戻せるなら"} for i in range(1100)], "Chinese")
+    assert got == {"角田": "Tsunoda"} and len(sizes) == 10 and max(sizes) < 14000  # most common spelling wins

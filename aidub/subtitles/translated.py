@@ -11,13 +11,14 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 
 from ..job import Job
 from .model import DIALOGUE, Candidate, Cue
 
 BATCH = 40
 BEFORE = 6
-NAMES_SAMPLE = 500
+NAMES_BATCH = 120
 MAX_MISSING = 0.2   # more cues than this untranslated: the track isn't used
 
 CJK = re.compile(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]")  # a word left untranslated ("the 慰劳 trip")
@@ -54,19 +55,26 @@ def heard_between(segments: list[dict], a: float, b: float) -> str:
     return " ".join(s.get("text", "") for s in segments if s["end"] > a and s["start"] < b)[:120]
 
 
-def name_list(llm, talk: list, segments: list[dict], lang_name: str) -> dict:
+def name_list(llm, talk: list, segments: list[dict], lang_name: str, log=lambda m: None) -> dict:
     """{name as subtitled: name in English}, one spelling for the whole film, from what is heard:
-    角田 read from its characters came out "Kakuta" where everyone says "Tsunoda"."""
+    角田 read from its characters came out "Kakuta" where everyone says "Tsunoda". The whole film,
+    a piece at a time (one prompt would be too long for the model)."""
     from ..translate import parse_json
-    sample = talk[:: max(1, len(talk) // NAMES_SAMPLE)]
-    rows = [{"line": q.text, "heard": heard_between(segments, q.start - 0.3, q.end + 0.3)} for _, q in sample]
-    user = (f"{lang_name} subtitle lines, with what recognition heard at the time:\n{json.dumps(rows, ensure_ascii=False, indent=0)}\n\n"
-            'List every person, place and group named. Return {"names": [{"subtitle": "<as written>", "english": "<romanised as spoken>"}]}.')
-    try:
-        reply = llm.chat_many([[{"role": "system", "content": NAMES_SYSTEM}, {"role": "user", "content": user}]], max_tokens=2048)[0]
-        return {str(n["subtitle"]): str(n["english"]) for n in parse_json(reply).get("names", []) if n.get("subtitle") and n.get("english")}
-    except Exception:
-        return {}  # the lines still translate: names may just vary
+    convs = []
+    for k in range(0, len(talk), NAMES_BATCH):
+        rows = [{"line": q.text, "heard": heard_between(segments, q.start - 0.3, q.end + 0.3)} for _, q in talk[k:k + NAMES_BATCH]]
+        user = (f"{lang_name} subtitle lines, with what recognition heard at the time:\n{json.dumps(rows, ensure_ascii=False, indent=0)}\n\n"
+                'List every person, place and group named. Return {"names": [{"subtitle": "<as written>", "english": "<romanised as spoken>"}]}.')
+        convs.append([{"role": "system", "content": NAMES_SYSTEM}, {"role": "user", "content": user}])
+    seen: dict[str, Counter] = {}
+    for reply in llm.chat_many(convs, max_tokens=1024):
+        try:
+            for n in parse_json(reply).get("names", []):
+                if n.get("subtitle") and n.get("english"):
+                    seen.setdefault(str(n["subtitle"]), Counter())[str(n["english"])] += 1
+        except Exception as exc:
+            log(f"name list reply unusable: {exc}")  # the lines still translate: names may just vary
+    return {k: v.most_common(1)[0][0] for k, v in seen.items()}
 
 
 def translate_cues(job: Job, cand: Candidate, lang_name: str, guide: list[Cue] | None = None,
@@ -93,7 +101,7 @@ def translate_cues(job: Job, cand: Candidate, lang_name: str, guide: list[Cue] |
     names: dict = {}
     with LLM(job) as llm:
         if segments:
-            names = name_list(llm, talk, segments, lang_name)
+            names = name_list(llm, talk, segments, lang_name, job.log)
             job.log(f"names in the subtitles: {names}")
         todo = parts
         for _ in range(2):
