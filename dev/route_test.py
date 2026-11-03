@@ -124,9 +124,10 @@ def main():
     (page / "index.html").write_text(
         "<!doctype html><meta charset=utf-8><title>Script comparison</title><style>body{font:15px system-ui;background:#14171c;color:#e6e9ef;padding:16px}"
         "td{padding:8px;border-bottom:1px solid #333;vertical-align:top}audio{width:240px}</style>"
-        "<h2>Which script works best?</h2><p>The first player is the original scene, the second a dubbed version of it. Each scene has "
-        "several versions in no particular order. Mark each: Acceptable if it sounds natural and says the right thing, Poor if not. "
-        "A comment helps, especially if a version says something wrong.</p><table>" + "".join(rows) + "</table><script src=/listen-feedback.js></script>")
+        "<h2>Which sounds best to a viewer?</h2><p>You don't need to know Japanese: I check that the words are right by reading "
+        "the subtitles. Each scene has several dubbed versions in no particular order. The first player is the original, for the mood "
+        "and voices. Mark each version Acceptable if it sounds natural and you could follow the scene, Poor if it sounds odd, "
+        "clunky, rushed or doesn't make sense. A comment helps.</p><table>" + "".join(rows) + "</table><script src=/listen-feedback.js></script>")
     print("page", page, len(key), "versions")
 
 

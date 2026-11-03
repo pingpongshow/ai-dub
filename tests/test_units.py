@@ -1860,3 +1860,36 @@ def test_transcript_repair_stays_close_to_what_was_heard():
     job = type("J", (), {"qc": {}, "status": lambda s, m: None, "log": lambda s, m: None})()
     assert T.repair_transcript(job, Llm(), lines, "ja") == 1
     assert lines[0].source_text.endswith("なんて") and lines[0].subtitle_text.endswith("うき") and lines[1].source_text == "はい"
+
+
+def test_translated_subtitles_say_names_as_heard_and_leave_no_characters(monkeypatch):
+    import json as J
+    import re as R
+    from aidub import translate
+    from aidub.subtitles import translated as X
+    from aidub.subtitles.model import Candidate, Cue
+    asked, rounds = [], []
+
+    class Fake:
+        def __init__(self, job): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def chat_many(self, convs, max_tokens=0):
+            out = []
+            for c in convs:
+                asked.append(c[1]["content"])
+                if "List every person" in c[1]["content"]:
+                    out.append(J.dumps({"names": [{"subtitle": "角田", "english": "Tsunoda"}]}))
+                    continue
+                ids = [int(i) for i in R.findall(r'"i": (\d+)', c[1]["content"])]
+                rounds.append(ids)
+                out.append(J.dumps({"lines": [{"i": i, "en": "the 慰劳 trip" if len(rounds) == 1 else "Tsunoda left."} for i in ids]}))
+            return out
+    monkeypatch.setattr(translate, "LLM", Fake)
+    cues = [Cue(start=0.0, end=1.0, text="角田走了", raw="")]
+    job = type("J", (), {"profile": None, "check": lambda s: None, "status": lambda s, m: None, "log": lambda s, m: None})()
+    cand = Candidate(id="embedded:2", label="", origin="embedded", language="zh", format="srt", path="", cues=cues)
+    got = X.translate_cues(job, cand, "Chinese", None, [{"start": 0.0, "end": 1.0, "text": "ツノダさん"}])
+    assert got[0].text == "Tsunoda left." and len(rounds) == 2  # the line with 慰劳 went round again
+    assert "ツノダさん" in asked[0] and "Tsunoda" in asked[1]
+    assert X.heard_between([{"start": 5, "end": 6, "text": "x"}], 0, 1) == ""

@@ -65,7 +65,7 @@ def _translated_track(job: Job, c: Candidate, guide: list | None, asr: dict, spe
     from ..translate import LANG_NAMES
     from .translated import translate_cues
     name = LANG_NAMES.get(c.language, c.language)
-    cues = translate_cues(job, c, name, guide)
+    cues = translate_cues(job, c, name, guide, asr["segments"] if c.language != (asr.get("language") or "") else None)
     if not cues:
         return None
     path = workdir / f"translated_{c.language}.srt"
