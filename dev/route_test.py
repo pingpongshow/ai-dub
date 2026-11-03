@@ -25,6 +25,9 @@ PLANS = {
     "speech": [("window", ["--no-subtitles", "--set", "fit.timing=window", "--set", "translate.repair_speech=false"]),
                ("natural", ["--no-subtitles", "--set", "fit.timing=start", "--set", "translate.repair_speech=false"]),
                ("repaired", ["--no-subtitles", "--set", "fit.timing=start", "--set", "translate.repair_speech=true"])],
+    # Your order's last step against its first two, with the names fix (same films as "routes").
+    "alt": [("japanese2", ["--route", "source"]), ("alternative", ["--route", "other"])],
+    "second": [("translated2", [])],
     "other": [("translated", []),
               ("speech", ["--no-subtitles", "--set", "fit.timing=start", "--set", "translate.repair_speech=true"])],
 }
@@ -78,7 +81,7 @@ def main():
     rnd = random.Random(11)
     rows, key, record = [], {}, []
     for k, film in enumerate(films):
-        jid = str(900 + k + {"routes": 0, "speech": 50, "other": 80}[plan])
+        jid = str(900 + k + {"routes": 0, "alt": 0, "speech": 50, "other": 80, "second": 80}[plan])
         base = root / f"base-{jid}"
         work = base / "work" / f"job-{jid}"
         state = work / "state.json"

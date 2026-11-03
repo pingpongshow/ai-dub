@@ -213,6 +213,8 @@ def run(job: Job) -> None:
                           key=lambda c: (c.score["total"], c.human), default=None)
     best_en, best_src = pick(english), pick(source)
     route = str(job.options.get("subtitle_route") or job.cfg.get("subtitles.prefer", "english"))
+    if route == "other":  # as if only subtitles in other languages existed (for comparing routes)
+        best_en = best_src = None
     # What leads, best first: a person's English subtitle (or the same-language one, if that is
     # preferred), the same-language one translated, then one in any other language translated.
     if best_src is not None and (best_en is None or route in ("source", "source_guided")):
