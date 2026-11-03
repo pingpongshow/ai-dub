@@ -94,6 +94,10 @@ def main():
         for name, flags in PLANS[plan]:
             r = root / f"{plan}-{name}-{jid}"
             start = "align" if "--no-subtitles" in flags else "subtitles"
+            finished = r / "work" / f"job-{jid}" / "state.json"
+            if finished.exists() and "listen" in json.loads(finished.read_text())["done"]:
+                versions[name] = finished.parent  # done before an interruption
+                continue
             if rerun(str(r), jid, "--copy-of", str(work), "--from", start, "--until", "listen", "--windows",
                      ",".join(f"{a}-{b}" for a, b in scenes), *flags, *COMMON):
                 versions[name] = r / "work" / f"job-{jid}"
