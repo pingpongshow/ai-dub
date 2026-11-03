@@ -18,7 +18,10 @@ import shutil
 import sys
 from pathlib import Path
 
+import yaml
+
 from aidub import config, corrections, pipeline
+from aidub import lines as L
 from aidub.job import Job, Paused
 from aidub.jobs import Store
 from aidub.profiles import Profiles, guess_name
@@ -50,6 +53,10 @@ def main():
     ap.add_argument("--file")
     ap.add_argument("--no-decisions", action="store_true", help="labels only: leave the review's decisions out")
     ap.add_argument("--no-review", action="store_true", help="don't stop for review")
+    ap.add_argument("--copy-of", help="copy this job folder, not the live job with this number")
+    ap.add_argument("--route", help="subtitles.prefer for this run")
+    ap.add_argument("--windows", help="voice only these stretches: 100-145,600-645")
+    ap.add_argument("--set", action="append", default=[], help="a setting for this run: fit.timing=start")
     ap.add_argument("--no-subtitles", action="store_true", help="as if the file had no subtitles: translated from the speech")
     args = ap.parse_args()
 
@@ -76,14 +83,16 @@ def main():
         at = pipeline.STEP_NAMES.index(args.start)
         if at <= pipeline.STEP_NAMES.index("diarize"):
             sys.exit("the audio is shared with the real job: start at Recognise or later, or use --file")
-        link_tree(live_work / f"job-{args.job}", work,
+        link_tree(Path(args.copy_of) if args.copy_of else live_work / f"job-{args.job}", work,
                   {"verify", "mix", "deliver"} | ({"lines"} if at <= pipeline.STEP_NAMES.index("speak") else set()))
         state = json.loads((work / "state.json").read_text())
         keep = pipeline.STEP_NAMES[: pipeline.STEP_NAMES.index(args.start)]
         state["done"] = [s for s in state["done"] if s in keep]
         if args.no_subtitles:
-            subs = state["data"]["subtitles"]
-            subs["english"], subs["source"], subs["candidates"] = None, None, []
+            asr = state["data"].get("asr") or {}
+            state["data"]["subtitles"] = {"english": None, "source": None, "candidates": [], "file_languages": [],
+                                          "source_language": asr.get("language", "")}
+            state["done"] = list(dict.fromkeys(state["done"] + ["subtitles"]))
         (work / "state.json").write_text(json.dumps(state, ensure_ascii=False))
         src = Path(state["data"]["ingest"]["source"])
         name = guess_name(src)
@@ -95,8 +104,23 @@ def main():
     row = Store(live_app / "aidub.db").get(int(args.job)) or {}
     prof = Profiles(cfg.appdata).get_or_create(row.get("profile") or name)
     job = Job(cfg, args.job, src, prof, {**(row.get("options") or {}), **({"review": "off"} if args.no_review else {}),
-                                                **({"speech_ok": True} if args.no_subtitles else {})})
+                                                **({"speech_ok": True} if args.no_subtitles else {}),
+                                                **({"subtitle_route": args.route} if args.route else {})})
+    for kv in args.set:
+        k, v = kv.split("=", 1)
+        at = cfg.data
+        for part in k.split(".")[:-1]:
+            at = at.setdefault(part, {})
+        at[k.split(".")[-1]] = yaml.safe_load(v)
     try:
+        if args.windows:
+            pipeline.run(job, until="translate")
+            spans = [tuple(map(float, w.split("-"))) for w in args.windows.split(",")]
+            lines = L.load(job.path("lines.json"))
+            for ln in lines:  # only these scenes are voiced: the rest keeps the original
+                if ln.kind == L.SPEECH and not any(ln.end > a and ln.start < b for a, b in spans):
+                    ln.kind, ln.en, ln.kept_why = L.BACKGROUND, "", "outside the test scenes"
+            L.save(lines, job.path("lines.json"))
         pipeline.run(job, until=args.until)
     except Paused as exc:
         print("paused:", exc)

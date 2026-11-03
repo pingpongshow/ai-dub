@@ -828,6 +828,54 @@ def _collect(reply: str, ids: set[int] | None = None) -> dict[int, dict]:
     return out
 
 
+REPAIR_SYSTEM = ("You correct speech recognition errors in the transcript of a film. Answer with JSON only. Recognition "
+                 "mishears words as others that sound alike, and breaks them up. Using the lines around each one, write "
+                 "what was most likely said, in the same language. Change only what is plainly wrong, keep the speaker's "
+                 "way of talking, and never add meaning. If a line is fine, or you can't tell, return it unchanged.")
+REPAIR_BATCH = 40
+REPAIR_KEEP = 0.45   # a corrected line must still sound like what was heard
+
+
+def _sounds_alike(a: str, b: str) -> bool:
+    return difflib.SequenceMatcher(None, a, b, autojunk=False).ratio() >= REPAIR_KEEP
+
+
+def repair_transcript(job: Job, llm: "LLM", lines: list[L.Line], lang: str) -> int:
+    """With no subtitle to go by, the English can only be as good as what was heard. Read in
+    context, much of what recognition garbled can be told; each change stays close to the
+    sounds heard, so this can't write a new line."""
+    todo = [ln for ln in lines if ln.kind == L.SPEECH and ln.source_text and ln.text_origin == "asr"]
+    if not todo:
+        return 0
+    convs = []
+    for k in range(0, len(todo), REPAIR_BATCH):
+        part = todo[k:k + REPAIR_BATCH]
+        user = (f"{LANG_NAMES.get(lang, lang)} transcript, in order. Before these lines:\n"
+                f"{json.dumps([l.source_text for l in todo[max(0, k - 6):k]], ensure_ascii=False)}\n\nLines:\n"
+                f"{json.dumps([{'id': l.id, 'text': l.source_text} for l in part], ensure_ascii=False, indent=0)}\n\n"
+                'Return {"lines": [{"id": <id>, "text": "<line>"}]} with one entry per id.')
+        convs.append([{"role": "system", "content": REPAIR_SYSTEM}, {"role": "user", "content": user}])
+    by_id = {ln.id: ln for ln in todo}
+    changed = 0
+    job.status(f"reading the transcript in context ({len(convs)} batches)")
+    for reply in llm.chat_many(convs, max_tokens=4096):
+        try:
+            rows = parse_json(reply).get("lines", [])
+        except Exception as exc:
+            job.log(f"transcript repair reply unusable: {exc}")
+            continue
+        for it in rows:
+            ln = by_id.get(int(it.get("id", -1)))
+            text = str(it.get("text", "")).strip()
+            if ln and text and text != ln.source_text and _sounds_alike(ln.source_text, text):
+                ln.subtitle_text = ln.source_text  # (what recognition heard, kept to compare)
+                ln.source_text = text
+                changed += 1
+    job.qc["transcript_repaired"] = changed
+    job.log(f"{changed} of {len(todo)} recognised lines corrected in context")
+    return changed
+
+
 SENTENCE_GAP_S = 1.0     # a sentence carrying on across this short a pause ...
 SENTENCE_MAX_S = 12.0    # ... is voiced as one take, up to this long
 SENTENCE_END = re.compile(r"[.!?…:;\"”)\]]\s*$")
@@ -1175,6 +1223,8 @@ def run(job: Job) -> None:
         quoted_songs(job, lines, every)
         lyrics_check(job, llm, lines, every)
         cues = outside_songs(cues, lines)
+        if not cues and job.cfg.get("translate.repair_speech", True):
+            repair_transcript(job, llm, lines, lang)
         batches = [b for b in ([l for l in b if not l.fallback] for b in _batches(lines, windows)) if b]
         shares = script_cues(cues, batches) if script else [[] for _ in batches]
         # Pass 1: every scene at once (the engine batches them); each scene sees

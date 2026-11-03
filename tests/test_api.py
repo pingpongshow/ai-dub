@@ -419,7 +419,7 @@ def test_no_subtitles_waits_before_any_work_starts(cfg, media_root):
     jid = svc.add(str(ep))
     svc.run_one(svc.store.next_queued())
     j = svc.store.get(jid)
-    assert j["status"] == J.REVIEW and "No English subtitles" in j["record"]["needs_subtitles"] and "Bazarr" in j["message"]
+    assert j["status"] == J.REVIEW and "No subtitles" in j["record"]["needs_subtitles"] and "Bazarr" in j["message"]
     assert not (cfg.work / f"job-{jid}").exists() and ep.read_bytes() == before  # nothing started
     # Others carry on: it isn't picked again.
     second = svc.add(str(other))
@@ -451,8 +451,6 @@ def test_a_subtitle_next_to_the_file_or_from_bazarr_passes_the_first_check(cfg, 
     show.mkdir()
     ep = synth.episode(show / "Subs - S01E01.mkv")
     assert "isn't set up" in preflight.missing_subtitles(cfg, ep)
-    ep.with_suffix(".ja.srt").write_text("1\n00:00:01,000 --> 00:00:02,000\nこんにちは\n")
-    assert preflight.missing_subtitles(cfg, ep)  # Japanese isn't English
     cfg.data["subtitles"].setdefault("providers", {})["bazarr"] = {"enabled": True, "url": "http://b", "api_key": "k"}
 
     class Fake:
@@ -464,6 +462,10 @@ def test_a_subtitle_next_to_the_file_or_from_bazarr_passes_the_first_check(cfg, 
     monkeypatch.setattr(preflight, "Bazarr", Fake)
     Fake.found = None
     assert "doesn't manage" in preflight.missing_subtitles(cfg, ep)
+    # Any language will do: it can be translated.
+    ep.with_suffix(".zh.srt").write_text("1\n00:00:01,000 --> 00:00:02,000\n你好\n")
+    assert preflight.missing_subtitles(cfg, ep) == ""
+    ep.with_suffix(".zh.srt").unlink()
     Fake.found = {"type": "movie", "radarrid": 1, "subtitles": []}
     assert preflight.missing_subtitles(cfg, ep) == ""
     assert preflight.missing_subtitles(cfg, ep) == ""  # and now it is next to the file

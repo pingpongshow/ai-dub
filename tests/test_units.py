@@ -1816,3 +1816,47 @@ def test_lines_are_voiced_from_their_own_clip_by_default(tmp_path, monkeypatch):
     voicebank.assign_voices(job, prof, lines, {})
     assert lines[0].voice == "" and lines[0].voice_note == "own line as reference"
     assert lines[1].voice.endswith("a.flac") and lines[2].voice.endswith("a.flac")  # too short; a second voice in it
+
+
+def test_a_subtitle_in_another_language_becomes_an_english_track(monkeypatch):
+    from aidub import translate
+    from aidub.subtitles import translated as X
+    from aidub.subtitles.model import Candidate, Cue
+    asked = []
+
+    class Fake:
+        def __init__(self, job): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def chat_many(self, convs, max_tokens=0):
+            asked.extend(convs)
+            out = []
+            for c in convs:
+                ids = [int(i) for i in __import__("re").findall(r'"i": (\d+)', c[1]["content"])]
+                out.append(__import__("json").dumps({"lines": [{"i": i, "en": f"line {i}"} for i in ids]}))
+            return out
+    monkeypatch.setattr(translate, "LLM", Fake)
+    cues = [Cue(start=float(i), end=i + 0.9, text=f"せりふ{i}", raw="") for i in range(5)] + [Cue(start=9.0, end=10.0, text="", raw="♪", kind=SONG)]
+    job = type("J", (), {"profile": None, "check": lambda s: None, "status": lambda s, m: None, "log": lambda s, m: None})()
+    guide = [Cue(start=0.0, end=0.9, text="A person's line.", raw="")]
+    got = X.translate_cues(job, Candidate(id="embedded:2", label="", origin="embedded", language="ja", format="srt", path="", cues=cues), "Japanese", guide)
+    assert [q.text for q in got[:5]] == [f"line {i}" for i in range(5)] and got[5].kind == SONG and got[1].start == 1.0
+    assert "A person's line." in asked[0][1]["content"] and "guide" in asked[0][1]["content"]
+    assert X.guide_for(cues[3], guide) == ""
+
+
+def test_transcript_repair_stays_close_to_what_was_heard():
+    from aidub import translate as T
+    assert T._sounds_alike("電圧は瞬間二千万ボルト", "電圧は瞬間二千万ボルト。")
+    assert not T._sounds_alike("はい", "東京の空は今日も青く晴れ渡っている")
+    lines = [L.Line(1, 0, 1, source_text="お前がタイの肉までもらんなうき", text_origin="asr"),
+             L.Line(2, 2, 3, source_text="はい", text_origin="asr"),
+             L.Line(3, 4, 5, source_text="字幕", text_origin="subtitle:x")]
+
+    class Llm:
+        def chat_many(self, convs, max_tokens=0):
+            assert "字幕" not in convs[0][1]["content"]
+            return ['{"lines": [{"id": 1, "text": "お前が隊の肉までもらうなんて"}, {"id": 2, "text": "東京の空は今日も青く晴れ渡っている"}]}']
+    job = type("J", (), {"qc": {}, "status": lambda s, m: None, "log": lambda s, m: None})()
+    assert T.repair_transcript(job, Llm(), lines, "ja") == 1
+    assert lines[0].source_text.endswith("なんて") and lines[0].subtitle_text.endswith("うき") and lines[1].source_text == "はい"

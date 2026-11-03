@@ -60,6 +60,25 @@ def _bazarr(job: Job, cands: list[Candidate], src_lang: str, workdir: Path) -> l
         bz.close()
 
 
+def _translated_track(job: Job, c: Candidate, guide: list | None, asr: dict, speech, dur: float, workdir: Path) -> Candidate | None:
+    """An English track from a subtitle in another language; see translated.py."""
+    from ..translate import LANG_NAMES
+    from .translated import translate_cues
+    name = LANG_NAMES.get(c.language, c.language)
+    cues = translate_cues(job, c, name, guide)
+    if not cues:
+        return None
+    path = workdir / f"translated_{c.language}.srt"
+    made = Candidate(id=f"translated:{c.language}", label=f"{name} subtitles, translated" + (" with the English as a guide" if guide else ""),
+                     origin="translated", language="en", format="srt", path=str(path), human=False, cues=cues)
+    with job.worker("speaker", gpu_stage="speaker") as w:
+        w.call("load", {})
+        _score_english(made, asr, speech, dur, w)
+    made.score["translated_from"] = c.id
+    job.log(f"script: {made.label} (score {made.score.get('total', 0):.2f})")
+    return made
+
+
 def _score_source(c: Candidate, asr: dict, speech, dur: float) -> None:
     off, scale, frac, sharp = score.best_offset(c.cues, speech, dur)
     synced = score.apply_sync(c.cues, off, scale)
@@ -150,7 +169,10 @@ def run(job: Job) -> None:
     file_languages = sorted({c.language for c in cands if c.in_file and c.language})
 
     # OCR bitmap candidates in the languages we can use.
-    bitmaps = [c for c in cands if c.format == "pgs" and c.language in {"en", src_lang, ""} and not c.forced]
+    wanted = {"en", src_lang, ""}
+    if not any(c.format != "pgs" and not c.forced and c.language in {"en", src_lang} for c in cands):
+        wanted |= {c.language for c in cands}  # nothing else to dub from: read pictures in any language
+    bitmaps = [c for c in cands if c.format == "pgs" and c.language in wanted and not c.forced]
     if bitmaps and job.cfg.get("stages.ocr.worker"):
         with job.worker("ocr") as w:
             w.call("load", {})
@@ -175,19 +197,30 @@ def run(job: Job) -> None:
     usable = [c for c in cands if c.cues and not c.forced and c.language in {"en", src_lang}]
     english = [c for c in usable if c.language == "en"]
     source = [c for c in usable if c.language == src_lang and src_lang != "en"]
+    others = [c for c in cands if c.cues and not c.forced and c.language and c.language not in {"en", src_lang}]
 
     for c in source:
         _score_source(c, asr, speech, dur)
-    if english:
+    if english or others:
         with job.worker("speaker", gpu_stage="speaker") as w:
             w.call("load", {})
-            for c in english:
+            for c in english + others:  # (the match is across languages: any language can be scored)
                 _score_english(c, asr, speech, dur, w)
 
     min_score = float(job.cfg.get("subtitles.min_score", 0.65))
     pick = lambda cs: max((c for c in cs if c.score.get("total", 0) >= min_score),
                           key=lambda c: (c.score["total"], c.human), default=None)
     best_en, best_src = pick(english), pick(source)
+    route = str(job.options.get("subtitle_route") or job.cfg.get("subtitles.prefer", "english"))
+    # What leads, best first: a person's English subtitle (or the same-language one, if that is
+    # preferred), the same-language one translated, then one in any other language translated.
+    if best_src is not None and (best_en is None or route in ("source", "source_guided")):
+        translate_from = best_src
+    elif best_en is None:
+        translate_from = pick(others)
+    else:
+        translate_from = None
+    guide = best_en.cues if translate_from is not None and best_en is not None and route == "source_guided" else None
 
     if best_src is not None:
         with job.worker("recognize") as w:
@@ -195,6 +228,11 @@ def run(job: Job) -> None:
             w.call("load", {"model": cfg.get("model"), "aligner": cfg.get("aligner"), "aligner_only": True})
             _align_source(job, best_src, w, src_lang)
 
+    if translate_from is not None:
+        made = _translated_track(job, translate_from, guide, asr, speech, dur, workdir)
+        if made is not None:
+            cands.append(made)
+            best_en = made
     for c in cands:
         if c.cues:
             Path(workdir / f"{c.id.replace(':', '_').replace('/', '_')}.cues.json").write_text(
@@ -214,10 +252,10 @@ def run(job: Job) -> None:
     job.status("; ".join(parts) if parts else "no usable subtitle; using speech recognition")
     if not best_en:
         bazarr = (job.cfg.get("subtitles.providers.bazarr") or {}).get("enabled")
-        tried = [c.score.get("total", 0) for c in english]
-        require_subtitles(job, f"{len(tried)} English subtitle track{'s' if len(tried) != 1 else ''} found, but none matches the "
+        tried = [c.score.get("total", 0) for c in english + source + others]
+        require_subtitles(job, f"{len(tried)} subtitle track{'s' if len(tried) != 1 else ''} found, but none matches the "
                                f"speech well enough (best {max(tried):.2f}, needs {min_score:.2f})" if tried else
-                          "No English subtitles found in the file or next to it" + (" or from Bazarr" if bazarr else " (Bazarr isn't set up)"))
+                          "No subtitles found in the file or next to it" + (" or from Bazarr" if bazarr else " (Bazarr isn't set up)"))
 
 
 def load_chosen(job: Job, which: str) -> list[Cue]:
