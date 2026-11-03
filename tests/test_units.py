@@ -1916,3 +1916,11 @@ def test_initials_are_said_letter_by_letter():
     assert speak.spoken("The initials were G.I., right?") == "The initials were G I, right?"
     assert speak.spoken('Signed only "G.I."') == 'Signed only "G I"'
     assert speak.spoken("Mr. Tanaka.") == "Mr. Tanaka."
+
+
+def test_backcheck_contraction_heard_as_the_word_it_sounds_like():
+    from aidub import speak
+    assert speak.wer("You're centurions.", "Your centurions.") == 0
+    assert speak.wer("They're here.", "There here.") == 0
+    assert speak.wer("Your centurions.", "You're centurions.") == 0
+    assert speak.wer("Your house.", "Yes house.") > 0

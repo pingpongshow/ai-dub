@@ -211,6 +211,10 @@ def wer(ref: str, hyp: str, names: frozenset = frozenset()) -> float:
     said = set(re.findall(r"[a-z']+", said_as(ref).lower().replace("’", "'")))
     hyp = re.sub(r"[A-Za-z]+['’][a-z]+", lambda m: next(
         (w for w in SOUND_ALIKE.get(m.group(0).lower().replace("’", "'"), ()) if w in said), m.group(0)), hyp)
+    # ... and the other way round ("You're centurions" heard as "Your centurions").
+    for contraction, alike in SOUND_ALIKE.items():
+        if contraction in said:
+            hyp = re.sub(r"\b(?:" + "|".join(alike) + r")\b", contraction, hyp, flags=re.I)
     a, b = _words(ref), _words(hyp)
     if names and a and all(w.removesuffix("'s") in names for w in a):
         # Only names ("Nello!", "Alois?"): heard as about as many words, roughly alike.
