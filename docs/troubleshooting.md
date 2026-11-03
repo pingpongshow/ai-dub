@@ -63,17 +63,18 @@ rather share the card, lower that step's figure under `gpu.min_free_mb`. To
 fail at once instead of waiting, set `gpu.wait: false`. A step that starts
 without enough memory fails with a CUDA out-of-memory error.
 
-**`Needs subtitles` under Waiting for you.** A dub from the speech is much less accurate
-than one from subtitles, so such a file waits for you while other files carry on.
+**`Needs subtitles` under Waiting for you.** Dubs follow English subtitles, so a file without
+a usable English one waits for you while other files carry on.
 
 - With no English subtitle in the file, next to it or from Bazarr, it waits as soon as it
   is added, and no work has started on it.
-- A subtitle that turns out not to match the speech can only be told after the speech is
-  analysed, so that file stops then; its analysis is kept.
+- An English subtitle that turns out not to match the speech can only be told after the
+  speech is analysed, so that file stops then; its analysis is kept.
 
-Add a subtitle (an `.en.srt` next to the file, or through Bazarr) and press **Look for
-subtitles again**. To dub that one file from the speech anyway, press **Dub from the
-speech anyway…**. To dub without asking, set `subtitles.require: false`.
+On the card you can **Use this subtitle** (one in another language, translated into English),
+**Search Bazarr** for a language, add an `.en.srt` next to the file and **Look for English
+again**, or **Dub from the speech anyway…**, the least accurate choice. To dub without asking,
+set `subtitles.require: false`.
 
 **The queue doesn't move.** Check whether the queue is paused: the Queue page
 then shows a banner and **▶ Resume the queue**. Also look under **Waiting for you**: an episode paused for

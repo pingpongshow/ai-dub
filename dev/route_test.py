@@ -19,22 +19,12 @@ import numpy as np
 
 from aidub import lines as L
 
-PLANS = {
-    "routes": [("english", ["--route", "english"]), ("japanese", ["--route", "source"]),
-               ("guided", ["--route", "source_guided"])],
-    "speech": [("window", ["--no-subtitles", "--set", "fit.timing=window", "--set", "translate.repair_speech=false"]),
-               ("natural", ["--no-subtitles", "--set", "fit.timing=start", "--set", "translate.repair_speech=false"]),
-               ("repaired", ["--no-subtitles", "--set", "fit.timing=start", "--set", "translate.repair_speech=true"])],
-    # Your order's last step against its first two, with the names fix (same films as "routes").
-    "alt": [("japanese2", ["--route", "source"]), ("alternative", ["--route", "other"])],
-    "second": [("translated2", [])],
-    "other": [("translated", []),
-              ("speech", ["--no-subtitles", "--set", "fit.timing=start", "--set", "translate.repair_speech=true"])],
-}
+PLANS = {"pair": [("english", ["--route", "english"]), ("guided", ["--route", "guided"])]}
 COMMON = ["--no-review", "--set", "stages.faces.enabled=false", "--set", "subtitles.providers.bazarr.enabled=false",
           "--set", "subtitles.require=false"]
 SCENE_S = 45.0
-SCENES = 6
+WANT = 6
+SCENES = 4
 
 
 def rerun(*args):
@@ -80,8 +70,11 @@ def main():
     page.mkdir(parents=True, exist_ok=True)
     rnd = random.Random(11)
     rows, key, record = [], {}, []
+    used = 0
     for k, film in enumerate(films):
-        jid = str(900 + k + {"routes": 0, "alt": 0, "speech": 50, "other": 80, "second": 80}[plan])
+        if used >= WANT:
+            break
+        jid = str(900 + k + 100)
         base = root / f"base-{jid}"
         work = base / "work" / f"job-{jid}"
         state = work / "state.json"
@@ -89,6 +82,10 @@ def main():
             if not rerun(str(base), jid, "--file", film, "--until", "subtitles", *COMMON):
                 continue
         data = json.loads(state.read_text())["data"]
+        if not data["subtitles"].get("source") or not data["subtitles"].get("english"):
+            print("no comparison possible, next film:", film, flush=True)  # guided needs both subtitles to pass
+            continue
+        used += 1
         scenes = busiest(data["asr"], float(data["ingest"]["duration"]))
         versions = {}
         for name, flags in PLANS[plan]:
@@ -122,7 +119,7 @@ def main():
                 scene.setdefault("qc", {})[name] = {k: st.get("qc", {}).get(k) for k in ("readback", "free_timing", "transcript_repaired")}
                 scene["subs_english"] = scene["subs_english"] or human_english(data, work, a, b)
                 scene.setdefault("track", {})[name] = (st.get("qc", {}).get("subtitle_track") or {}).get("why", "")
-                rows.append(f"<tr><td>Film {k + 1}, scene {n + 1}: version {'ABC'[t]}</td>"
+                rows.append(f"<tr><td>Film {used}, scene {n + 1}: version {'ABC'[t]}</td>"
                             f"<td><audio controls preload=none src='{item}-source.m4a'></audio></td>"
                             f"<td><audio controls preload=none src='{v}-orig.m4a'></audio></td></tr>")
             record.append(scene)
@@ -132,9 +129,9 @@ def main():
         "<!doctype html><meta charset=utf-8><title>Script comparison</title><style>body{font:15px system-ui;background:#14171c;color:#e6e9ef;padding:16px}"
         "td{padding:8px;border-bottom:1px solid #333;vertical-align:top}audio{width:240px}</style>"
         "<h2>Which sounds best to a viewer?</h2><p>You don't need to know Japanese: I check that the words are right by reading "
-        "the subtitles. Each scene has several dubbed versions in no particular order. The first player is the original, for the mood "
-        "and voices. Mark each version Acceptable if it sounds natural and you could follow the scene, Poor if it sounds odd, "
-        "clunky, rushed or doesn't make sense. A comment helps.</p><table>" + "".join(rows) + "</table><script src=/listen-feedback.js></script>")
+        "the subtitles. Each scene has two dubbed versions in no particular order; the first player is the original, for the mood and "
+        "voices. Mark the one you prefer Acceptable and the other Poor, or both Acceptable if there's nothing between them. "
+        "Comments are welcome on either: what sounded natural, odd, clunky, rushed, or hard to follow.</p><table>" + "".join(rows) + "</table><script src=/listen-feedback.js></script>")
     print("page", page, len(key), "versions")
 
 

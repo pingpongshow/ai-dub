@@ -73,9 +73,10 @@ class Service:
     def _subtitle_problem(self, j: dict) -> str:
         """Why this file must wait for the user before any work starts on it; empty if it needn't."""
         from .ingest import classify
-        from .subtitles.preflight import missing_subtitles
+        from .subtitles.preflight import missing_english
         opts = j.get("options") or {}
-        if not self.cfg.get("subtitles.require", True) or opts.get("speech_ok") or opts.get("subs_checked") or opts.get("preview_s"):
+        if (not self.cfg.get("subtitles.require", True) or opts.get("speech_ok") or opts.get("subtitle_pick")
+                or opts.get("subs_checked") or opts.get("preview_s")):
             return ""
         state = self.cfg.work / f"job-{j['id']}" / "state.json"
         if state.exists() and "subtitles" in json.loads(state.read_text()).get("done", []):
@@ -86,7 +87,7 @@ class Service:
         # The skip rules end this job at once: nothing to ask about.
         if not opts.get("redo") and (info["aidub_present"] or (info["english_audio"] and self.cfg.get("ingest.skip_english_audio", True))):
             return ""
-        return missing_subtitles(self.cfg, path, pr)
+        return missing_english(self.cfg, path, pr)
 
     def _hold_if_no_subtitles(self, jid: int) -> bool:
         """True if the job waits for the user. Checked once per job."""
@@ -100,10 +101,19 @@ class Service:
                 log.warning("subtitle check of %s: %s", j["path"], exc)
                 return False
             if why:
-                self.store.update(jid, status=J.REVIEW, message=why, record={"needs_subtitles": why, "paused_at": time.time()})
+                self.store.update(jid, status=J.REVIEW, message=why, record={
+                    "needs_subtitles": why, "subtitle_choices": self._subtitle_choices(j["path"]), "paused_at": time.time()})
                 return True
             self.store.update(jid, options={**(j.get("options") or {}), "subs_checked": True})
             return False
+
+    def _subtitle_choices(self, path: str) -> list[dict]:
+        from .subtitles.preflight import choices
+        try:
+            return choices(Path(path))
+        except Exception as exc:
+            log.warning("subtitles of %s: %s", path, exc)
+            return []
 
     def _check_added(self) -> None:
         """Files just added are checked straight away, so one that needs an answer says so
@@ -202,6 +212,46 @@ class Service:
         self.store.update(jid, options={**(j.get("options") or {}), "speech_ok": True}, message="dubbing from the speech, as you chose")
         self.store.requeue_front(jid)
         self._wake.set()
+
+    def use_subtitle(self, jid: int, subtitle: str) -> None:
+        """The user's choice for this one file: dub from this subtitle, translated if it isn't English.
+        From the subtitle step on: it has to be read and matched to the speech."""
+        from .pipeline import STEP_NAMES
+        j = self._needing_subtitles(jid)
+        if subtitle not in {c["id"] for c in self._subtitle_choices(j["path"])}:
+            raise ValueError("that subtitle isn't there any more")
+        f = self.cfg.work / f"job-{jid}" / "state.json"
+        if f.exists():
+            st = json.loads(f.read_text())
+            st["done"] = [x for x in st.get("done", []) if x in STEP_NAMES[:STEP_NAMES.index("subtitles")]]
+            f.write_text(json.dumps(st, ensure_ascii=False))
+        self.store.update(jid, options={**(j.get("options") or {}), "subtitle_pick": subtitle}, message="dubbing from the subtitle you chose")
+        self.store.requeue_front(jid)
+        self._wake.set()
+
+    def search_subtitles(self, jid: int, language: str) -> None:
+        """Ask Bazarr for a subtitle in this language; it can take minutes, so in the background.
+        The card lists whatever arrives; an English one means the file can simply go on."""
+        j = self._needing_subtitles(jid)
+        if not 2 <= len(language) <= 3 or not language.isalpha():
+            raise ValueError("choose a language")
+        rec = j.get("record") or {}
+        self.store.update(jid, record={**rec, "subtitle_search": language}, message=f"asking Bazarr for {language} subtitles")
+
+        def work():
+            from .subtitles.preflight import _english_next_to, search
+            why = search(self.cfg, Path(j["path"]), language)
+            now = self.store.get(jid)
+            if not now or now["status"] != J.REVIEW:
+                return
+            if not why and language == "en" and _english_next_to(Path(j["path"])):
+                self.recheck_subtitles(jid)
+                return
+            r = {k: v for k, v in (now.get("record") or {}).items() if k != "subtitle_search"}
+            r["subtitle_choices"] = self._subtitle_choices(j["path"])
+            r["subtitle_search_result"] = why or f"Bazarr searched for {language}: anything it found is in the list"
+            self.store.update(jid, record=r, message=now.get("record", {}).get("needs_subtitles", ""))
+        threading.Thread(target=work, name="aidub-subtitle-search", daemon=True).start()
 
     def recheck_subtitles(self, jid: int) -> None:
         """Look again (a subtitle added next to the file, or Bazarr has one now): back to the
@@ -426,7 +476,8 @@ class Service:
             job.log(f"paused: {exc}")
             self.store.update(jid, status=J.REVIEW, message=str(exc), record={
                 **pipeline.record(job), "paused_at": time.time(),
-                **({"needs_subtitles": exc.why} if isinstance(exc, NeedsSubtitles) else {})})
+                **({"needs_subtitles": exc.why, "subtitle_choices": self._subtitle_choices(j["path"])}
+                   if isinstance(exc, NeedsSubtitles) else {})})
         except Skipped as exc:
             job.remove_work()
             self.store.update(jid, status=J.SKIPPED, finished=time.time(), message=f"skipped: {exc}",

@@ -452,6 +452,8 @@ def subtitles_trusted(job: Job) -> tuple[bool, str]:
     cid = job["subtitles"].get("english")
     if not cid:
         return False, "no English subtitle"
+    if getattr(job, "options", {}).get("subtitle_pick"):
+        return True, "the subtitle you chose for this file"
     sc = (candidate(job, cid) or {}).get("score", {})
     checked = int(job.qc.get("subtitle_lines_checked", 0))
     agree = 1 - int(job.qc.get("subtitle_lines_disagreeing_with_speech", 0)) / checked if checked else 1.0

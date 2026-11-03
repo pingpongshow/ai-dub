@@ -442,6 +442,9 @@ async function showAddForm() {
   };
 }
 
+const SUB_LANGS = [["ja", "Japanese"], ["en", "English"], ["zh", "Chinese"], ["ko", "Korean"], ["es", "Spanish"], ["fr", "French"], ["de", "German"], ["pt", "Portuguese"], ["ru", "Russian"], ["it", "Italian"]];
+const subLabel = (c) => [SUB_LANGS.find(([v]) => v === c.language)?.[1] || c.language || "Unknown language", c.title, c.picture ? "pictures, read by OCR" : "", c.where].filter(Boolean).join(" · ");
+
 async function loadNeeds() {
   // What waits for the user: episodes stopped for review, and finished dubs to check.
   const [items, jobs] = await Promise.all([api("/verify").catch(() => []), api("/jobs?view=queue").catch(() => [])]);
@@ -454,11 +457,18 @@ async function loadNeeds() {
     ${reviews.map((j) => (j.record || {}).needs_subtitles ? `<div class="panel job needs" data-id="${j.id}">
       <div><div class="title">${epLabel(j.path)}</div>
         <div class="sub">${episode(j.path).show ? `<span class="ep-show">${esc(episode(j.path).show)}</span>` : ""}<span class="tag warn">Needs subtitles</span>
-          <span>${esc(j.record.needs_subtitles)}. Not dubbed unless you say so: a dub from the speech is much less accurate.</span></div></div>
+          <span>${esc(j.record.needs_subtitles)}.${j.record.subtitle_search ? ` <b>Asking Bazarr for ${esc(j.record.subtitle_search)} subtitles…</b>` : ""}${j.record.subtitle_search_result ? ` ${esc(j.record.subtitle_search_result)}.` : ""}</span></div>
+        <div class="row" style="gap:6px;margin-top:8px;flex-wrap:wrap">
+          ${(j.record.subtitle_choices || []).length ? `<select data-pick-for="${j.id}" aria-label="Subtitle to use">${j.record.subtitle_choices.map((c) => `<option value="${esc(c.id)}">${esc(subLabel(c))}</option>`).join("")}</select>
+          <button class="sm" data-use="${j.id}" title="Translate this subtitle into English and dub from it. Nearly as good as an English subtitle when it is a person's translation.">Use this subtitle</button>` : `<span class="muted small">No subtitles in other languages yet.</span>`}
+          <span class="vsep"></span>
+          <select data-lang-for="${j.id}" aria-label="Language to search for">${SUB_LANGS.map(([v, n]) => `<option value="${v}">${n}</option>`).join("")}</select>
+          <button class="sm" data-search="${j.id}" title="Ask Bazarr to search its providers. It saves what it finds next to the file.">Search Bazarr</button>
+        </div></div>
       <div class="btn-group"><button class="ghost sm" data-act="cancel" data-id="${j.id}">Remove</button>
         ${j.started ? `<button class="sm" data-log="${j.id}" data-name="${esc(j.path)}">Log</button>` : ""}
-        <button class="sm" data-speech="${j.id}" title="Dub this file by translating what recognition hears. Much less accurate than subtitles.">Dub from the speech anyway…</button>
-        <button class="primary" data-recheck="${j.id}" title="Add a subtitle next to the file or in Bazarr first. The analysis so far is kept.">Look for subtitles again</button></div></div>` : `<div class="panel job needs" data-id="${j.id}">
+        <button class="sm" data-speech="${j.id}" title="Dub this file by translating what recognition hears. Much less accurate than any subtitle.">Dub from the speech anyway…</button>
+        <button class="sm" data-recheck="${j.id}" title="Add a subtitle next to the file or in Bazarr first. The analysis so far is kept.">Look for English again</button></div></div>` : `<div class="panel job needs" data-id="${j.id}">
       <div><div class="title">${epLabel(j.path)}</div>
         <div class="sub">${episode(j.path).show ? `<span class="ep-show">${esc(episode(j.path).show)}</span>` : ""}<span class="tag warn">Review before dubbing</span>
           <span>${esc(j.message.replace(/^waiting for review:?\s*/, "") || "nothing flagged")}</span></div></div>
@@ -473,6 +483,16 @@ async function loadNeeds() {
         <a class="button primary" href="#verify/${x.id}">Check the dub</a></div></div>`).join("")}
     </div>`;
   box.querySelectorAll("[data-log]").forEach((b) => (b.onclick = () => openLog(Number(b.dataset.log), b.dataset.name)));
+  box.querySelectorAll("[data-use]").forEach((b) => (b.onclick = async () => {
+    const subtitle = box.querySelector(`[data-pick-for="${b.dataset.use}"]`).value;
+    await api(`/jobs/${b.dataset.use}/subtitles/use`, { body: { subtitle } }).catch(fail);
+    loadNeeds(); loadQueue(); refreshStatus();
+  }));
+  box.querySelectorAll("[data-search]").forEach((b) => (b.onclick = async () => {
+    const language = box.querySelector(`[data-lang-for="${b.dataset.search}"]`).value;
+    await api(`/jobs/${b.dataset.search}/subtitles/search`, { body: { language } }).catch(fail);
+    loadNeeds();
+  }));
   box.querySelectorAll("[data-recheck]").forEach((b) => (b.onclick = async () => {
     await api(`/jobs/${b.dataset.recheck}/subtitles/recheck`, { method: "POST" }).catch(fail);
     loadNeeds(); loadQueue(); refreshStatus();

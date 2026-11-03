@@ -419,7 +419,7 @@ def test_no_subtitles_waits_before_any_work_starts(cfg, media_root):
     jid = svc.add(str(ep))
     svc.run_one(svc.store.next_queued())
     j = svc.store.get(jid)
-    assert j["status"] == J.REVIEW and "No subtitles" in j["record"]["needs_subtitles"] and "Bazarr" in j["message"]
+    assert j["status"] == J.REVIEW and "No English subtitles" in j["record"]["needs_subtitles"] and "Bazarr" in j["message"]
     assert not (cfg.work / f"job-{jid}").exists() and ep.read_bytes() == before  # nothing started
     # Others carry on: it isn't picked again.
     second = svc.add(str(other))
@@ -445,12 +445,41 @@ def test_no_subtitles_waits_before_any_work_starts(cfg, media_root):
     assert svc.store.get(third)["status"] != J.REVIEW
 
 
+def test_a_file_without_english_can_use_another_subtitle(cfg, media_root, monkeypatch):
+    from aidub.subtitles import translated
+    show = media_root / "Chinese Subs"
+    show.mkdir()
+    ep = synth.episode(show / "Chinese Subs - S01E01.mkv")
+    ep.with_suffix(".zh.srt").write_text("".join(f"{i + 1}\n00:00:{i * 4:02d},000 --> 00:00:{i * 4 + 3:02d},000\n你好，今天天气很好\n\n" for i in range(8)))
+    svc = _requiring_subtitles(cfg)
+    jid = svc.add(str(ep))
+    svc.run_one(svc.store.next_queued())
+    j = svc.store.get(jid)
+    assert j["status"] == J.REVIEW and j["record"]["subtitle_choices"][0]["language"] == "zh"
+    assert not (cfg.work / f"job-{jid}").exists()  # nothing started
+    with pytest.raises(ValueError):
+        svc.use_subtitle(jid, "embedded:99")
+    from aidub.subtitles.model import Cue
+    monkeypatch.setattr(translated, "translate_cues", lambda job, c, name, guide=None, seg=None: [
+        Cue(start=q.start, end=q.end, text="Nice weather today.", raw="", kind=q.kind) for q in c.cues])
+    svc.use_subtitle(jid, j["record"]["subtitle_choices"][0]["id"])
+    assert svc.store.get(jid)["options"]["subtitle_pick"].startswith("sidecar:")
+    svc.run_one(svc.store.next_queued())
+    done = svc.store.get(jid)
+    assert done["status"] == J.DONE
+    assert (done["record"]["qc"].get("subtitle_track") or {}).get("trusted") is True
+
+
+def test_english_and_guided_need_the_right_subtitles(cfg):
+    assert cfg.get("subtitles.prefer") == "english"  # the open question's default
+
+
 def test_a_subtitle_next_to_the_file_or_from_bazarr_passes_the_first_check(cfg, media_root, monkeypatch):
     from aidub.subtitles import preflight
     show = media_root / "Subs"
     show.mkdir()
     ep = synth.episode(show / "Subs - S01E01.mkv")
-    assert "isn't set up" in preflight.missing_subtitles(cfg, ep)
+    assert "isn't set up" in preflight.missing_english(cfg, ep)
     cfg.data["subtitles"].setdefault("providers", {})["bazarr"] = {"enabled": True, "url": "http://b", "api_key": "k"}
 
     class Fake:
@@ -461,14 +490,15 @@ def test_a_subtitle_next_to_the_file_or_from_bazarr_passes_the_first_check(cfg, 
         def search(self, rec, lang): ep.with_suffix(".en.srt").write_text("1\n00:00:01,000 --> 00:00:02,000\nHello\n")
     monkeypatch.setattr(preflight, "Bazarr", Fake)
     Fake.found = None
-    assert "doesn't manage" in preflight.missing_subtitles(cfg, ep)
-    # Any language will do: it can be translated.
+    assert "doesn't manage" in preflight.missing_english(cfg, ep)
+    # Another language doesn't let it start, but it is offered as a choice.
     ep.with_suffix(".zh.srt").write_text("1\n00:00:01,000 --> 00:00:02,000\n你好\n")
-    assert preflight.missing_subtitles(cfg, ep) == ""
+    assert "doesn't manage" in preflight.missing_english(cfg, ep)
+    assert [(c["language"], c["where"]) for c in preflight.choices(ep)] == [("zh", "next to the file")]
     ep.with_suffix(".zh.srt").unlink()
     Fake.found = {"type": "movie", "radarrid": 1, "subtitles": []}
-    assert preflight.missing_subtitles(cfg, ep) == ""
-    assert preflight.missing_subtitles(cfg, ep) == ""  # and now it is next to the file
+    assert preflight.missing_english(cfg, ep) == ""
+    assert preflight.missing_english(cfg, ep) == ""  # and now it is next to the file
 
 
 def test_a_subtitle_that_does_not_match_stops_after_the_analysis(cfg, media_root):

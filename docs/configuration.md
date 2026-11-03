@@ -167,7 +167,8 @@ ones you're most likely to want are below.
 | `translate.style`, `translate.honorifics` | `natural`, `keep` | The defaults for shows that don't set their own |
 | `ingest.skip_english_audio` | `true` | Skip files that already have English audio, including untagged audio that turns out to be English |
 | `ingest.song_chapters` | opening, op, ending, ed, credits, … | Chapter names whose audio is always kept as it is |
-| `subtitles.require` | `true` | A file with no English subtitles waits under **Waiting for you**, before any work starts on it, until you add some or choose to dub it from the speech. So does one whose subtitles turn out not to match the speech. `false` dubs such files from the speech without asking. |
+| `subtitles.require` | `true` | A file with no usable English subtitle waits under **Waiting for you** until you choose another subtitle, search Bazarr, or allow a dub from the speech. With none in the file or next to it, it waits before any work starts. `false` dubs such files from the speech without asking. |
+| `subtitles.prefer` | `english` | With both a person's English subtitle and one in the spoken language: `english` dubs the English word for word; `guided` translates the spoken-language one with the English as a guide. |
 | `subtitles.min_score` | `0.65` | How well a subtitle track must match the speech to be trusted. A track for another episode scores under about 0.5. |
 | `songs.detect_by_pitch` | `true` | Find sung passages by held notes over music |
 | `songs.match_episodes` | `true` | Find the opening and ending shared with neighbouring episodes in the folder |

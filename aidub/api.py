@@ -297,12 +297,16 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
         return {"ok": True}
 
     @app.post("/api/jobs/{jid}/subtitles/{action}")
-    def job_subtitles(jid: int, action: str):
+    def job_subtitles(jid: int, action: str, body: dict = Body(default={})):
         try:
             if action == "dub-from-speech":
                 svc.allow_speech(jid)
             elif action == "recheck":
                 svc.recheck_subtitles(jid)
+            elif action == "use":
+                svc.use_subtitle(jid, str(body.get("subtitle", "")))
+            elif action == "search":
+                svc.search_subtitles(jid, str(body.get("language", "")))
             else:
                 bad(404, "no such action")
         except KeyError:

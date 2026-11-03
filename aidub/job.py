@@ -37,7 +37,8 @@ class NeedsSubtitles(Paused):
 
 
 def require_subtitles(job: "Job", why: str) -> None:
-    if job.cfg.get("subtitles.require", True) and not job.options.get("speech_ok") and not job.options.get("preview_s"):
+    o = job.options
+    if job.cfg.get("subtitles.require", True) and not (o.get("speech_ok") or o.get("subtitle_pick") or o.get("preview_s")):
         raise NeedsSubtitles(why)
 
 

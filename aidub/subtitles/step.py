@@ -170,9 +170,8 @@ def run(job: Job) -> None:
     file_languages = sorted({c.language for c in cands if c.in_file and c.language})
 
     # OCR bitmap candidates in the languages we can use.
-    wanted = {"en", src_lang, ""}
-    if not any(c.format != "pgs" and not c.forced and c.language in {"en", src_lang} for c in cands):
-        wanted |= {c.language for c in cands}  # nothing else to dub from: read pictures in any language
+    picked = next((c for c in cands if c.id == job.options.get("subtitle_pick")), None)
+    wanted = {"en", src_lang, ""} | ({picked.language} if picked else set())
     bitmaps = [c for c in cands if c.format == "pgs" and c.language in wanted and not c.forced]
     if bitmaps and job.cfg.get("stages.ocr.worker"):
         with job.worker("ocr") as w:
@@ -198,14 +197,14 @@ def run(job: Job) -> None:
     usable = [c for c in cands if c.cues and not c.forced and c.language in {"en", src_lang}]
     english = [c for c in usable if c.language == "en"]
     source = [c for c in usable if c.language == src_lang and src_lang != "en"]
-    others = [c for c in cands if c.cues and not c.forced and c.language and c.language not in {"en", src_lang}]
 
     for c in source:
         _score_source(c, asr, speech, dur)
-    if english or others:
+    mine = [picked] if picked is not None and picked.cues and picked not in english + source else []
+    if english or mine:
         with job.worker("speaker", gpu_stage="speaker") as w:
             w.call("load", {})
-            for c in english + others:  # (the match is across languages: any language can be scored)
+            for c in english + mine:  # (the match is across languages: any language can be scored)
                 _score_english(c, asr, speech, dur, w)
 
     min_score = float(job.cfg.get("subtitles.min_score", 0.65))
@@ -213,17 +212,16 @@ def run(job: Job) -> None:
                           key=lambda c: (c.score["total"], c.human), default=None)
     best_en, best_src = pick(english), pick(source)
     route = str(job.options.get("subtitle_route") or job.cfg.get("subtitles.prefer", "english"))
-    if route == "other":  # as if only subtitles in other languages existed (for comparing routes)
-        best_en = best_src = None
-    # What leads, best first: a person's English subtitle (or the same-language one, if that is
-    # preferred), the same-language one translated, then one in any other language translated.
-    if best_src is not None and (best_en is None or route in ("source", "source_guided")):
-        translate_from = best_src
-    elif best_en is None:
-        translate_from = pick(others)
-    else:
-        translate_from = None
-    guide = best_en.cues if translate_from is not None and best_en is not None and route == "source_guided" else None
+    # What leads: a person's English subtitle, word for word or (subtitles.prefer: guided) as the
+    # guide for the same-language one, translated. Anything else only by the user's choice for
+    # this file, made when it stopped for want of an English subtitle.
+    translate_from, guide = None, None
+    if picked is not None and picked.cues and picked.language != "en":
+        translate_from, best_en = picked, None
+    elif picked is not None and picked.cues:
+        best_en = picked
+    elif best_en is not None and best_src is not None and route == "guided":
+        translate_from, guide = best_src, best_en.cues
 
     if best_src is not None:
         with job.worker("recognize") as w:
@@ -255,10 +253,10 @@ def run(job: Job) -> None:
     job.status("; ".join(parts) if parts else "no usable subtitle; using speech recognition")
     if not best_en:
         bazarr = (job.cfg.get("subtitles.providers.bazarr") or {}).get("enabled")
-        tried = [c.score.get("total", 0) for c in english + source + others]
-        require_subtitles(job, f"{len(tried)} subtitle track{'s' if len(tried) != 1 else ''} found, but none matches the "
+        tried = [c.score.get("total", 0) for c in english]
+        require_subtitles(job, f"{len(tried)} English subtitle track{'s' if len(tried) != 1 else ''} found, but none matches the "
                                f"speech well enough (best {max(tried):.2f}, needs {min_score:.2f})" if tried else
-                          "No subtitles found in the file or next to it" + (" or from Bazarr" if bazarr else " (Bazarr isn't set up)"))
+                          "No English subtitles found in the file or next to it" + (" or from Bazarr" if bazarr else " (Bazarr isn't set up)"))
 
 
 def load_chosen(job: Job, which: str) -> list[Cue]:
