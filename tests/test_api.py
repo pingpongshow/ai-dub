@@ -385,6 +385,15 @@ def test_pause_events_episodes_originals_and_bazarr_test(client, cfg, media_root
     assert c.get("/api/status").json()["paused"] is True
     jid = c.post("/api/jobs", json={"paths": [str(eps[0])], "review": "off"}).json()["added"][0]
     assert svc.paused and svc.store.next_queued()["id"] == jid      # queued, waiting for the resume
+    # While paused, only a title marked to start runs.
+    other = c.post("/api/jobs", json={"paths": [str(eps[1])], "review": "off"}).json()["added"][0]
+    assert svc.store.next_up(paused=True) is None and svc.store.next_up(paused=False)["id"] == jid
+    assert c.post(f"/api/jobs/{other}/start-now", json={"on": True}).status_code == 200
+    assert svc.store.next_up(paused=True)["id"] == other and svc.store.next_up(paused=False)["id"] == other
+    assert c.post(f"/api/jobs/{other}/start-now", json={"on": False}).status_code == 200
+    assert svc.store.next_up(paused=True) is None
+    assert c.post("/api/jobs/999/start-now", json={"on": True}).status_code == 409
+    c.delete(f"/api/jobs/{other}")
     c.post("/api/queue", json={"paused": False})
     svc.run_one(svc.store.next_queued())
     assert svc.store.get(jid)["status"] == J.DONE

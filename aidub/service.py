@@ -410,9 +410,19 @@ class Service:
         self._pause_file().write_text(json.dumps({"paused": bool(on), "at": time.time()}))
         self._wake.set()
 
+    def start_now(self, jid: int, on: bool = True) -> None:
+        """Run this title next, even while the queue is paused. It stays marked if it comes back to
+        the queue after its review, so that it can finish."""
+        j = self.store.get(jid)
+        if not j or j["status"] not in (J.QUEUED, J.WAITING):
+            raise ValueError("only a title waiting in the queue can be started")
+        opts = {k: v for k, v in (j.get("options") or {}).items() if k != "start_now"}
+        self.store.update(jid, options={**opts, **({"start_now": True} if on else {})})
+        self._wake.set()
+
     def _loop(self) -> None:
         while not self._stop.is_set():
-            j = None if self.paused else self.store.next_queued()
+            j = self.store.next_up(self.paused)
             if not j:
                 self._wake.wait(timeout=5)
                 self._wake.clear()

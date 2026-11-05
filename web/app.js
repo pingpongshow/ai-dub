@@ -192,7 +192,7 @@ function pauseView() {
   b.textContent = on ? "▶ Resume the queue" : "⏸ Pause the queue";
   b.classList.toggle("primary", on);
   $("#qpaused").innerHTML = on ? `<div class="callout warn" style="margin-bottom:12px"><b>The queue is paused.</b> The episode being dubbed
-    finishes; nothing new starts until you resume.</div>` : "";
+    finishes; only titles you press Start now on run until you resume.</div>` : "";
 }
 
 async function loadBrowser(path) {
@@ -536,12 +536,16 @@ async function loadQueue() {
       <div><div class="title">${epLabel(j.path)}</div>
         <div class="sub">${episode(j.path).show ? `<span class="ep-show">${esc(episode(j.path).show)}</span>` : ""}${st}
           ${j.status === "queued" && j.eta != null ? `<span>about ${mins(j.eta)}</span>` : ""}
+          ${j.status === "queued" && j.options && j.options.start_now ? `<span class="tag accent" title="It runs even while the queue is paused">Starting next</span>` : ""}
           ${holding && early ? `<span class="tag accent" title="It pauses for your review before anything is translated">Will stop for review</span>` : ""}</div>
         ${j.status !== "queued" ? `<div class="meta"><span>${step}${j.message ? ` · ${esc(j.message)}` : ""}</span>
           <span class="num nowrap">${j.eta != null ? `about ${mins(j.eta)} left · ` : ""}${pct} %</span></div>
           <div class="progress"><div style="width:${pct}%"></div></div>` : ""}</div>
       <div class="btn-group">
         ${j.status === "running" ? `<a class="button sm" href="#review/${j.id}" title="See what Ai Dub has decided so far">Look</a>` : ""}
+        ${j.status === "queued" ? (j.options && j.options.start_now
+          ? `<button class="sm" data-act="unstart" title="Back to waiting its turn">Don't start</button>`
+          : `<button class="sm" data-act="start" title="Run this one next, even while the queue is paused">Start now</button>`) : ""}
         ${early && !holding ? `<button class="sm" data-act="hold" title="Pause this episode at its review step, even if nothing is flagged">Stop for review</button>` : ""}
         ${j.status === "queued" ? `<button class="sm" data-act="up" title="Move up" ${i === 0 || jobs[i - 1].status !== "queued" ? "disabled" : ""}>↑</button><button class="sm" data-act="down" title="Move down" ${i === jobs.length - 1 ? "disabled" : ""}>↓</button>` : ""}
         <button class="sm" data-act="log">Log</button>
@@ -559,6 +563,7 @@ async function loadQueue() {
           if (!confirm("Stop this episode and remove it from the queue? Its working files are deleted.")) return;
           await api(`/jobs/${id}`, { method: "DELETE" });
         }
+        if (act === "start" || act === "unstart") await api(`/jobs/${id}/start-now`, { body: { on: act === "start" } });
         if (act === "hold") { await api(`/jobs/${id}/review/hold`, { body: {} }); toast("It will stop for review before anything is translated"); }
         if (act === "log") { openLog(id, (jobs.find((x) => x.id === id) || {}).path || ""); return; }
       } catch (e) { fail(e); }

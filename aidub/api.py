@@ -268,6 +268,14 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
         svc.retry(jid)
         return {"ok": True}
 
+    @app.post("/api/jobs/{jid}/start-now")
+    def start_now(jid: int, on: bool = Body(True, embed=True)):
+        try:
+            svc.start_now(jid, on)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc))
+        return {"ok": True}
+
     @app.post("/api/jobs/{jid}/move")
     def move(jid: int, direction: int = Body(..., embed=True)):
         svc.store.move(jid, -1 if direction < 0 else 1)

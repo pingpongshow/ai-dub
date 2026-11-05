@@ -106,6 +106,16 @@ class Store:
                 (QUEUED, WAITING)).fetchone()
         return self._row(r)
 
+    def next_up(self, paused: bool = False) -> dict | None:
+        """The job to run next: one marked to start now comes first, even while the queue is
+        paused; the others in their order, unless it is paused."""
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM jobs WHERE status IN (?, ?) ORDER BY position, id",
+                                      (QUEUED, WAITING)).fetchall()
+        jobs = [self._row(r) for r in rows]
+        marked = next((j for j in jobs if j["options"].get("start_now")), None)
+        return marked or (None if paused or not jobs else jobs[0])
+
     def claim(self, job_id: int) -> bool:
         """Mark a queued job running; False if it was cancelled or removed meanwhile."""
         with self._tx() as c:
