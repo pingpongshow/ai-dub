@@ -193,6 +193,8 @@ def llm_ops():
                                                   for i, n in items]}))
                 continue
             items = re.findall(r'"id":\s*(\d+).*?"target_syllables":\s*(\d+)', user, re.S)
+            if not items:  # free timing: no length to aim for
+                items = [(i, 5) for i in re.findall(r'"id":\s*(\d+)', user)]
             lines = [{"id": int(i), "en": " ".join(["word"] * int(n)),
                       "short": " ".join(["word"] * max(1, int(int(n) * 0.75)))} for i, n in items]
             outs.append("```json\n" + json.dumps({"lines": lines}) + "\n```")

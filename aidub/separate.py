@@ -2,11 +2,13 @@
 
 Stereo/mono: the whole track is separated. 5.1 and up: the centre channel is
 separated on its own and the front left/right pair together (to catch panned
-dialogue); the other channels are kept as they are.
+dialogue); the surrounds too when the speech reaches them, or the original voice
+stays behind the dub as an echo; the other channels are kept as they are.
 
 Outputs in audio/:
   dialogue.wav  - analysis copy: all dialogue folded to stereo (48 kHz)
   stems.json    - per channel group: {"channels": [...], "dialogue": path, "mne": path}
+  surround.json - the same for the surrounds, when separated (only the mix uses them)
 """
 
 from __future__ import annotations
@@ -23,6 +25,29 @@ def channel_groups(n: int) -> list[tuple[str, list[int]]]:
     if n >= 6:
         return [("front", [0, 1]), ("centre", [2])]
     return [("main", list(range(n)))]
+
+
+def speech_in_surrounds(data: np.ndarray, sr: int, window_s: float = 30.0, follow: float = 0.7, share: float = 0.05) -> bool:
+    """Does the surrounds' level rise and fall with the centre's, in over `share` of the windows
+    with speech in the centre? (8% and 13% on two films, one with the echo heard.) Music mixed to
+    both can pass too, which only costs the time of separating them."""
+    hop = int(sr * 0.1)
+    n = len(data) // hop
+    if data.shape[1] < 6 or n == 0:
+        return False
+
+    def level(x: np.ndarray) -> np.ndarray:
+        return 10 * np.log10((x[: n * hop] ** 2).reshape(n, hop).mean(axis=1) + 1e-10)
+    centre, back = level(data[:, 2]), level(data[:, 4:6].mean(axis=1))
+    size = int(window_s / 0.1)
+    talking = following = 0
+    for k in range(0, n - size + 1, size):
+        c, b = centre[k:k + size], back[k:k + size]
+        if c.max() < -50 or c.std() < 3 or b.max() < -70 or b.std() < 1e-3:
+            continue
+        talking += 1
+        following += bool(np.corrcoef(c, b)[0, 1] >= follow)
+    return talking > 0 and following / talking >= share
 
 
 def run(job: Job) -> None:
@@ -45,6 +70,16 @@ def run(job: Job) -> None:
             res = w.call("separate", {"input": str(inp), "out_dir": str(job.dir("audio", f"sep_{name}"))},
                          on_progress=lambda p, m: job.status(m, progress=(gi + p) / len(groups)))
             stems[name] = {"channels": chans, "dialogue": res["vocals"], "mne": res["instrumental"]}
+            inp.unlink(missing_ok=True)
+        job.path("audio", "surround.json").unlink(missing_ok=True)
+        if n >= 6 and cfg.get("surrounds", True) and speech_in_surrounds(data, sr):
+            job.check()
+            job.status("the speech reaches the surrounds: separating them too")
+            inp = media.write_wav(job.path("audio", "in_surround.wav"), data[:, 4:6], sr)
+            res = w.call("separate", {"input": str(inp), "out_dir": str(job.dir("audio", "sep_surround"))},
+                         on_progress=lambda p, m: job.status(m, progress=p))
+            job.path("audio", "surround.json").write_text(json.dumps(
+                {"channels": [4, 5], "dialogue": res["vocals"], "mne": res["instrumental"]}, indent=1))
             inp.unlink(missing_ok=True)
 
     # Analysis copy of the dialogue, folded to stereo at the source rate.

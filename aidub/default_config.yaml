@@ -65,7 +65,7 @@ ingest:
 
 subtitles:
   require: true            # no English subtitle fit to be the script: wait for you per file (choose another subtitle, search, or allow the speech)
-  prefer: english          # english (word for word) or guided (the same-language subtitle translated, with the English as a guide; needs both)
+  prefer: guided           # guided (the same-language subtitle translated, with the English as a guide; needs both; with one, the English) or english (word for word)
   min_score: 0.65          # a subtitle for another episode scores under ~0.5
   providers:
     embedded:      { enabled: true }
@@ -116,7 +116,7 @@ speak:
   processes: 2              # voice-model processes sharing the GPU (one voices a line at a time, leaving it mostly idle)
   num_beams:                # candidates the voice model weighs per take (empty: its default, 3). 1 + 12 steps
   diffusion_steps:          # saved only ~90 s an episode and left more lines in the original (21 vs 13 of 430)
-  emo_alpha: 0.35            # how much of the original line's emotion the dub takes (0.35 judged most natural)
+  emo_alpha: 0.6             # how much of the original line's emotion the dub takes (0.6 best in 9 of 14 scenes by ear, 0.35 in 3)
   min_emotion_ref_s: 1.0
   max_similarity_drop: 0.25 # reject a take this far below the character's median similarity
   min_similarity: 0.10
@@ -135,7 +135,7 @@ fit:
   tolerance_ms: 80
   timing: auto              # window: each line fits the time the character speaks (lip movement);
                             # start: starts with the original line at its natural length (lip movement ignored);
-                            # auto: start when the dub is the subtitles word for word, window otherwise
+                            # auto: start for the subtitles word for word or the speech alone, window otherwise
   free_gap_ms: 120          # timing start: a line due while the previous English line still speaks follows it
   free_early_ms: 400        # ... or starts up to this early when that leaves the next line on time (never back over a shot change)
   free_max_late_ms: 350     # ... and at most this late: the lines running into it are sped up to make room,
@@ -159,6 +159,10 @@ mix:
   extra_duck_db: 0.0
   min_level_db: -12.0       # no dubbed line quieter than this under the film's usual dialogue level
   fade_ms: 12
+  even_within: 4            # levels each line within itself: 1 off, 4 strong (preferred by ear, with level_spread 0)
+  level_spread: 0           # how much of the film's level gaps between lines each dubbed line keeps: 1 all, 0 none
+  polish: off               # smooth each voice before mixing: off, gentle or strong (harsh and hissy moments, rough top end, uneven level, a little room). Off: no version won by ear
+  room_tone: true           # keep the scene's background steady under dubbed lines (noise left in the dialogue stem would dip)
 
 deliver:
   audio_bitrate: 192k

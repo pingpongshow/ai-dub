@@ -20,6 +20,7 @@ import pyloudnorm as pyln
 from . import fit as F
 from . import lines as L
 from . import media
+from . import polish as P
 from .fit import free_timing, pace
 from .job import Job
 
@@ -109,6 +110,81 @@ def keep_gain(n: int, spans: list[tuple[float, float]], ramp_s: float) -> np.nda
     return g
 
 
+def even_levels(starts: list[float], levels: list[float], spread: float, around_s: float = 30.0) -> list[float]:
+    """Brings lines' levels closer together: each keeps `spread` of its difference in dB from the
+    scene's usual level (1: as the film has them, 0: all alike). The film's own gaps sound natural
+    with its actors, but in one dub voice they stand out, and each voice seems spliced in. Shouts
+    and whispers stay louder and quieter than the rest."""
+    if spread >= 1 or not levels:
+        return list(levels)
+    db = 20 * np.log10(np.maximum(levels, 1e-6))
+    at = np.array(starts)
+    out = []
+    for t, d in zip(at, db):
+        usual = float(np.median(db[np.abs(at - t) <= around_s]))
+        out.append(float(10 ** ((usual + (d - usual) * spread) / 20)))
+    return out
+
+
+def between_lines(n: int, lines: list[L.Line], before: float = 0.15, after: float = 0.35) -> np.ndarray:
+    """True where no line is speaking or dying away."""
+    free = np.ones(n, dtype=bool)
+    for ln in lines:
+        free[max(0, int((ln.start - before) * SR)): max(0, int((ln.end + after) * SR))] = False
+    return free
+
+
+def _per_block(x: np.ndarray, step: int, stat) -> np.ndarray:
+    """`stat` of each `step` samples, a slice at a time."""
+    n = len(x) // step
+    parts = []
+    for k in range(0, n, 65536):
+        part = x[k * step: min(k + 65536, n) * step]
+        parts.append(stat(part.reshape(-1, step, *x.shape[1:])))
+    return np.concatenate(parts) if parts else np.zeros(0)
+
+
+def room_tone(dlg: np.ndarray, g: np.ndarray, free: np.ndarray, grain_s: float = 0.2, search_s: float = 10.0) -> np.ndarray:
+    """The scene's own background for where the dialogue stem is muted. In a noisy scene separation
+    leaves much of the noise in that stem, as loud as the rest of the background, so muting it under
+    each line makes the noise dip as the voice starts: the voice sounds spliced in. Short random grains
+    from the quiet moments nearby, overlapped so the level holds; nothing where there are none."""
+    out = np.zeros_like(dlg)
+    muted = g < 1.0
+    edges = np.flatnonzero(np.diff(muted.astype(np.int8)))
+    starts, ends = list(edges[~muted[edges]] + 1), list(edges[muted[edges]] + 1)
+    if muted[0]:
+        starts.insert(0, 0)
+    if muted[-1]:
+        ends.append(len(muted))
+    size = int(grain_s * SR)
+    hop, step = size // 2, max(1, size // 4)
+    window = np.sin(np.pi * (np.arange(size) + 0.5) / size)[:, None].astype(np.float32)  # the level holds at half overlap
+    # Places a whole grain fits between lines, and how loud each is (a film is far too long for per-sample sums).
+    blocks = size // step
+    clear = _per_block(free, step, lambda b: b.all(axis=1))
+    power = _per_block(dlg, step, lambda b: (b ** 2).mean(axis=(1, 2)))
+    if len(clear) < blocks:
+        return out
+    fits = np.convolve(clear.astype(np.int32), np.ones(blocks, dtype=np.int32), mode="valid") == blocks
+    places = np.flatnonzero(fits)
+    if not len(places):
+        return out
+    level = np.convolve(power, np.ones(blocks) / blocks, mode="valid")[places]
+    places = places * step
+    rnd = np.random.default_rng(0)
+    for a, b in zip(starts, ends):
+        lo, hi = np.searchsorted(places, [a - int(search_s * SR), b + int(search_s * SR)])
+        if hi - lo < 4:
+            continue
+        near, loud = places[lo:hi], level[lo:hi]
+        near = near[loud <= np.median(loud) * 2.0]  # (a breath or a word no line covers isn't room)
+        for at in range(max(0, a - hop), min(b + hop, len(out) - size), hop):
+            k = int(rnd.choice(near))
+            out[at:at + size] += dlg[k:k + size] * window
+    return out
+
+
 def soft_limit(x: np.ndarray, ceiling_db: float = -1.0) -> np.ndarray:
     c = 10 ** (ceiling_db / 20)
     over = np.abs(x) > c * 0.9
@@ -152,6 +228,13 @@ def run(job: Job) -> None:
         if len(st["channels"]) == 1:
             d, m = d.mean(axis=1, keepdims=True), m.mean(axis=1, keepdims=True)
         groups[name] = {"dlg": d, "mne": m, "dub": np.zeros_like(d)}
+    # (the dub never goes in the surrounds, and they don't count towards a line's level or position)
+    around = None
+    if job.path("audio", "surround.json").exists():
+        st = json.loads(job.path("audio", "surround.json").read_text())
+        d, dsr = media.read_wav(st["dialogue"])
+        m, msr = media.read_wav(st["mne"])
+        around = {"dlg": _fit_len(media.resample(d, dsr, SR), total), "mne": _fit_len(media.resample(m, msr, SR), total)}
 
     dubbed = sorted((ln for ln in lines if ln.take and ln.kind == L.SPEECH and not ln.fallback), key=lambda l: l.start)
     free = free_timing(job)
@@ -169,6 +252,9 @@ def run(job: Job) -> None:
     # whispered under it) would be dubbed as quietly: no quieter than this under the film's usual level.
     voice_refs = [sum(v["dlg"][int(ln.start * SR): int(ln.end * SR)].mean(axis=1) for v in groups.values()) for ln in dubbed]
     usual = float(np.median([active_rms(r, SR) for r in voice_refs if len(r)] or [0.0]))
+    wanted = even_levels([ln.start for ln in dubbed],
+                         [active_rms(r, SR) if len(r) else 10 ** (ln.loudness_db / 20) for r, ln in zip(voice_refs, dubbed)],
+                         float(cfg.get("mix.level_spread", 0.0)))
     least = usual * 10 ** (float(cfg.get("mix.min_level_db", -12.0)) / 20)
     raised = 0
     # Lines left in the original (short reactions, songs, lines with no usable take) stay
@@ -177,6 +263,8 @@ def run(job: Job) -> None:
     kept = [(l.start, l.end) for l in lines if l.id not in dub_ids]
     own = [(l.start, l.end) for l in dubbed]
     over_kept = placed = 0
+    smoothing = P.level_for(cfg.get("mix.polish", "off"))
+    even_within = float(cfg.get("mix.even_within", 4.0))
     for i, ln in enumerate(dubbed):
         x = takes[i]
         start = ln.start
@@ -206,7 +294,12 @@ def run(job: Job) -> None:
         ref = sum(v["dlg"][int(ln.start * SR): int(ln.end * SR)].mean(axis=1) for v in groups.values())
         if cfg.get("mix.eq_match", True):
             x = apply_band_gains(x, SR, band_gains_db(ref, x, SR, float(cfg.get("mix.eq_max_db", 6.0))))
-        target = active_rms(ref, SR) if len(ref) else 10 ** (ln.loudness_db / 20)
+        if smoothing:
+            x = P.polish(x, SR, smoothing)[: total - a]  # (now longer by the room's tail)
+            b = a + len(x)
+        if even_within > 1:
+            x = P.even_within(x, SR, even_within)
+        target = wanted[i]
         raised += target < least
         x *= min(max(target, least) / max(active_rms(x, SR), 1e-6), 30.0)
         x = fade(x.astype(np.float32), fade_n)
@@ -234,8 +327,25 @@ def run(job: Job) -> None:
     g = keep_gain(total, spans, ramp_s=0.03)[:, None]
     duck = 10 ** (-abs(float(cfg.get("mix.extra_duck_db", 0.0))) / 20)
     duck_env = np.where(g < 1.0, duck, 1.0).astype(np.float32) if duck < 1.0 else 1.0
-    for v in groups.values():
-        v["out"] = v["mne"] * duck_env + v["dlg"] * g + v["dub"]
+    quiet = between_lines(total, lines) if cfg.get("mix.room_tone", True) else None
+    # A long 5.1 film runs to tens of GB here: each stem goes as soon as it's in its channel's mix.
+    for v in [*groups.values(), *([around] if around else [])]:
+        mixed = v.pop("mne")
+        if duck < 1.0:
+            mixed *= duck_env
+        if quiet is not None:
+            room = room_tone(v["dlg"], g[:, 0], quiet)
+            room *= 1 - g
+            mixed += room
+            del room
+        kept_part = v.pop("dlg")
+        kept_part *= g
+        mixed += kept_part
+        del kept_part
+        if "dub" in v:
+            mixed += v.pop("dub")
+        v["out"] = mixed
+    del quiet
 
     surround = n_ch == 6 and bool(cfg.get("deliver.surround", True))
     full = None
@@ -244,15 +354,18 @@ def run(job: Job) -> None:
         fl, fr = groups["front"]["out"][:, 0], groups["front"]["out"][:, 1]
         fc = groups["centre"]["out"][:, 0]
         surr = rest[:, 1:]  # skip LFE (index 3 in the source)
+        if around:
+            surr[:, :2] = around.pop("out")
         sl = surr[:, 0::2].sum(axis=1) if surr.shape[1] else 0
         sr_ = surr[:, 1::2].sum(axis=1) if surr.shape[1] else 0
         k = 1 / np.sqrt(2)
         if surround:  # the original's own layout, with the dub in its front and centre channels
-            lfe = rest[:, 0]
-            full = np.stack([fl, fr, fc, lfe, surr[:, 0], surr[:, 1]], axis=1)
+            full = np.stack([fl, fr, fc, rest[:, 0], surr[:, 0], surr[:, 1]], axis=1)
         out = np.stack([fl + k * fc + k * sl, fr + k * fc + k * sr_], axis=1)
         orig_st = np.stack([src[:, 0] + k * src[:, 2] + k * src[:, 4::2].sum(axis=1),
                             src[:, 1] + k * src[:, 2] + k * src[:, 5::2].sum(axis=1)], axis=1)
+        del rest, surr, sl, sr_, fl, fr, fc
+        groups.clear()
     else:
         out = groups["main"]["out"]
         if out.shape[1] == 1:
@@ -260,22 +373,25 @@ def run(job: Job) -> None:
         orig_st = src if src.shape[1] >= 2 else np.repeat(src, 2, axis=1)
         orig_st = orig_st[:, :2]
 
+    del src
     out = out[: int(job["ingest"]["duration"] * SR)]
     if full is not None:
         full = full[: len(out)]
     meter = pyln.Meter(SR)
-    orig48 = media.resample(orig_st.astype(np.float32), src_sr, SR)
+    orig48 = media.resample(orig_st.astype(np.float32, copy=False), src_sr, SR)
+    del orig_st
     try:
         target = meter.integrated_loudness(orig48)
         now = meter.integrated_loudness(out)
         if np.isfinite(target) and np.isfinite(now):
-            out = out * 10 ** ((target - now) / 20)
+            out *= 10 ** ((target - now) / 20)
             if full is not None:
-                full = full * 10 ** ((target - now) / 20)
+                full *= 10 ** ((target - now) / 20)
         job.qc["loudness_lufs"] = round(float(target), 1)
     except ValueError:
         pass
-    out = soft_limit((full if full is not None else out).astype(np.float32))
+    del orig48
+    out = soft_limit((full if full is not None else out).astype(np.float32, copy=False))
     media.write_wav(job.path("mix", "dub.wav"), out, SR)
     job.qc["dub_channels"] = out.shape[1]
     job.qc["dubbed_lines"] = placed

@@ -168,7 +168,10 @@ ones you're most likely to want are below.
 | `ingest.skip_english_audio` | `true` | Skip files that already have English audio, including untagged audio that turns out to be English |
 | `ingest.song_chapters` | opening, op, ending, ed, credits, … | Chapter names whose audio is always kept as it is |
 | `subtitles.require` | `true` | A file with no usable English subtitle waits under **Waiting for you** until you choose another subtitle, search Bazarr, or allow a dub from the speech. With none in the file or next to it, it waits before any work starts. `false` dubs such files from the speech without asking. |
-| `subtitles.prefer` | `english` | With both a person's English subtitle and one in the spoken language: `english` dubs the English word for word; `guided` translates the spoken-language one with the English as a guide. |
+| `subtitles.prefer` | `guided` | With both a person's English subtitle and one in the spoken language: `guided` translates the spoken-language one with the English as a guide; `english` dubs the English word for word. |
+| `mix.level_spread` | `0` | How much of the film's volume differences between lines the dub keeps. `0` brings them all to the scene's usual level; `1` matches each original line. Raise it if shouts and whispers sound too alike. |
+| `mix.even_within` | `4` | Evens out loud and quiet moments inside each dubbed line. `1` is off; higher is stronger. |
+| `mix.polish` | `off` | Smooths each voice before mixing: harsh and hissy moments are turned down, the rough top end smoothed, the level evened and a little room added. `off`, `gentle` or `strong`. |
 | `subtitles.min_score` | `0.65` | How well a subtitle track must match the speech to be trusted. A track for another episode scores under about 0.5. |
 | `songs.detect_by_pitch` | `true` | Find sung passages by held notes over music |
 | `songs.match_episodes` | `true` | Find the opening and ending shared with neighbouring episodes in the folder |

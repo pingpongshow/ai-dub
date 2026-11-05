@@ -7,6 +7,7 @@ to the subtitles, to read.
 
     python dev/route_test.py /work/dev-tree routes  /media/a.mkv /media/b.mkv
     python dev/route_test.py /work/dev-tree speech  /media/a.mkv /media/b.mkv
+    python dev/route_test.py /work/dev-tree fixes   /media/a.mkv "" /media/c.mkv
 """
 
 import json
@@ -19,7 +20,16 @@ import numpy as np
 
 from aidub import lines as L
 
-PLANS = {"pair": [("english", ["--route", "english"]), ("guided", ["--route", "guided"])]}
+PLANS = {"pair": [("english", ["--route", "english"]), ("guided", ["--route", "guided"])],
+         "fixes": [("before", ["--route", "guided"]), ("alpha35", ["--route", "guided"]),
+                   ("alpha60", ["--route", "guided", "--set", "speak.emo_alpha=0.6"])],
+         # The same takes of an earlier plan's version, mixed each way: only the filter differs.
+         "filter": [("off", ["--takes-of", "fixes-alpha60", "--set", "mix.polish=off"]),
+                    ("gentle", ["--takes-of", "fixes-alpha60", "--set", "mix.polish=gentle"]),
+                    ("strong", ["--takes-of", "fixes-alpha60", "--set", "mix.polish=strong"])],
+         "levels": [("full", ["--takes-of", "clipfix", "--set", "mix.level_spread=1"]),
+                    ("half", ["--takes-of", "clipfix", "--set", "mix.level_spread=0.5"]),
+                    ("quarter", ["--takes-of", "clipfix", "--set", "mix.level_spread=0.25"])]}
 COMMON = ["--no-review", "--set", "stages.faces.enabled=false", "--set", "subtitles.providers.bazarr.enabled=false",
           "--set", "subtitles.require=false"]
 SCENE_S = 45.0
@@ -74,6 +84,8 @@ def main():
     for k, film in enumerate(films):
         if used >= WANT:
             break
+        if not film:  # (an empty argument keeps the other films' numbers, and so their analysis)
+            continue
         jid = str(900 + k + 100)
         base = root / f"base-{jid}"
         work = base / "work" / f"job-{jid}"
@@ -95,8 +107,14 @@ def main():
             if finished.exists() and "listen" in json.loads(finished.read_text())["done"]:
                 versions[name] = finished.parent  # done before an interruption
                 continue
-            if rerun(str(r), jid, "--copy-of", str(work), "--from", start, "--until", "listen", "--windows",
-                     ",".join(f"{a}-{b}" for a, b in scenes), *flags, *COMMON):
+            if "--takes-of" in flags:
+                takes = root / f"{flags[flags.index('--takes-of') + 1]}-{jid}" / "work" / f"job-{jid}"
+                ok = rerun(str(r), jid, "--copy-of", str(takes), "--from", "mix", "--until", "listen", "--keep-lines", "--route", "guided",
+                           *flags[flags.index("--takes-of") + 2:], *COMMON)
+            else:
+                ok = rerun(str(r), jid, "--copy-of", str(work), "--from", start, "--until", "listen", "--windows",
+                           ",".join(f"{a}-{b}" for a, b in scenes), *flags, *COMMON)
+            if ok:
                 versions[name] = r / "work" / f"job-{jid}"
         if not versions:
             continue
@@ -129,8 +147,8 @@ def main():
         "<!doctype html><meta charset=utf-8><title>Script comparison</title><style>body{font:15px system-ui;background:#14171c;color:#e6e9ef;padding:16px}"
         "td{padding:8px;border-bottom:1px solid #333;vertical-align:top}audio{width:240px}</style>"
         "<h2>Which sounds best to a viewer?</h2><p>You don't need to know Japanese: I check that the words are right by reading "
-        "the subtitles. Each scene has two dubbed versions in no particular order; the first player is the original, for the mood and "
-        "voices. Mark the one you prefer Acceptable and the other Poor, or both Acceptable if there's nothing between them. "
+        f"the subtitles. Each scene has {len(PLANS[plan])} dubbed versions in no particular order; the first player is the original, for the mood and "
+        "voices. Mark the one you prefer Acceptable and the rest Poor, or more than one Acceptable if there's nothing between them. "
         "Comments are welcome on either: what sounded natural, odd, clunky, rushed, or hard to follow.</p><table>" + "".join(rows) + "</table><script src=/listen-feedback.js></script>")
     print("page", page, len(key), "versions")
 

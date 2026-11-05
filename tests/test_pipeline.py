@@ -166,7 +166,7 @@ def test_overrunning_lines_get_shorter_english(cfg, media_root):
     """With speed factors and stretching off and a translator that writes too
     much, lines only fit through the condense step's shorter wording."""
     cfg.data["translate"]["syllables_per_second"] = 7.0
-    cfg.data["fit"].update({"factor_min": 0.999, "factor_max": 1.001, "stretch_max": 1.0})
+    cfg.data["fit"].update({"factor_min": 0.999, "factor_max": 1.001, "stretch_max": 1.0, "timing": "window"})
     ep = synth.episode(media_root / "Long Lines.mkv")
     svc = Service(cfg)
     job = run_service_job(svc, ep)
@@ -225,6 +225,7 @@ def test_subtitles_as_script(cfg, media_root):
 
 
 def test_free_timing_starts_with_the_original(cfg, media_root):
+    cfg.data["mix"]["polish"] = "gentle"  # (the voice filter's tail must fit the mix too)
     cfg.data.setdefault("fit", {})["timing"] = "start"
     ep = synth.episode(media_root / "Free (2020).mkv")
     svc = Service(cfg)

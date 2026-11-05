@@ -57,6 +57,7 @@ def main():
     ap.add_argument("--route", help="subtitles.prefer for this run")
     ap.add_argument("--windows", help="voice only these stretches: 100-145,600-645")
     ap.add_argument("--set", action="append", default=[], help="a setting for this run: fit.timing=start")
+    ap.add_argument("--keep-lines", action="store_true", help="from a late step: the copied job's lines as they are, not the review's base")
     ap.add_argument("--no-subtitles", action="store_true", help="as if the file had no subtitles: translated from the speech")
     args = ap.parse_args()
 
@@ -97,7 +98,7 @@ def main():
         src = Path(state["data"]["ingest"]["source"])
         name = guess_name(src)
         base = work / "review" / "base-lines.json"
-        if pipeline.STEP_NAMES.index(args.start) > pipeline.STEP_NAMES.index("align") and base.exists():
+        if pipeline.STEP_NAMES.index(args.start) > pipeline.STEP_NAMES.index("align") and base.exists() and not args.keep_lines:
             shutil.copyfile(base, work / "lines.json")
     if args.no_decisions:
         (work / "review" / "decisions.json").unlink(missing_ok=True)

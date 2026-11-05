@@ -471,7 +471,7 @@ def test_a_file_without_english_can_use_another_subtitle(cfg, media_root, monkey
 
 
 def test_english_and_guided_need_the_right_subtitles(cfg):
-    assert cfg.get("subtitles.prefer") == "english"  # the open question's default
+    assert cfg.get("subtitles.prefer") == "guided"   # the owner's choice after two rounds of listening
 
 
 def test_a_subtitle_next_to_the_file_or_from_bazarr_passes_the_first_check(cfg, media_root, monkeypatch):

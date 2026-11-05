@@ -211,7 +211,7 @@ def run(job: Job) -> None:
     pick = lambda cs: max((c for c in cs if c.score.get("total", 0) >= min_score),
                           key=lambda c: (c.score["total"], c.human), default=None)
     best_en, best_src = pick(english), pick(source)
-    route = str(job.options.get("subtitle_route") or job.cfg.get("subtitles.prefer", "english"))
+    route = str(job.options.get("subtitle_route") or job.cfg.get("subtitles.prefer", "guided"))
     # What leads: a person's English subtitle, word for word or (subtitles.prefer: guided) as the
     # guide for the same-language one, translated. Anything else only by the user's choice for
     # this file, made when it stopped for want of an English subtitle.

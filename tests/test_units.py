@@ -571,7 +571,7 @@ def test_backcheck_takes_from_e07_that_were_right():
     near = {"wer": 0.2, "missed": ["sandwich"], "sim": 0.4, "sim_median": 0.35, "seconds": 2.4, "words": 9}
     assert not speak._passes(near, cfg) and speak._rescue(near, cfg)
     assert not speak._rescue({**near, "wer": 0.4}, cfg) and not speak._rescue({**near, "missed": ["a1", "b2"]}, cfg)
-    assert not speak._rescue({**near, "sim": 0.02}, cfg)                       # someone else's voice: no
+    assert speak._rescue({**near, "sim": 0.02}, cfg)                           # a doubtful voice still beats the original
     assert speak._passes({**near, "rescued": True}, cfg)
 
 
@@ -832,7 +832,7 @@ def test_auto_timing_frees_only_the_word_for_word_dub():
         cfg = {"fit.timing": timing} if timing else {}
         return _StubJob(cfg, {"translate_lead": lead_used})
     assert fit.free_timing(job(None, "subtitle_verbatim"))         # default: auto
-    assert not fit.free_timing(job(None, "audio"))                 # untrusted subtitles: fitted audio-led dub
+    assert fit.free_timing(job(None, "audio"))                     # speech only: natural length keeps more words
     assert not fit.free_timing(job("auto", "subtitle"))
     assert fit.free_timing(job("start", "audio")) and not fit.free_timing(job("window", "subtitle_verbatim"))
 
@@ -1605,7 +1605,7 @@ def test_take_with_every_word_heard_is_used_despite_a_doubtful_voice():
     cfg = SimpleNamespace(get=lambda k, d=None: d)
     clear = {"wer": 0.0, "missed": [], "words": 3, "sim": -0.01, "sim_median": 0.3, "seconds": 2.0, "own_ref": False}
     assert not speak._passes(clear, cfg) and speak._rescue(clear, cfg)
-    assert not speak._rescue({**clear, "wer": 0.3}, cfg)
+    assert speak._rescue({**clear, "wer": 0.3}, cfg) and not speak._rescue({**clear, "wer": 0.4}, cfg)
 
 
 def test_a_reply_dash_is_a_second_speaker():
@@ -1837,10 +1837,12 @@ def test_a_subtitle_in_another_language_becomes_an_english_track(monkeypatch):
             return out
     monkeypatch.setattr(translate, "LLM", Fake)
     cues = [Cue(start=float(i), end=i + 0.9, text=f"せりふ{i}", raw="") for i in range(5)] + [Cue(start=9.0, end=10.0, text="", raw="♪", kind=SONG)]
+    music = Cue(start=11.0, end=30.0, text="・～", raw="")
     job = type("J", (), {"profile": None, "check": lambda s: None, "status": lambda s, m: None, "log": lambda s, m: None})()
     guide = [Cue(start=0.0, end=0.9, text="A person's line.", raw="")]
-    got = X.translate_cues(job, Candidate(id="embedded:2", label="", origin="embedded", language="ja", format="srt", path="", cues=cues), "Japanese", guide)
+    got = X.translate_cues(job, Candidate(id="embedded:2", label="", origin="embedded", language="ja", format="srt", path="", cues=cues + [music]), "Japanese", guide)
     assert [q.text for q in got[:5]] == [f"line {i}" for i in range(5)] and got[5].kind == SONG and got[1].start == 1.0
+    assert len(got) == 6 and "・～" not in asked[0][1]["content"]   # music marks aren't lines
     assert "A person's line." in asked[0][1]["content"] and "guide" in asked[0][1]["content"]
     assert X.guide_for(cues[3], guide) == ""
 
@@ -1906,9 +1908,207 @@ def test_name_list_covers_the_film_in_pieces_short_enough_for_the_model():
             sizes.extend(len(c[1]["content"]) for c in convs)
             return [J.dumps({"names": [{"subtitle": "角田", "english": "Tsunoda"}]}) for _ in convs[:-1]] + \
                 [J.dumps({"names": [{"subtitle": "角田", "english": "Kakuta"}]})]
-    talk = [(i, Cue(start=float(i), end=i + 1.0, text="如果也能挽回他的名声，事情就很难说了", raw="")) for i in range(1100)]
+    talk = [(i, Cue(start=float(i), end=i + 1.0, text="如果角田也能挽回名声，事情就很难说了", raw="")) for i in range(1100)]
     got = X.name_list(Llm(), talk, [{"start": float(i), "end": i + 1.0, "text": "もし彼の名誉も取り戻せるなら"} for i in range(1100)], "Chinese")
     assert got == {"角田": "Tsunoda"} and len(sizes) == 10 and max(sizes) < 14000  # most common spelling wins
+
+
+def test_names_come_from_the_english_subtitles_when_there_are_any():
+    import json as J
+    from aidub.subtitles import translated as X
+    from aidub.subtitles.model import Cue
+    guide = [Cue(start=0.0, end=1.0, text="Hey, Shoji is the new manager.", raw=""), Cue(start=2.0, end=3.0, text="hey you, Shoji.", raw="")]
+    assert X.english_names(guide) == ["Shoji"]
+    asked = []
+
+    class Llm:
+        def chat_many(self, convs, max_tokens=0):
+            asked.extend(convs)
+            return [J.dumps({"names": [{"subtitle": "東海林", "english": "Tokairin"}, {"subtitle": "東海林", "english": "Tokairin"},
+                                       {"subtitle": "東海林", "english": "Shoji"}, {"subtitle": "西園寺", "english": "Saionji"},
+                                       {"subtitle": "Shoji", "english": "Shoji"}]})]
+    talk = [(0, Cue(start=0.0, end=1.0, text="東海林部長と西園寺", raw=""))]
+    got = X.name_list(Llm(), talk, [], "Japanese", guide=guide)
+    assert got == {"東海林": "Shoji", "西園寺": "Saionji"}  # backed by the subtitles beats most votes; nothing to back it: as voted
+    talk = [(0, Cue(start=0.0, end=1.0, text="東海林", raw="")), (1, Cue(start=2.0, end=3.0, text="雅人さん", raw=""))]
+
+    class Guess:
+        def chat_many(self, convs, max_tokens=0):
+            return [J.dumps({"names": [{"subtitle": "東海林", "english": "Shoji"}, {"subtitle": "雅人", "english": "Shoji"}]})]
+    assert X.name_list(Guess(), talk, [], "Japanese", guide=[Cue(start=0.0, end=1.0, text="hey you, Shoji.", raw=""),
+                                                            Cue(start=2.0, end=3.0, text="hey there.", raw="")]) == {"東海林": "Shoji"}
+    assert '"english": "Hey, Shoji is the new manager."' in asked[0][1]["content"] and '["Shoji"]' in asked[0][1]["content"]
+
+
+def test_lines_given_one_guide_do_not_say_it_twice():
+    from aidub.subtitles import translated as X
+    from aidub.subtitles.model import Cue
+    guide = [Cue(start=0.0, end=4.0, text="Give your full attention to the ingredients.", raw=""),
+             Cue(start=5.0, end=9.0, text="Good morning.", raw="")]
+    talk = [(0, Cue(start=0.0, end=2.0, text="その材料を親しく見つめ", raw="")),
+            (1, Cue(start=2.0, end=4.0, text="あつかわねばならぬ", raw="")),
+            (2, Cue(start=5.0, end=6.0, text="おはようございます", raw="")),
+            (3, Cue(start=6.0, end=7.0, text="おはようございます", raw="")),
+            (4, Cue(start=7.0, end=8.0, text="今日は", raw="")),
+            (5, Cue(start=8.0, end=9.0, text="明日は", raw=""))]
+    english = {0: "Give your full attention to the ingredients.", 1: "to the ingredients.", 2: "Good morning to you all.",
+               3: "Good morning to you all.", 4: "It is very cold today.", 5: "It will be sunny tomorrow."}
+    span = X.merge_repeats(talk, english, guide)
+    assert 1 not in english and span[0] == (0.0, 4.0)        # the fuller line stays and takes both lines' time
+    assert 2 in english and 3 in english                     # the subtitle itself says it twice
+    assert 4 in english and 5 in english and span[5] == (8.0, 9.0)
+    talk = [(0, Cue(start=0.0, end=2.0, text="こちら", raw="")), (1, Cue(start=6.0, end=8.0, text="そちら", raw=""))]
+    english = {0: "Good morning to you all.", 1: "Good morning to you all."}
+    X.merge_repeats(talk, english, [Cue(start=0.0, end=2.0, text="a", raw=""), Cue(start=6.0, end=8.0, text="b", raw="")])
+    assert len(english) == 2                                 # different guides: not this mistake
+    talk = [(0, Cue(start=0.0, end=1.0, text="お前は間違ってる", raw="")), (1, Cue(start=1.2, end=2.0, text="何がだ", raw=""))]
+    english = {0: "You're wrong.", 1: "You're wrong."}
+    X.merge_repeats(talk, english, [Cue(start=0.0, end=2.0, text="You're wrong. How?", raw="")])
+    assert list(english) == [0]                              # short, but word for word and the Japanese differs
+
+
+def test_the_trim_keeps_a_last_consonant_and_cuts_the_noise_after_it():
+    from aidub import fit as F
+    sr, rnd = 24000, np.random.default_rng(1)
+    t = np.arange(int(sr * 0.5)) / sr
+    vowel = 0.3 * np.sin(2 * np.pi * 220 * t) + rnd.normal(0, 0.004, len(t))
+    hiss = np.diff(rnd.normal(0, 0.012, int(sr * 0.12) + 1)).astype(np.float64)   # an "s", far below the vowel
+    room = rnd.normal(0, 0.00005, int(sr * 0.5))
+    a, b = F.speech_bounds(np.concatenate([vowel, hiss, room]).astype(np.float32), sr)
+    assert b / sr >= 0.60     # vowel + the whole "s"
+    assert b / sr <= 0.72     # and not the half second of room tone
+
+
+def test_the_background_holds_steady_under_a_dubbed_line():
+    from aidub import mix
+    rnd = np.random.default_rng(3)
+    n = mix.SR * 20
+    noise = rnd.normal(0, 0.02, (n, 2)).astype(np.float32)
+    dlg = noise.copy()
+    dlg[mix.SR * 8: mix.SR * 12] += 0.3     # someone speaking
+    lines = [L.Line(1, 8.0, 12.0)]
+    g = mix.keep_gain(n, [(8.0, 12.0)], 0.03)
+    room = mix.room_tone(dlg, g, mix.between_lines(n, lines))
+    under = room[int(mix.SR * 8.5): int(mix.SR * 11.5)]
+    assert abs(float(under.std()) / 0.02 - 1) < 0.1            # as loud as the room
+    assert float(np.abs(under.mean(axis=0)).max()) < 0.01      # with none of the speech in it
+    assert float(np.abs(room[: mix.SR * 7]).max()) == 0.0      # and nothing elsewhere
+    silent = mix.room_tone(dlg, g, np.zeros(n, dtype=bool))    # nowhere quiet to take it from
+    assert float(np.abs(silent).max()) == 0.0
+
+
+def test_surrounds_are_separated_only_when_the_speech_reaches_them():
+    from aidub import separate
+    rnd = np.random.default_rng(5)
+    sr, n = 8000, 8000 * 120
+    gate = (np.sin(np.arange(n) / sr * 2 * np.pi * 0.2) > 0).astype(np.float32)
+    voice = rnd.normal(0, 0.1, n).astype(np.float32) * (gate + 0.001)
+    music = rnd.normal(0, 0.02, (n, 2)).astype(np.float32)
+    silent = np.zeros((n, 1), dtype=np.float32)
+    dry = np.concatenate([music, voice[:, None], silent, music[:, ::-1]], axis=1)
+    wet = dry.copy()
+    wet[:, 4:] = voice[:, None] * 0.1
+    assert not separate.speech_in_surrounds(dry, sr) and separate.speech_in_surrounds(wet, sr)
+    assert not separate.speech_in_surrounds(dry[:, :2], sr)
+
+
+def test_pieces_of_a_spoken_sentence_are_not_voiced_as_the_whole_of_it_twice():
+    from aidub import translate as T
+    job = type("J", (), {"qc": {}, "log": lambda s, m: None})()
+    a = L.Line(1, 0.0, 1.0, source_text="ケンはそのことを", text_origin="asr", en="Ken wanted to explain that properly.", character="A")
+    b = L.Line(2, 2.0, 3.0, source_text="きちんと説明したかった", text_origin="asr", en="He wanted to explain it properly.", character="A")
+    c = L.Line(3, 3.5, 4.0, source_text="おはようございます", text_origin="asr", en="Good morning to you all.", character="A")
+    d = L.Line(4, 4.5, 5.0, source_text="おはようございます", text_origin="asr", en="Good morning to you all.", character="A")
+    e = L.Line(5, 5.5, 6.0, source_text="字幕です", text_origin="subtitle:x", en="Good morning to you all.", character="A")
+    out = T.said_once(job, [a, b, c, d, e])
+    assert [l.id for l in out] == [1, 3, 4, 5] and out[0].end == 3.0 and out[0].en.startswith("Ken wanted")
+    assert "きちんと" in out[0].source_text and job.qc["repeats_merged"] == 1
+
+
+def test_the_voice_filter_tames_harsh_moments_and_leaves_the_rest():
+    from aidub import polish as P
+    sr, rnd = 48000, np.random.default_rng(2)
+    t = np.arange(sr * 2) / sr
+    voice = 0.2 * np.sin(2 * np.pi * 200 * t) + 0.05 * np.sin(2 * np.pi * 600 * t)
+    hiss = np.zeros(len(t))
+    hiss[sr: sr + sr // 5] = np.diff(np.diff(rnd.normal(0, 0.1, sr // 5 + 2)))    # a burst of hiss in the second half
+    x = (voice + hiss).astype(np.float32)
+    out = P.polish(x, sr, P.LEVELS["strong"])
+    assert len(out) == len(x) + int(sr * 0.25) - 1                     # the room's tail follows the line
+    body = out[: len(x)]
+    assert np.isfinite(out).all() and float(np.abs(out).max()) < 1.0
+
+    def top(y):
+        return float(np.sqrt((np.diff(np.diff(y)) ** 2).mean()))
+    burst = slice(sr, sr + sr // 5)
+    assert top(body[burst]) < top(x[burst]) * 0.8                      # the hiss is turned down
+    calm = slice(sr // 4, sr // 2)
+    assert abs(float(np.sqrt((body[calm] ** 2).mean())) / float(np.sqrt((x[calm] ** 2).mean())) - 1) < 0.25   # the voice isn't
+    tail = out[len(x) + int(sr * 0.05):]
+    assert 0 < float(np.abs(tail).max()) < float(np.abs(x).max()) * 0.3
+    assert P.level_for("off") is None and P.level_for(False) is None and P.level_for("gentle") is P.LEVELS["gentle"]
+    short = np.zeros(100, dtype=np.float32)
+    assert np.isfinite(P.polish(short, sr, P.LEVELS["gentle"])).all()  # too short to do much with: no crash
+
+
+def test_a_bad_bracket_in_a_reply_does_not_lose_a_batch_of_lines():
+    from aidub.subtitles import translated as X
+    from aidub.translate import parse_json
+    forgot = '{\n"lines": [\n{"i": 8, "en": "Fine."},\n{"i": 9, "en": "Oh no, we upset her."]\n}'
+    assert [x["i"] for x in parse_json(forgot)["lines"]] == [8, 9]
+    assert parse_json('{"ok": ["a"]}') == {"ok": ["a"]}             # a good reply ending that way is left alone
+    assert X._replies(forgot) == [(8, "Fine."), (9, "Oh no, we upset her.")]
+    assert X._replies('{"i": 3, "en": "She said \\"no\\"."') == [(3, 'She said "no".')]
+
+
+def test_lines_a_reply_missed_go_round_again_in_smaller_pieces(monkeypatch):
+    import json as J
+    from aidub import translate
+    from aidub.subtitles import translated as X
+    from aidub.subtitles.model import Candidate, Cue
+    sizes = []
+
+    class Fake:
+        def __init__(self, job): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def chat_many(self, convs, max_tokens=0):
+            out = []
+            for c in convs:
+                ids = [int(i) for i in __import__("re").findall(r'"i": (\d+)', c[1]["content"])]
+                sizes.append(len(ids))
+                out.append("not a reply" if len(ids) == X.BATCH else J.dumps({"lines": [{"i": i, "en": f"line {i}"} for i in ids]}))
+            return out
+    monkeypatch.setattr(translate, "LLM", Fake)
+    logged = []
+    job = type("J", (), {"profile": None, "check": lambda s: None, "status": lambda s, m: None, "log": lambda s, m: logged.append(m)})()
+    cues = [Cue(start=float(i), end=i + 0.9, text=f"せりふ{i}", raw="") for i in range(X.BATCH)]
+    got = X.translate_cues(job, Candidate(id="e", label="", origin="embedded", language="ja", format="srt", path="", cues=cues), "Japanese")
+    assert len(got) == X.BATCH and sizes[0] == X.BATCH and max(sizes[1:]) == X.BATCH // 4
+    assert not any("no translation" in m for m in logged)
+
+
+def test_lines_keep_part_of_their_level_gaps():
+    from aidub import mix
+    starts = [0.0, 5.0, 10.0, 200.0]
+    levels = [0.1, 0.1, 0.4, 0.8]   # the third is 12 dB over its scene; the last is alone in another
+    half = mix.even_levels(starts, levels, 0.5)
+    assert half[0] == pytest.approx(0.1) and half[1] == pytest.approx(0.1)
+    assert half[2] == pytest.approx(0.2, rel=0.01)        # 6 dB over now: still the loud one
+    assert half[3] == pytest.approx(0.8)                  # nothing near to compare with
+    assert mix.even_levels(starts, levels, 1.0) == levels
+    assert mix.even_levels([], [], 0.5) == []
+
+
+def test_a_line_can_be_levelled_within_itself():
+    from aidub import polish as P
+    sr = 48000
+    t = np.arange(sr * 2) / sr
+    x = np.sin(2 * np.pi * 200 * t).astype(np.float32) * 0.05
+    x[sr:] *= 8                                     # the second half 18 dB louder
+    y = P.even_within(x, sr, 4.0)
+    rise = lambda z: 20 * np.log10(np.sqrt((z[int(sr * 1.5):] ** 2).mean()) / np.sqrt((z[: int(sr * 0.8)] ** 2).mean()))
+    assert rise(x) == pytest.approx(18, abs=0.5) and rise(y) < rise(x) - 6
 
 
 def test_initials_are_said_letter_by_letter():

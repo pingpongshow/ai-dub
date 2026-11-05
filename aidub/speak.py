@@ -441,7 +441,7 @@ def _requests(job: Job, ln: L.Line, text: str, takes: int, tag: str, dlg, sr, fa
     req_base = {"text": spoken(text), "speaker_ref": ref}
     if caps.get("emotion_ref", True) and ln.duration >= min_emo and not ln.overlap:
         req_base["emotion_ref"] = str(orig)
-        req_base["emo_alpha"] = float(job.cfg.get("speak.emo_alpha", 0.35))
+        req_base["emo_alpha"] = float(job.cfg.get("speak.emo_alpha", 0.6))
     else:
         vec = emo_vector(ln.emotion)
         if vec and caps.get("emotion_vector", True):
@@ -620,12 +620,10 @@ def short_text(text: str) -> bool:
 def _rescue(s: dict, cfg) -> bool:
     """No take passed, but this one is nearly right: at most one key word unclear and
     the rest heard back ("Dammit" heard as "Damn it" failed both takes and left the
-    line in Japanese). Nearly right English beats keeping the original."""
-    if s.get("wer", 1) > float(cfg.get("speak.rescue_wer", 0.25)) or len(s.get("missed", [])) > 1:
-        return False
-    # Every word heard, only the voice in doubt ("Be my guest." at likeness 0.04): the right
-    # words in a doubtful voice beat keeping the original, and it is flagged for a listen.
-    return _passes({**s, "missed": []}, cfg) or (s.get("wer", 1) <= CLEAR_WER and not s.get("missed"))
+    line in Japanese). Nearly right English beats keeping the original, in a doubtful voice
+    too ("Be my guest." at likeness 0.04): a burst of Japanese stands out far more to a viewer
+    (recognition can't spell "peep-oo-pee-oo" or "Tanabe"), and it is flagged for a listen."""
+    return s.get("wer", 1) <= float(cfg.get("speak.rescue_wer", 0.35)) and len(s.get("missed", [])) <= 1
 
 
 def _passes(s: dict, cfg) -> bool:

@@ -136,6 +136,18 @@ def parse_json(text: str) -> dict:
     m = re.search(r"```(?:json)?\s*(.*?)```", t, re.S)
     if m:
         t = m.group(1)
+    # The model can forget the last entry's closing brace: {"lines": [{...}, {"i": 9, "en": "Oh."]}.
+    # Scanning on from there would return one entry as if it were the reply, and a whole batch is lost.
+    start = t.find("{")
+    if start >= 0:
+        try:
+            json.loads(t[start:])
+        except json.JSONDecodeError:
+            mended = re.sub(r'"\s*\]\s*\}\s*$', '"}]}', t[start:])
+            try:
+                return json.loads(mended)
+            except json.JSONDecodeError:
+                pass
     dec = json.JSONDecoder()
     found_list = None
     for i, ch in enumerate(t):
@@ -903,6 +915,47 @@ def _joined(a: str, b: str) -> str:
     return f"{a[:-1]}{b}" if re.search(r"\w-$", a) and b[:1].islower() else f"{a} {b}"
 
 
+def _absorb(p: L.Line, ln: L.Line) -> None:
+    """`ln` becomes part of `p`, whose English is already set."""
+    if ln.duration > p.duration:
+        p.character, p.voice, p.voice_note, p.speaker = ln.character, ln.voice, ln.voice_note, ln.speaker
+    p.en_short = ""
+    p.source_text = f"{p.source_text} {ln.source_text}".strip()
+    p.english_ref = f"{p.english_ref} {ln.english_ref}".strip()
+    p.end, p.words = max(p.end, ln.end), p.words + ln.words
+    p.overlap = p.overlap or ln.overlap
+    p.heard_chars = max(p.heard_chars, 0) + max(ln.heard_chars, 0)
+    p.check_note = "; ".join(x for x in dict.fromkeys((p.check_note, ln.check_note)) if x)
+
+
+def said_once(job: Job, lines: list[L.Line]) -> list[L.Line]:
+    """Two pieces of one spoken sentence, translated apart, can each come back as the whole of it
+    (ケンはそのことを / きちんと説明したかった: "Ken wanted to explain that properly." / "He wanted
+    to explain it properly."). The fuller one stays and takes the time of both. For lines from the
+    speech: subtitled ones get this in subtitles/translated.py. A line the film itself repeats stays."""
+    from difflib import SequenceMatcher
+
+    from .subtitles.translated import NEIGHBOUR_S, _repeats
+    out: list[L.Line] = []
+    merged = 0
+    for ln in sorted(lines, key=lambda l: l.start):
+        p = out[-1] if out else None
+        if (p is not None and p.kind == L.SPEECH and ln.kind == L.SPEECH and p.en and ln.en
+                and p.text_origin == "asr" and ln.text_origin == "asr" and p.character == ln.character
+                and not p.fallback and not ln.fallback and "user" not in (p.en_from, ln.en_from)
+                and ln.start - p.end <= NEIGHBOUR_S and _repeats(p.en, ln.en, close=0.65)
+                and SequenceMatcher(None, p.source_text, ln.source_text).ratio() < 0.6):
+            job.log(f"said twice: {ln.en!r} merged with {p.en!r}")
+            p.en = max(p.en, ln.en, key=len)
+            _absorb(p, ln)
+            merged += 1
+            continue
+        out.append(ln)
+    if merged:
+        job.qc["repeats_merged"] = merged
+    return out
+
+
 def join_sentences(job: Job, lines: list[L.Line]) -> list[L.Line]:
     """One sentence cut across two lines ("They're the same" / "as always.", "Thank" / "you.")
     is voiced as one take: voiced apart, each piece comes out as a sentence of its own, with
@@ -916,15 +969,8 @@ def join_sentences(job: Job, lines: list[L.Line]) -> list[L.Line]:
                 and not p.fallback and not ln.fallback and "user" not in (p.en_from, ln.en_from)
                 and ln.start - p.end <= SENTENCE_GAP_S and ln.end - p.start <= SENTENCE_MAX_S
                 and not SENTENCE_END.search(p.en) and (p.character == ln.character or ln.en[:1].islower())):
-            if ln.duration > p.duration:
-                p.character, p.voice, p.voice_note, p.speaker = ln.character, ln.voice, ln.voice_note, ln.speaker
-            p.en, p.en_short = _joined(p.en, ln.en), ""
-            p.source_text = f"{p.source_text} {ln.source_text}".strip()
-            p.english_ref = f"{p.english_ref} {ln.english_ref}".strip()
-            p.end, p.words = max(p.end, ln.end), p.words + ln.words
-            p.overlap = p.overlap or ln.overlap
-            p.heard_chars = max(p.heard_chars, 0) + max(ln.heard_chars, 0)
-            p.check_note = "; ".join(x for x in dict.fromkeys((p.check_note, ln.check_note)) if x)
+            p.en = _joined(p.en, ln.en)
+            _absorb(p, ln)
             joined += 1
             continue
         out.append(ln)
@@ -1375,6 +1421,6 @@ def run(job: Job) -> None:
         except Exception as exc:
             job.log(f"glossary update skipped: {exc}")
 
-    lines = split_two_voices(job, join_sentences(job, lines))
+    lines = split_two_voices(job, join_sentences(job, said_once(job, lines)))
     L.save(lines, job.path("lines.json"))
     job.status(f"{sum(1 for l in lines if l.en)} lines translated")

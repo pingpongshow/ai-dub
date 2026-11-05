@@ -12,6 +12,7 @@ from pathlib import Path
 from aidub_worker import device, log, model_dir, serve, torch_info
 
 REPO = "IndexTeam/IndexTTS-2.5"
+PEAK = 0.95     # a take's loudest moment, at most
 state = {}
 
 
@@ -33,8 +34,24 @@ def load(args):
     d = _weights(repo)
     state["tts"] = IndexTTS2(cfg_path=str(d / "config.yaml"), model_dir=str(d), use_bf16=device() == "cuda",
                              use_cuda_kernel=False, use_qwen_emo=False)
+    _under_full_scale(state["tts"])
     return {"model": repo, "duration_control": True, "emotion_ref": True, "emotion_vector": True,
             "sample_rate": 22050}
+
+
+def _under_full_scale(tts) -> None:
+    """When it saves a take the model cuts whatever goes over full scale (torch.clamp), and a loud
+    line comes out distorted: no later step can undo that. So its vocoder's output is turned down
+    first, only when it would be cut. The mix sets each line's level afterwards anyway."""
+    if getattr(tts.bigvgan, "_aidub_under_full_scale", False):
+        return
+    tts.bigvgan._aidub_under_full_scale = True
+
+    def turn_down(_module, _inputs, wav):
+        peak = float(wav.abs().max())
+        return wav * (PEAK / peak) if peak > PEAK else wav
+
+    tts.bigvgan.register_forward_hook(turn_down)
 
 
 def _refinement_steps(tts) -> None:
