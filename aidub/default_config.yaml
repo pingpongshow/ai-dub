@@ -20,7 +20,7 @@ server:
 # Which worker runs each stage. A worker that is missing or fails to start is
 # an error for the job; there is no silent switch to another model.
 stages:
-  separate:    { worker: separate, model: vocals_mel_band_roformer.ckpt }
+  separate:    { worker: separate, model: vocals_mel_band_roformer.ckpt, surrounds: true }   # surrounds: clean a 5.1 film's surrounds too when they carry the speech
   diarize:     { worker: diarize, model: nvidia/Nemotron-3-Diarization, window_max_s: 120 }
   speaker:     { worker: speaker }     # ECAPA voice embeddings, gender/age, LaBSE text similarity
   recognize:   { worker: asr, model: Qwen/Qwen3-ASR-1.7B, aligner: Qwen/Qwen3-ForcedAligner-0.6B }
@@ -121,6 +121,7 @@ speak:
   max_similarity_drop: 0.25 # reject a take this far below the character's median similarity
   min_similarity: 0.10
   max_wer: 0.35
+  rescue_wer: 0.35          # no take passed: one this close (at most one key word unclear) is used and flagged, not the original
 
 fit:
   borrow_ms: 250

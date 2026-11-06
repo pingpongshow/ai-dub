@@ -30,9 +30,10 @@ By the numbers above, every other step needs 10 GB or less, but only the
 so that `--runtime=nvidia` works. On Unraid, install the **Nvidia Driver**
 plugin.
 
-**Memory.** Ai Dub has only been run on a server with 128 GB of RAM. How
-much less it can manage with hasn't been measured; the translation model is
-the largest thing it loads.
+**Memory.** Ai Dub has only been run on a server with 128 GB of RAM. The mix
+holds the whole film's audio at once: about 60 GB at its peak for a two-hour 5.1
+film, less for stereo and shorter episodes. Allow for that on top of whatever
+else the server runs. How much less RAM it can manage with hasn't been measured.
 
 **Disk:**
 

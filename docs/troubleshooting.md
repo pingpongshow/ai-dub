@@ -77,7 +77,8 @@ again**, or **Dub from the speech anyway…**, the least accurate choice. To dub
 set `subtitles.require: false`.
 
 **The queue doesn't move.** Check whether the queue is paused: the Queue page
-then shows a banner and **▶ Resume the queue**. Also look under **Waiting for you**: an episode paused for
+then shows a banner and **▶ Resume the queue**. To dub one title without resuming
+the rest, press **Start now** on it. Also look under **Waiting for you**: an episode paused for
 review waits there until you open it and press **Start dubbing**. Other
 episodes carry on in the meantime.
 
@@ -105,6 +106,7 @@ step, because by default a failed job's working folder is kept
 |---|---|---|
 | `CUDA out of memory` | Something else took video memory mid-step, or settings were raised | Close the other program and **Retry**. For voicing, set `speak.processes: 1`. For translation, lower `stages.translate.gpu_memory_utilization` a little. |
 | `worker '…' exited (code -9)` | The host ran out of RAM and the kernel killed the model | Free RAM (other containers) and **Retry** |
+| The job stops at **Mix** and Ai Dub restarts | The mix holds a whole film's audio in memory, up to about 60 GB for a two-hour 5.1 film, and the host ran out | `dmesg` on the host shows `Out of memory` if this was the cause. Free RAM; after the restart the job carries on from its first unfinished step. |
 | `worker '…' failed to start` | The model's environment is broken | **Models → Reinstall** that model |
 | `No space left on device` | `/work` or the media disk is full | See [Disk space](#disk-space) |
 | `Permission denied` on the media file | Ai Dub can't write next to the file | See [Permissions](#permissions) |
@@ -127,12 +129,18 @@ takes.
 
 | Problem | Fix |
 |---|---|
-| Foreign speech left in | The check screen lists the lines that stayed in the original language. Usually no take passed the back-check, or there was no room for the English. On the review page, set the stretch to **Dub** (key D), or write shorter English for the line. |
+| Foreign speech left in | The check screen lists the lines that stayed in the original language. Usually every take was heard back wrong, often a sound word or name recognition can't spell ("peep-oo"). **↻ Voice again** or **Change words…** on the check screen, or on the review page set the stretch to **Dub** (key D). |
+| Voices sound spliced in over a noisy scene | Check that `mix.room_tone` is on: it keeps the scene's background noise steady under the English lines. If one speaker stands out as much louder, lower `mix.level_spread` (0 is the default). |
+| The original voice can be heard behind the dub, like an echo | On a 5.1 film this is speech in the surround channels. Check that `stages.separate.surrounds` is on; a dub made before it was needs to be queued again with **Redo** to separate them. On stereo, the separation left some voice in the music: there is no setting for that. |
+| Shouts and whispers sound too alike, or flat | Raise `mix.level_spread` (to `0.5`, say) and lower `mix.even_within` (to `2`) |
+| Delivery sounds overdone, or flat | Lower or raise `speak.emo_alpha` (default `0.6`) |
+| Word endings sound cut off | The trim keeps a final consonant that is still sounding; if a word still sounds short, **↻ Voice again** gives the line fresh takes |
+| Loud lines crackle or sound clipped | The voice model's output is turned down before it would be cut at full scale. A take that still sounds rough: **↻ Voice again**. |
 | A song was dubbed | Mark it as a song: **♪ Mark a song**, or select it and press S. Mark it "for every episode" if it's the opening or ending. |
 | Speech was kept as if it were a song | Select the region and press D (dub) |
 | A line has the wrong voice | Give the line to the right speaker (the ▾ by the speaker's name). If two characters keep getting mixed up, merge or split them on **Shows → Voices**. |
 | One person is split into several voices | Merge them on **Shows → Voices**, or try the "sound like the same person?" suggestions. You can also lower `speakers.link_threshold`. |
-| Names are wrong or mispronounced | Fix them on **Shows → Glossary**. Glossary names are also accepted by the back-check. |
+| Names are wrong or mispronounced | Fix them on **Shows → Glossary**. Glossary names are also accepted by the back-check. With guided subtitles, names follow the English subtitle; a name it never says is read from the original's writing and can come out wrong. |
 | The English came from the wrong subtitle | A subtitle for another episode or cut scores low and is dropped; raise `subtitles.min_score` if a bad one got through. Check the sidecar file's name and language tag (`.en.srt`). |
 | Reviews keep correcting the same thing | `aidub corrections` lists what each review changed; the files in `appdata/corrections` (no audio) survive **Keep the dub**. Worth including in an issue, with the film's name removed. |
 | You want to know a finished dub is all there | `docker exec ai-dub aidub audit --all --output /work/audit.json` hears the English track of every delivered dub against its subtitles: stretches with no English, and subtitles never heard. It changes nothing. |

@@ -5,12 +5,17 @@ Local, voice-cloned dubbing of foreign-language video into English.
 Ai Dub takes a film or episode (Japanese, Korean, Mandarin, Cantonese, …) and
 adds an **"English (AI dub)"** audio track to the file:
 
-- every speaker keeps their own voice, cloned from their own lines;
-- each line is timed to the original performance;
+- every speaker keeps their own voice, cloned from their own lines, with the
+  emotion of the original line;
+- each line starts with the original performance and runs at its natural
+  length;
 - the original music, effects, laughs, gasps, songs and lines already in
-  English are kept as they were;
-- a good English subtitle is used as the source of the text when there is
-  one, with speech recognition and translation filling the gaps;
+  English are kept as they were, and the scene's background stays steady
+  under the English voices;
+- the English script comes from subtitles: by default the subtitle in the
+  spoken language, translated with a person's English subtitle as a guide for
+  names and meaning, with speech recognition filling the gaps;
+- a 5.1 original gets a 5.1 English track;
 - subtitle tracks are added for languages the file has none in.
 
 Everything runs locally on your own GPU. No audio or text is sent to any
@@ -55,15 +60,50 @@ lines that don't fit → restore full bandwidth → mix → listen back → deli
 file) → [check]
 ```
 
-A dub from subtitles is far more accurate than one from the speech, so a file with no
-English subtitles (in the file, next to it or from Bazarr) waits under **Waiting for
-you** as soon as it is added, before any work starts. Choose a subtitle in another language
-to translate, search Bazarr, or allow a dub from the speech for that one file. So does a
-file whose English subtitles turn out not to match the speech, though that can only be told
-after its speech is analysed.
-
 Each step is checkpointed: a job that is stopped or interrupted (a container
 restart, say) carries on from its first unfinished step.
+
+### Where the English comes from
+
+A dub from subtitles is far more accurate than one from the speech, so the script
+follows a person's subtitles:
+
+1. **A subtitle in the spoken language and an English one** (the usual case): the
+   spoken-language subtitle is translated line by line, with the English subtitle shown
+   alongside each line as a guide. Names are spelled as the English subtitle spells them.
+   In blind listening this kept more of what was said than the English subtitle alone,
+   which is often shortened. Set `subtitles.prefer: english` to dub the English subtitle
+   word for word instead.
+2. **Only an English subtitle**: it is dubbed word for word.
+3. **No English subtitle** (in the file, next to it or from Bazarr): the file waits under
+   **Waiting for you** as soon as it is added, before any work starts. Choose a subtitle
+   in another language to translate, search Bazarr, or allow a dub from the speech for
+   that one file. A file whose English subtitle turns out not to match the speech waits
+   too, though that can only be told after its speech is analysed.
+
+Speech a subtitle doesn't cover (a line no one subtitled, a narrator) is recognised and
+translated. Each line starts with the original and runs at its natural length; a line
+that would make the next one late is sped up a little first.
+
+### How the English is voiced and mixed
+
+- **Takes.** Each line is voiced twice, usually from the speaker's own clip, with the original
+  line's emotion, and each take is listened back to: the one whose words come back right
+  is kept. If no take passes but one is nearly right, it is used and flagged for a listen
+  rather than leaving the line in the original language.
+- **Clean ends.** The quiet start and end of each take are trimmed, but not a final
+  consonant that is still sounding. Loud takes are turned down before the voice model
+  would cut them off at full scale.
+- **The mix.** Under each English line the original voice is removed, and the scene's
+  own background noise is filled back in so it doesn't dip when a voice starts. Lines are
+  brought to the scene's usual level and evened out within themselves, so one speaker
+  isn't much louder than the next. On a 5.1 film whose surround channels carry the
+  speech (as reverb, say), those are cleaned too, or the original voice stays behind the
+  dub as an echo.
+- **Listen back.** The finished track is heard once more before delivery: a silent or
+  mostly unclear track stops the job with the original untouched.
+
+### Models
 
 | Step | Default model | Licence |
 |---|---|---|
@@ -159,8 +199,15 @@ One job runs at a time, in queue order; move jobs up or down to reorder. Each ca
 step (for example 7/18), an estimated time left (once a few dubs have
 finished), and **Log**, which opens a panel that stays until you close it.
 **⏸ Pause the queue** lets the current job finish and starts nothing new
-until you resume, even across restarts. **Waiting for you** at the top lists
-episodes paused for review and dubs waiting to be checked.
+until you resume, even across restarts.
+
+**Start now** on a waiting title runs it next, even while the queue is paused, so you
+can dub one or two titles and leave the rest waiting. It shows **Starting next** until it
+starts; **Don't start** puts it back in line. A title started this way can also finish
+after its review while the queue stays paused.
+
+**Waiting for you** at the top lists episodes paused for review, files that need a
+subtitle choice, and dubs waiting to be checked.
 
 ### Review (before dubbing)
 
@@ -206,8 +253,9 @@ screen plays the preview with the original sound or the dub, and nothing is
 left off its three lists:
 
 - **To check**: lines left in the original language, subtitles nothing voiced,
-  lines hard to hear in the mix, takes with an unclear word, doubtful voices,
-  two people sharing a line, late lines.
+  lines hard to hear in the mix, takes with an unclear word (including nearly
+  right takes used instead of leaving the original), doubtful voices, two
+  people sharing a line, late lines.
 - **Songs**: each kept song or title sequence, as one row.
 - **Notes**: everything else worth knowing (lines sped up, subtitles that differ
   from the speech, lines voiced from their own clip).
@@ -293,7 +341,12 @@ Layout:
   `worker.json`.
 - `web/`: the UI, plain JS with no build step.
 - `tests/` and `docker/`.
-- `dev/`: model comparison tools, not shipped.
+- `dev/`: tools for re-running steps on copies and blind listening comparisons
+  (see [dev/README.md](dev/README.md)); not part of the image's app.
+
+Settings were chosen by blind listening tests on real films: unlabelled versions
+were marked without knowing which setting made which. The results are
+noted next to the settings in `default_config.yaml`.
 
 ## Credits
 

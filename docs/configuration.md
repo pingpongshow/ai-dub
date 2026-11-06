@@ -97,7 +97,7 @@ Picture subtitles (PGS) are read with OCR.
 On the **Settings** page:
 
 1. Tick **Use Bazarr**, and enter its address as Ai Dub's container can
-   reach it, for example `http://10.1.1.10:6767`, or `http://bazarr:6767` on
+   reach it, for example `http://192.168.1.10:6767`, or `http://bazarr:6767` on
    a shared Docker network.
 2. Add `BAZARR_API_KEY` under **Keys**.
 3. Fill in the **Folder map**. Bazarr names files by its own container paths,
@@ -122,7 +122,7 @@ subtitles:
   providers:
     bazarr:
       enabled: true
-      url: http://10.1.1.10:6767
+      url: http://192.168.1.10:6767
       api_key: "${BAZARR_API_KEY}"
       search_missing: true        # ask Bazarr to search when it has nothing yet
       path_map:
@@ -168,19 +168,25 @@ ones you're most likely to want are below.
 | `ingest.skip_english_audio` | `true` | Skip files that already have English audio, including untagged audio that turns out to be English |
 | `ingest.song_chapters` | opening, op, ending, ed, credits, … | Chapter names whose audio is always kept as it is |
 | `subtitles.require` | `true` | A file with no usable English subtitle waits under **Waiting for you** until you choose another subtitle, search Bazarr, or allow a dub from the speech. With none in the file or next to it, it waits before any work starts. `false` dubs such files from the speech without asking. |
-| `subtitles.prefer` | `guided` | With both a person's English subtitle and one in the spoken language: `guided` translates the spoken-language one with the English as a guide; `english` dubs the English word for word. |
-| `mix.level_spread` | `0` | How much of the film's volume differences between lines the dub keeps. `0` brings them all to the scene's usual level; `1` matches each original line. Raise it if shouts and whispers sound too alike. |
-| `mix.even_within` | `4` | Evens out loud and quiet moments inside each dubbed line. `1` is off; higher is stronger. |
-| `mix.polish` | `off` | Smooths each voice before mixing: harsh and hissy moments are turned down, the rough top end smoothed, the level evened and a little room added. `off`, `gentle` or `strong`. |
+| `subtitles.prefer` | `guided` | With both a person's English subtitle and one in the spoken language: `guided` translates the spoken-language one with the English as a guide (names spelled as the English spells them); `english` dubs the English word for word. In blind listening, guided was preferred in 16 of 36 scenes and English in 13: it keeps more of what was said, while English subtitles are often shortened. |
+| `translate.repair_speech` | `true` | A dub from the speech alone: first correct what recognition heard, in context, before translating |
+| `speak.emo_alpha` | `0.6` | How much of the original line's emotion the English takes (0 to 1). 0.6 was preferred in 9 of 14 scenes, 0.35 in 3. Lower it if delivery sounds overdone. |
+| `speak.rescue_wer` | `0.35` | When no take passes the back-check, a take this close (at most one key word unclear) is used and flagged on the check screen instead of leaving the line in the original language |
+| `mix.level_spread` | `0` | How much of the film's volume differences between lines the dub keeps. `0` brings them all to the scene's usual level; `1` matches each original line. Raise it (to `0.5`, say) if shouts and whispers sound too alike. |
+| `mix.even_within` | `4` | Evens out loud and quiet moments inside each dubbed line. `1` is off; higher is stronger. With `level_spread: 0` this was preferred over the film's own levels in a blind test. |
+| `mix.room_tone` | `true` | Fill the scene's own background noise back in under each dubbed line. In a noisy scene much of the noise is in the dialogue stem, so without it the noise dips as each English voice starts and the voice sounds spliced in. |
+| `stages.separate.surrounds` | `true` | On a 5.1 film, also separate the surround channels when they carry the speech (reverb, say), so the original voice doesn't stay behind the dub as an echo. Costs one more separation pass on those films. |
+| `mix.polish` | `off` | Smooths each voice before mixing: harsh and hissy moments are turned down, the rough top end smoothed, the level evened and a little room added. `off`, `gentle` or `strong`. Off by default: in a blind test none of the three was preferred. |
 | `subtitles.min_score` | `0.65` | How well a subtitle track must match the speech to be trusted. A track for another episode scores under about 0.5. |
 | `songs.detect_by_pitch` | `true` | Find sung passages by held notes over music |
 | `songs.match_episodes` | `true` | Find the opening and ending shared with neighbouring episodes in the folder |
 | `speakers.link_threshold` | `0.62` | How alike two voices must sound (cosine similarity) to be treated as one speaker. Raise it if different people get merged; lower it if one person is split in two. |
 | `speakers.prefer_own_clip` | `true` | Voice each line from its own clip, not the character's usual voice. In a blind listening test the own clip was acceptable on 36 of 48 lines, the usual voice on 16. On the check screen, **Try the other voice** swaps one line. |
+| `speak.max_wer` | `0.35` | How much of a take may be heard wrong by the back-check and still pass (word error rate) |
 | `speak.takes` | `2` | Takes voiced per line; the best one is kept |
 | `speak.redo_takes` | `4` | Takes for a line you send back from the check screen, with new seeds each time |
 | `speak.processes` | `2` | Voice-model processes sharing the GPU |
-| `fit.timing` | `auto` | `window` fits each line to the time the character's mouth moves. `start` starts with the original line at its natural length. `auto` uses `start` for word-for-word subtitle dubs and `window` otherwise. |
+| `fit.timing` | `auto` | `window` fits each line to the time the character's mouth moves. `start` starts with the original line at its natural length. `auto` uses `start` for subtitle dubs (word for word or guided) and for dubs from the speech alone, and `window` for `translate.lead: subtitle` or `subtitle_only`. Fitting the speech-only translations into the mouth movement lost words; natural length kept 39–57 % more at no timing cost. |
 | `fit.free_early_ms`, `fit.free_max_late_ms`, `fit.free_gentle_tempo` | `400`, `350`, `1.12` | With `start` timing: how early a line may start when that leaves the next on time (never back over a shot change or a line kept in the original), how late one may run, and how far the lines running into it are sped up together before any goes up to `fit.force_stretch_max` |
 | `condense.enabled` | `true` | Write shorter English for lines that still don't fit |
 | `readback.enabled`, `readback.min_clear` | `true`, `0.5` | Listen to the finished track before delivery; stop the job if it is silent while the original plays, or if less than this share of its lines can be heard |
@@ -246,7 +252,7 @@ Studio:
 ```yaml
 llm_endpoint:
   enabled: true
-  url: http://10.1.1.20:11434/v1
+  url: http://192.168.1.20:11434/v1
   model: qwen3:32b
   api_key: ""
 ```
