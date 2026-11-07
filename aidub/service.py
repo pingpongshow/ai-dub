@@ -341,7 +341,7 @@ class Service:
             mine.update({k: v for k, v in ch.items() if k in ("en", "character") and v})
         review.save_decisions(work, {**dec, "started": True})
         verify.put_back(self.store, jid)
-        done = review.reset_for_lines(work, Path(j["path"]), changes, self.profiles.get(j["profile"]))
+        done = review.reset_for_lines(work, Path(j["path"]), changes, self.profiles.get(j["profile"]), dec.get("lines", {}))
         rec["verify"] = ""
         self.store.update(jid, record=rec, finished=None, progress=0)
         self.store.requeue_front(jid)

@@ -44,6 +44,19 @@ def quiet_db(x: np.ndarray, sr: int) -> float:
     return float(np.percentile(e, 20) - np.percentile(e, 90))
 
 
+def clear_ref(prof: Profile, cid: str) -> bool:
+    """Is the character's top clip free of echo and noise? A borrowed voice is lent to someone
+    else's lines: one 8 dB clip, lent, made two lines sound ghostly however often they were redone."""
+    refs = prof.refs(cid)
+    if not refs:
+        return False
+    try:
+        data, sr = sf.read(str(prof.root / refs[0]["file"]), dtype="float32", always_2d=True)
+    except Exception:
+        return True  # (can't tell: as before)
+    return quiet_db(data.mean(axis=1), sr) <= -REF_QUIET_DB
+
+
 def _at_least(a: float, b: float, seconds: float) -> list[float]:
     grow = max(0.0, seconds - (b - a)) / 2
     return [max(0.0, a - grow), b + grow]
@@ -350,7 +363,7 @@ def assign_voices(job: Job, prof: Profile, lines: list[L.Line], voices: dict[int
         best, best_sim = None, -2.0
         for oid, other in prof.characters.items():
             o_src = prof.voice_source(oid)
-            if o_src == src or prof.clean_seconds(o_src) < min_s:
+            if o_src == src or prof.clean_seconds(o_src) < min_s or not clear_ref(prof, o_src):
                 continue
             if ch.get("gender") and other.get("gender") and ch["gender"] != other["gender"]:
                 continue

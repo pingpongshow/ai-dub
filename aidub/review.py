@@ -477,9 +477,12 @@ def other_voice(prof, ln: L.Line) -> None:
         ln.voice, ln.voice_note = str(prof.root / refs[0]["file"]), "usual voice (your choice)"
 
 
-def reset_for_lines(work: Path, live: Path, changes: dict[int, dict], prof) -> list[int]:
+def reset_for_lines(work: Path, live: Path, changes: dict[int, dict], prof, saved: dict | None = None) -> list[int]:
     """Back to just before voicing, with every take kept but those of the lines to redo;
-    their English and speaker as the user set them. The original is back at `live` by now."""
+    their English and speaker as the user set them. The original is back at `live` by now.
+    `saved`: the review's choices per line. A speaker chosen there and not yet given to the
+    line is applied too: "Voice again" from the check page once re-voiced a line in the old
+    speaker's voice, again and again, while the review said someone else."""
     from .pipeline import STEP_NAMES
     lines = L.load(work / "lines.json")
     by_id = {ln.id: ln for ln in lines}
@@ -488,6 +491,9 @@ def reset_for_lines(work: Path, live: Path, changes: dict[int, dict], prof) -> l
         ln = by_id.get(int(lid))
         if not ln:
             continue
+        mine = (saved or {}).get(str(ln.id)) or {}
+        if not ch.get("character") and mine.get("character") and mine["character"] != ln.character:
+            ch = {**ch, "character": mine["character"]}
         if ch.get("en"):
             ln.en, ln.en_short, ln.en_from = str(ch["en"]).strip(), "", "user"
         if prof:

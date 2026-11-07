@@ -2179,6 +2179,41 @@ def test_a_line_can_be_levelled_within_itself():
     assert rise(x) == pytest.approx(18, abs=0.5) and rise(y) < rise(x) - 6
 
 
+def test_voice_again_uses_the_speaker_chosen_on_the_review(tmp_path):
+    import json as J
+    from aidub import review
+    work = tmp_path / "job-1"
+    (work / "lines").mkdir(parents=True)
+    prof = profiles.Profiles(tmp_path / "app").get_or_create("Show")
+    a, b = prof.new_character("Character 1"), prof.new_character("Man")
+    L.save([L.Line(7, 1.0, 2.5, kind=L.SPEECH, en="Over there!", character=a, voice="/x/a.flac", take="/x/t.wav"),
+            L.Line(8, 3.0, 4.5, kind=L.SPEECH, en="Hello.", character=a, take="/x/t2.wav")], work / "lines.json")
+    (work / "state.json").write_text(J.dumps({"done": ["ingest", "speak", "mix"], "data": {}}))
+    review.reset_for_lines(work, tmp_path / "film.mkv", {7: {}, 8: {}}, prof, {"7": {"character": b}, "8": {"character": a}})
+    ln = {x.id: x for x in L.load(work / "lines.json")}
+    assert ln[7].character == b and ln[7].take == ""      # the review's speaker, voiced again
+    assert ln[8].character == a and ln[8].voice == ""     # already theirs: left as it was
+
+
+def test_an_echoey_clip_is_not_lent_as_a_voice(tmp_path):
+    import soundfile as sf
+    from aidub import voicebank
+    prof = profiles.Profiles(tmp_path).get_or_create("Show")
+    rnd = np.random.default_rng(2)
+    sr = 16000
+    speech = np.zeros(sr * 3, dtype=np.float32)
+    for k in range(0, 3 * sr, sr // 2):
+        speech[k: k + sr // 4] = rnd.normal(0, 0.2, sr // 4)
+    clean, echo = speech + rnd.normal(0, 0.001, len(speech)).astype(np.float32), speech + rnd.normal(0, 0.08, len(speech)).astype(np.float32)
+    for name, x in (("clean", clean), ("echo", echo)):
+        cid = prof.new_character(name)
+        (prof.root / "refs" / cid).mkdir(parents=True)
+        sf.write(str(prof.root / "refs" / cid / "a.flac"), x, sr)
+        prof.characters[cid]["refs"] = [{"file": f"refs/{cid}/a.flac", "score": 1.0}]
+    ids = list(prof.characters)
+    assert voicebank.clear_ref(prof, ids[0]) and not voicebank.clear_ref(prof, ids[1])
+
+
 def test_initials_are_said_letter_by_letter():
     from aidub import speak
     assert speak.spoken("The initials were G.I., right?") == "The initials were G I, right?"
