@@ -280,7 +280,7 @@ function rvTabs() {
     ["look", "Needs a look", d.flags.length], ["kept", "Kept", rvKeptItems().length], ["songs", "Songs", rvSongSections().length],
     ["rules", "Show rules", (d.rules.regions || []).length]];
   $("#rvTabs").innerHTML = tabs.map(([k, t, n]) => `<button data-tab="${k}" class="${RV.tab === k ? "on" : ""}">${t}<span class="n">${n}</span></button>`).join("");
-  $("#rvTabs").querySelectorAll("button").forEach((b) => (b.onclick = () => { RV.tab = b.dataset.tab; rvTabs(); rvList(); }));
+  $("#rvTabs").querySelectorAll("button").forEach((b) => (b.onclick = () => { RV.tab = b.dataset.tab; rvTabs(); rvList(); rvListToNow(); }));
   $("#rvFilter").hidden = RV.tab !== "subs";
 }
 
@@ -431,7 +431,7 @@ function rvList() {
     box.innerHTML = RV.data.flags.length ? `<div class="rv-empty" style="padding:8px 10px">${n} of ${RV.data.flags.length} decided.
         Red still needs your decision; green has one. Starting the dub leaves the rest to Ai Dub.</div>` + RV.data.flags.map((f, i) => {
       const done = flagDecided(f);
-      return `<div class="frow ${done ? "done" : "open"} ${RV.selFlag === i ? "sel" : ""}" data-flag="${i}"><span class="rv-time muted">${fmtT(f.start, false)}</span>
+      return `<div class="frow ${done ? "done" : "open"} ${RV.selFlag === i ? "sel" : ""}" data-flag="${i}" data-a="${f.start}" data-b="${f.end}"><span class="rv-time muted">${fmtT(f.start, false)}</span>
         <div><b>${esc(f.title)}</b><span class="d">${esc(f.detail)}</span>
           <span class="chip ${done ? "dub" : "look"}" style="margin-top:4px">${done ? "✓ " + esc(flagDecision(f)) : "Needs your decision"}</span></div></div>`;
     }).join("")
@@ -469,6 +469,25 @@ function rvKeptRow(it) {
   return `<div class="frow ${sel ? "sel" : ""}" data-kept-${it.type}="${esc(String(it.id))}" data-a="${it.start}"><span class="rv-time muted">${fmtT(it.start, false)}</span>
     <div><b>${fmtT(it.start)}–${fmtT(it.end)}</b><span class="chip ${it.cls}">${esc(it.title)}</span>
       ${it.why ? `<span class="d">${esc(it.why)}</span>` : ""}${it.text ? `<span class="d">${esc(it.text)}</span>` : ""}</div></div>`;
+}
+// On changing tabs, the list opens where you are: at what's selected (a flag, line, subtitle or
+// region), or else where the video is, rather than at the top.
+function rvSelTime() {
+  const s = RV.sel, d = RV.data;
+  if (s && s.type === "line") { const l = d.lines.find((x) => x.id === s.id); if (l) return l.start; }
+  if (s && s.type === "cue") { const q = d.cues.find((x) => x.key === s.id); if (q) return q.start; }
+  if (s && s.type === "region") { const r = regionsNow().find((x) => x.id === s.id); if (r) return r.start; }
+  if (RV.selFlag != null && d.flags[RV.selFlag]) return d.flags[RV.selFlag].start;
+  return rvNow();
+}
+function rvListToNow() {
+  const rows = [...document.querySelectorAll("#rvList [data-a]")];
+  if (!rows.length) return;
+  const t = rvSelTime();
+  const row = rows.find((r) => t >= Number(r.dataset.a) - 0.05 && t <= Number(r.dataset.b) + 0.05)
+    || rows.filter((r) => Number(r.dataset.a) <= t).pop() || rows[0];
+  row.scrollIntoView({ block: "center" });
+  RV.holdList = Date.now() + 4000;  // (and the list doesn't jump back to follow the video at once)
 }
 function rvShowSelected() {
   // A row chosen from the timeline or "Needs a look" is brought into view, and the list
