@@ -223,6 +223,21 @@ class Service:
             self.store.requeue_front(jid)
             self._wake.set()
 
+    def review_lock(self, jid: int, locked: list) -> list[dict]:
+        """The sections marked reviewed, saved at once (they don't wait for Save)."""
+        from . import review
+        j = self.store.get(jid)
+        if not j:
+            raise KeyError(jid)
+        work = self.cfg.work / f"job-{jid}"
+        redub = j["status"] == J.DONE and (j.get("record") or {}).get("verify") == "pending" and review.can_redub(work)
+        if j["status"] != J.REVIEW and not redub:
+            raise ValueError("sections can be marked reviewed while a job waits for review, or once it's dubbed and not yet checked")
+        d = review.load_decisions(work)
+        d["locked"] = review.clean_locks(locked)
+        review.save_decisions(work, d)
+        return d["locked"]
+
     def _needing_subtitles(self, jid: int) -> dict:
         j = self.store.get(jid)
         if not j:
@@ -308,6 +323,7 @@ class Service:
         if self.store.active_for(j["path"]):
             raise ValueError("this file is already in the queue")
         review.save_decisions(work, {**decisions, "started": True})
+        kept = review.keep_locked(work)
         verify.put_back(self.store, jid)
         review.reset_for_redub(work, Path(j["path"]))
         rec["verify"] = ""
@@ -316,7 +332,8 @@ class Service:
         self.store.requeue_front(jid)
         self.store.update(jid, message="dubbing again with your review changes")
         self._wake.set()
-        return "the original is back; dubbing again with your changes"
+        return "the original is back; dubbing again with your changes" + (
+            f" ({kept} lines in reviewed sections stay as they are)" if kept else "")
 
     def redo_lines(self, jid: int, changes: dict[int, dict]) -> str:
         """Voice a few lines of a finished dub again (with new English or speaker), keeping
@@ -332,6 +349,13 @@ class Service:
             raise ValueError("this dub's takes aren't kept any more: redub it from its review instead")
         if not changes:
             raise ValueError("choose the lines to redo")
+        locks = review.load_decisions(work).get("locked") or []
+        if locks:
+            from . import lines as L
+            shut = {ln.id for ln in L.load(work / "lines.json") if review.is_locked(ln, locks)}
+            changes = {k: v for k, v in changes.items() if int(k) not in shut}
+            if not changes:
+                raise ValueError("these lines are in a section you marked reviewed: unlock it to change them")
         if self.store.active_for(j["path"]):
             raise ValueError("this file is already in the queue")
         # Remember the English and speakers for any later redub of the whole episode.

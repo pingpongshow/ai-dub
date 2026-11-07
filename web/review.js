@@ -128,6 +128,97 @@ function setDirty() {
   const s = $("#rvSave");
   if (s) s.textContent = "Save";
 }
+// Reviewed sections -----------------------------------------------------------------------------
+// A stretch you marked reviewed is locked: nothing in it can be changed here, its lines aren't
+// voiced again, and a redub keeps them as the dub has them. Saved at once, not with Save.
+function rvLockAt(t) { return RV.locks.find((x) => t >= x.start && t <= x.end) || null; }
+function rvLineLocked(l) { return !!rvLockAt((l.start + l.end) / 2); }
+function rvSpanLocked(a, b) { return RV.locks.find((x) => overlap(a, b, x.start, x.end) > Math.min(0.5 * (b - a), 0.5)) || null; }
+function rvGuard(a, b) {
+  if (!rvSpanLocked(a, b)) return false;
+  toast("🔒 This part is marked reviewed. Unlock it to change it.");
+  return true;
+}
+function rvMergeLocks(list) {
+  const out = [];
+  for (const x of list.slice().sort((p, q) => p.start - q.start)) {
+    const last = out[out.length - 1];
+    if (last && x.start <= last.end + 0.3) { last.end = Math.max(last.end, x.end); last.at = Math.min(last.at, x.at); }
+    else out.push({ ...x });
+  }
+  return out;
+}
+// What "Reviewed to here" would lock: from where the last reviewed part ends (or the start you
+// set) to the playhead, finishing the line that's playing rather than cutting through it.
+function rvLockRange() {
+  const t = rvNow();
+  if (rvLockAt(t)) return null;
+  const inLine = (u) => RV.data.lines.find((l) => (l.kind === "speech" || l.kind === "song") && u > l.start && u < l.end);
+  const ends = RV.locks.filter((x) => x.end <= t).map((x) => x.end);
+  let a = RV.lockFrom != null && RV.lockFrom < t ? RV.lockFrom : ends.length ? Math.max(...ends) : 0;
+  let b = t;
+  const lb = inLine(b), la = RV.lockFrom != null ? inLine(a) : null;
+  if (lb) b = lb.end + 0.05;
+  if (la) a = la.start - 0.05;
+  a = Math.max(0, +a.toFixed(2)); b = Math.min(RV.data.duration, +b.toFixed(2));
+  return b - a >= 0.5 ? [a, b] : null;
+}
+function rvLockButton() {
+  const b = $("#rvLock");
+  if (!b) return;
+  const here = rvLockAt(rvNow()), r = here ? null : rvLockRange();
+  b.textContent = here ? "🔒 Reviewed here" : r ? `✓ Reviewed ${fmtT(r[0], false)} → here` : "✓ Reviewed to here";
+  b.disabled = !r;
+  const f = $("#rvLockFrom");
+  if (f) f.classList.toggle("on", RV.lockFrom != null);
+}
+async function rvSaveLocks(locks, msg) {
+  try {
+    const r = await api(`/jobs/${RV.id}/review/locked`, { method: "PUT", body: { locked: locks } });
+    RV.locks = r.locked;
+    if (msg) toast(msg);
+  } catch (e) { toast(e.message); }
+  rvList(); rvInspector(); rvDraw(); rvLockButton();
+}
+async function rvLockHere() {
+  if (!RV.data.editable) return toast(RV_READONLY);
+  const r = rvLockRange();
+  if (!r) return toast(rvLockAt(rvNow()) ? "This part is already marked reviewed" : "Play a little further first");
+  const [a, b] = r;
+  const mid = (l) => (l.start + l.end) / 2;
+  const redo = Object.keys(RV.redo).filter((id) => { const l = RV.data.lines.find((x) => x.id === Number(id)); return l && mid(l) >= a && mid(l) <= b; });
+  if (redo.length && !confirm(`${redo.length} line${redo.length === 1 ? " in this part is" : "s in this part are"} on the Redo list. Mark it reviewed anyway? `
+    + "They come off the list and keep the voice they have.")) return;
+  redo.forEach((id) => delete RV.redo[id]);
+  rvRedoButton();
+  if (RV.dirty) await rvSave(false);  // what you decided in it is what stays
+  RV.lockFrom = null;
+  await rvSaveLocks(rvMergeLocks([...RV.locks, { start: a, end: b, at: Date.now() / 1000 }]),
+    `✓ ${fmtT(a, false)}–${fmtT(b, false)} marked reviewed: locked`);
+}
+function rvLockStart() {
+  const t = rvNow();
+  RV.lockFrom = RV.lockFrom != null && Math.abs(RV.lockFrom - t) < 0.2 ? null : t;
+  toast(RV.lockFrom == null ? "Start cleared: the reviewed part starts where the last one ends"
+    : `The next reviewed part starts at ${fmtT(t, false)}. Play to its end, then “Reviewed to here” (V).`);
+  rvLockButton(); rvDraw();
+}
+async function rvUnlock(lock) {
+  if (!confirm(`Unlock ${fmtT(lock.start, false)}–${fmtT(lock.end, false)}? It can be changed again${RV.data.redub ? ", and a redub dubs it again with the rest" : ""}.`)) return;
+  if (RV.sel && RV.sel.type === "lock") RV.sel = null;
+  await rvSaveLocks(RV.locks.filter((x) => x.start !== lock.start), "Unlocked");
+}
+function rvLockNote(lock) {
+  return `<div class="rv-locked"><span>🔒 <b>Reviewed</b> ${fmtT(lock.start, false)}–${fmtT(lock.end, false)}: locked, so nothing here changes${RV.data.redub ? ", and a redub keeps it as it is" : ""}.</span>
+    ${RV.data.editable ? `<button class="sm" data-unlock="${lock.start}">Unlock</button>` : ""}</div>`;
+}
+function rvWireUnlock(box) {
+  box.querySelectorAll("[data-unlock]").forEach((b) => (b.onclick = (e) => {
+    e.stopPropagation();
+    const lock = RV.locks.find((x) => String(x.start) === b.dataset.unlock);
+    if (lock) rvUnlock(lock);
+  }));
+}
 function decisionsOut() {
   const regs = RV.dec.regions.slice().sort((a, b) => (a.source === "hidden" ? 0 : 1) - (b.source === "hidden" ? 0 : 1));
   return { regions: regs, cues: RV.dec.cues, lines: RV.dec.lines };
@@ -135,6 +226,7 @@ function decisionsOut() {
 // `chosen`: you pressed Keep (or Dub) yourself. Agreeing with Ai Dub's own keep is then still your
 // decision: the flag over it turns green rather than looking undecided.
 function setRegion(r, patch, chosen = false) {
+  if (rvGuard(Math.min(r.start, patch.start ?? r.start), Math.max(r.end, patch.end ?? r.end))) return;
   const list = RV.dec.regions;
   if (r.source === "user") {
     Object.assign(list.find((x) => x.id === r.id), patch);
@@ -155,6 +247,7 @@ function setRegion(r, patch, chosen = false) {
   setDirty();
 }
 function removeRegion(r) {
+  if (rvGuard(r.start, r.end)) return;
   if (r.source === "user") RV.dec.regions = RV.dec.regions.filter((x) => x.id !== r.id);
   else setRegion(r, { action: "dub", start: RV.data.regions.find((x) => x.id === r.id).start, end: RV.data.regions.find((x) => x.id === r.id).end });
   if (RV.sel && RV.sel.id === r.id) RV.sel = null;
@@ -163,7 +256,7 @@ function removeRegion(r) {
 // Show rules are looked for in the first 10 and the last 8 minutes (aidub.recurring).
 function ruleable(r) { return r.start < 600 || r.end > RV.data.duration - 480; }
 function addRegion(a, b, kind = "song") {
-  if (b - a < 0.3) return null;
+  if (b - a < 0.3 || rvGuard(a, b)) return null;
   const r = { id: `u-${Date.now()}`, start: +a.toFixed(2), end: +b.toFixed(2), kind, action: "keep", source: "user" };
   RV.dec.regions.push(r);
   setDirty();
@@ -188,6 +281,7 @@ async function pageReview(id, lineId) {
     search: "", spk: null, follow: true, view: keep ? keep.view : [0, Math.min(240, data.duration)], markIn: null, flag: -1,
     redo: keep && keep.redo ? keep.redo : {},
     ticks: new Set(store.get(`ticks.${id}`, [])), m: -1, ab: null,
+    locks: (data.decisions && data.decisions.locked) || [], lockFrom: keep ? keep.lockFrom : null,
   };
   if (RV.vf) RV.vgroup = keep && keep.vgroup || VF_TABS.map(([g]) => g).find((g) => RV.vf.moments.some((m) => m.group === g)) || "check";
   for (const k of ["regions", "cues", "lines"]) if (!RV.dec[k]) RV.dec[k] = k === "regions" ? [] : {};
@@ -265,6 +359,8 @@ function rvShell() {
         <div class="seg" id="rvZoom"><button data-v="all">Whole episode</button><button data-v="240">4 min</button><button data-v="30">30 s</button></div>
         <span class="grow" style="flex:1"></span>
         ${nLook ? `<span class="chip look" id="rvFlagPos">Needs a look ${nLook}</span><button id="rvPrev">‹ Prev</button><button id="rvNext">Next ›</button>` : ""}
+        ${d.editable ? `<button class="sm ghost" id="rvLockFrom" title="Start the next reviewed part here instead of where the last one ends (Shift+V)">⇤ Start here</button>
+          <button id="rvLock" title="Mark everything from the last reviewed part to here as reviewed: locked against changes, and kept as it is in a redub (V)">✓ Reviewed to here</button>` : ""}
         ${d.editable ? `<button id="rvMarkCancel" hidden>Cancel</button><button class="primary" id="rvMark" title="Press at the song's start, play or seek to its end, press again (keys I and O)">♪ Mark a song</button>` : ""}
       </div>
       <div class="rv-lanes">
@@ -275,7 +371,7 @@ function rvShell() {
       <div class="rv-keys">
         <span><kbd>Space</kbd> play / pause</span><span><kbd>←</kbd><kbd>→</kbd> 1 s</span><span><kbd>Shift</kbd>+<kbd>←</kbd><kbd>→</kbd> 5 s</span>
         ${d.editable ? `<span><kbd>I</kbd> <kbd>O</kbd> song starts / ends here</span><span><kbd>K</kbd> keep original</span><span><kbd>D</kbd> dub</span><span><kbd>S</kbd> song</span><span><kbd>Delete</kbd> remove region</span>` : ""}
-        <span><kbd>N</kbd> <kbd>P</kbd> next / previous to check</span>${RV.vf ? `<span><kbd>A</kbd> A/B: original, then dub</span>` : ""}<span><kbd>Z</kbd> zoom</span>
+        ${d.editable ? `<span><kbd>V</kbd> reviewed to here</span>` : ""}<span><kbd>N</kbd> <kbd>P</kbd> next / previous to check</span>${RV.vf ? `<span><kbd>A</kbd> A/B: original, then dub</span>` : ""}<span><kbd>Z</kbd> zoom</span>
       </div>
     </div>
   </div>`;
@@ -286,7 +382,7 @@ function rvShell() {
 function rvTabs() {
   const d = RV.data;
   const main = RV.vf ? rvMoments("check") : [];
-  const tabs = [...(RV.vf ? [["check", "Check", `${main.filter((i) => RV.ticks.has(i)).length}/${main.length}`]] : []), ["subs", "Subtitles", d.cues.length || d.lines.length], ["voices", "Voices", d.speakers.length],
+  const tabs = [...(RV.vf ? [["check", "Check", `${main.filter(rvMomentDone).length}/${main.length}`]] : []), ["subs", "Subtitles", d.cues.length || d.lines.length], ["voices", "Voices", d.speakers.length],
     ["look", "Needs a look", d.flags.length], ["kept", "Kept", rvKeptItems().length], ["songs", "Songs", rvSongSections().length],
     ["rules", "Show rules", (d.rules.regions || []).length]];
   $("#rvTabs").innerHTML = tabs.map(([k, t, n]) => `<button data-tab="${k}" class="${RV.tab === k ? "on" : ""}">${t}<span class="n">${n}</span></button>`).join("");
@@ -396,6 +492,7 @@ function rvLoading(on) { RV.loading = on; rvClock(); }
 function rvClock() {
   const t = rvNow();
   $("#rvTime").textContent = `${fmtT(t)} / ${fmtT(RV.data.duration, false)}${RV.loading ? " · loading…" : ""}`;
+  rvLockButton();
   const r = regionsNow().find((x) => t >= x.start && t <= x.end && x.action === "keep");
   const ln = RV.data.lines.find((l) => t >= l.start && t <= l.end && (l.kind === "speech" || l.kind === "song"));
   $("#rvTag").innerHTML = RV.ab ? (RV.ab.phase === "A" ? `<span class="chip plain">A · original</span>` : `<span class="chip dub">B · the dub</span>`)
@@ -474,22 +571,25 @@ function rvList() {
 function rvMoments(group) {
   return RV.vf.moments.map((m, i) => (m.group === group ? i : -1)).filter((i) => i >= 0);
 }
+function rvMomentLocked(m) { return !!rvSpanLocked(m.t - 0.5, (m.end || m.t + 1)); }
+function rvMomentDone(i) { return RV.ticks.has(i) || rvMomentLocked(RV.vf.moments[i]); }
 function rvFrees() { return RV.vf ? (RV.vf.original.exists ? RV.vf.original.size : 0) + (RV.vf.work_size || 0) : 0; }
 function rvGB(n) { return (n / 1e9).toFixed(2) + " GB"; }
 function rvCheckRows() {
   const ms = RV.vf.moments, ids = rvMoments(RV.vgroup);
   const groups = VF_TABS.map(([g, label]) => {
     const all = rvMoments(g);
-    return `<button data-vgroup="${g}" class="${RV.vgroup === g ? "on" : ""}">${label} ${all.filter((i) => RV.ticks.has(i)).length}/${all.length}</button>`;
+    return `<button data-vgroup="${g}" class="${RV.vgroup === g ? "on" : ""}">${label} ${all.filter(rvMomentDone).length}/${all.length}</button>`;
   }).join("");
   const rows = ids.map((i) => {
     const m = ms[i], ln = m.line != null && RV.data.lines.find((l) => l.id === m.line);
     const sel = RV.m === i || (ln && RV.sel && RV.sel.type === "line" && RV.sel.id === ln.id);
-    return `<div class="frow vfm ${RV.ticks.has(i) ? "ticked" : ""} ${sel ? "sel" : ""}" data-m="${i}" data-a="${m.t}" data-b="${m.end || m.t + 4}">
+    const shut = rvMomentLocked(m);
+    return `<div class="frow vfm ${RV.ticks.has(i) || shut ? "ticked" : ""} ${sel ? "sel" : ""}" data-m="${i}" data-a="${m.t}" data-b="${m.end || m.t + 4}">
       <button class="tick" data-tick="${i}" title="Tick it off once you've listened" aria-label="Listened">✓</button>
-      <div><span class="rv-time muted">${fmtT(m.t, false)}</span> <b>${esc(m.title)}</b>${m.detail ? `<span class="d">${esc(m.detail)}</span>` : ""}
+      <div><span class="rv-time muted">${fmtT(m.t, false)}</span>${shut ? ` <span class="lk" title="In a reviewed part: locked">🔒</span>` : ""} <b>${esc(m.title)}</b>${m.detail ? `<span class="d">${esc(m.detail)}</span>` : ""}
         <div class="row" style="margin-top:6px;gap:6px"><button class="sm" data-ab="${i}" title="Play these few seconds as the original, then as the dub (A)">A/B</button>
-          ${ln ? (RV.redo[ln.id] ? `<span class="chip dub">↻ On the Redo list</span>` : `<span class="small muted">Click to fix this line in Details</span>`) : ""}</div></div></div>`;
+          ${ln && !shut ? (RV.redo[ln.id] ? `<span class="chip dub">↻ On the Redo list</span>` : `<span class="small muted">Click to fix this line in Details</span>`) : ""}</div></div></div>`;
   }).join("");
   return `<div class="seg rv-vgroups">${groups}</div>` + (rows || `<div class="rv-empty">${ms.length ? "Nothing here." : "Nothing stood out. Play a few scenes to be sure."}</div>`);
 }
@@ -629,14 +729,15 @@ function rvSubRows() {
     const saidCls = said.some((l) => l.outcome === "japanese") ? "japanese" : said.some((l) => l.outcome === "unclear") ? "unclear" : "";
     const saidText = said.map((l) => l.en).filter(Boolean).join(" ");
     const dubSays = said.length ? `<span class="said ${saidCls}">${saidCls === "japanese" ? "Left in Japanese" : `🔊 ${esc(saidText)}`}</span>` : "";
-    const change = d.editable && d.redo_lines ? said.map((l) => rvEnglishHere(l)).join("") : "";
+    const shut = rvSpanLocked(c.start, c.end), ed = d.editable && !shut;
+    const change = ed && d.redo_lines ? said.filter((l) => !rvLineLocked(l)).map((l) => rvEnglishHere(l)).join("") : "";
     const why = ln ? `<span class="why"><button class="who" data-line="${ln.id}" title="${RV.data.editable ? "Change whose voice says this line" : "Speakers can't be changed right now"}"><span class="vdot" style="background:${rvColor(who)}"></span>${esc(whoLabel(who))}${RV.data.editable ? ` <span class="faint">▾</span>` : ""}</button>
       ${ln.kept_why && ln.kind === "song" ? `<span>· ${esc(ln.kept_why)}</span>` : ""}${flaggedLine(ln.id) ? `<span>· sounds sung</span>` : ""}
       ${ln.voice_note === "moved by pitch" ? `<span>· moved by pitch</span>` : ""}
       ${ln.fallback && ln.kind === "speech" ? `<span style="color:var(--bad)" title="${esc(ln.fallback)}">· left in Japanese in the dub</span>` : ""}</span>` : "";
-    return `<div class="srow ${sel ? "sel" : ""}" data-key="${esc(c.key)}" data-a="${c.start}" data-b="${c.end}">
-      <span class="t">${fmtT(c.start, false)}</span><div class="x">${text}${dubSays}${change}${why}</div>
-      ${c.cue && d.editable ? `<button class="chip ${cls}" data-cycle="${esc(c.key)}" title="Click: keep original / dub / Ai Dub decides">${esc(label)}</button>`
+    return `<div class="srow ${sel ? "sel" : ""} ${shut ? "locked" : ""}" data-key="${esc(c.key)}" data-a="${c.start}" data-b="${c.end}">
+      <span class="t">${fmtT(c.start, false)}${shut ? `<span class="lk" title="Reviewed: locked">🔒</span>` : ""}</span><div class="x">${text}${dubSays}${change}${why}</div>
+      ${c.cue && ed ? `<button class="chip ${cls}" data-cycle="${esc(c.key)}" title="Click: keep original / dub / Ai Dub decides">${esc(label)}</button>`
         : `<span class="chip ${cls}">${esc(label)}</span>`}</div>`;
   }).join("");
 }
@@ -721,7 +822,8 @@ function rvListWire() {
     if (ev.key === "Escape") { RV.editing = null; rvList(); }
   }));
   box.querySelectorAll("[data-cycle]").forEach((b) => (b.onclick = () => {
-    const k = b.dataset.cycle, now = RV.dec.cues[k];
+    const k = b.dataset.cycle, now = RV.dec.cues[k], q = RV.data.cues.find((c) => c.key === k);
+    if (q && rvGuard(q.start, q.end)) return;
     if (!now) RV.dec.cues[k] = "keep"; else if (now === "keep") RV.dec.cues[k] = "dub"; else delete RV.dec.cues[k];
     setDirty(); rvList(); rvInspector(); rvDraw();
   }));
@@ -775,6 +877,7 @@ async function rvSaveRules(body) {
 // over it, or its lines' speaker.
 function flagDecisions(f) {
   const a = f.start - 0.05, b = Math.max(f.end, f.start + 0.1) + 0.05, out = [];
+  if (rvSpanLocked(f.start, Math.max(f.end, f.start + 0.3))) out.push("Reviewed");
   for (const [k, v] of Object.entries(RV.dec.cues)) {
     const q = RV.data.cues.find((c) => c.key === k);
     if (q && overlap(q.start, q.end, a, b) > 0) out.push(v === "keep" ? "Keep original" : "Dub it");
@@ -797,6 +900,7 @@ function spanChoice(a, b) {
   return r ? (r.action === "dub" ? "dub" : r.kind === "song" ? "song" : "keep") : "";
 }
 function setSpan(a, b, choice) {
+  if (rvGuard(a, b)) return;
   RV.dec.regions = RV.dec.regions.filter((x) => !(x.source === "user" && x.start >= a - 0.01 && x.end <= b + 0.01));
   if (choice) {
     const r = addRegion(a, b, choice === "song" ? "song" : "ignore");
@@ -861,8 +965,11 @@ function wireEnglish(box) {
     b.disabled = true;
     try {
       const r = await api(`/jobs/${RV.id}/lines/${id}/as-voice`, { body: { character: lineWho(l) || "" } });
-      for (const x of [id, ...r.usual]) RV.redo[x] = { ...(RV.redo[x] || { en: "" }) };
-      toast(`${r.message}: ${r.usual.length + 1 > 1 ? `${r.usual.length + 1} lines` : "the line"} put on the Redo list`);
+      const open = r.usual.filter((x) => { const o = RV.data.lines.find((y) => y.id === Number(x)); return !o || !rvLineLocked(o); });
+      for (const x of [id, ...open]) RV.redo[x] = { ...(RV.redo[x] || { en: "" }) };
+      const shut = r.usual.length - open.length;
+      toast(`${r.message}: ${open.length + 1 > 1 ? `${open.length + 1} lines` : "the line"} put on the Redo list`
+        + (shut ? ` (${shut} in reviewed parts left as they are)` : ""));
       rvRedoButton(); rvInspector(); rvList(); rvDraw();
     } catch (e) { toast(e.message); b.disabled = false; }
   }));
@@ -892,6 +999,11 @@ function rvRedoButton() {
   b.textContent = `↻ Redo ${n} line${n === 1 ? "" : "s"} ›`;
 }
 async function rvRedoLines() {
+  for (const id of Object.keys(RV.redo)) {
+    const l = RV.data.lines.find((x) => x.id === Number(id));
+    if (l && rvLineLocked(l)) delete RV.redo[id];
+  }
+  rvRedoButton();
   const ids = Object.keys(RV.redo);
   if (!ids.length) return;
   const changes = {};
@@ -913,6 +1025,16 @@ async function rvRedoLines() {
   } catch (e) { toast(e.message); }
 }
 
+// Next or previous flag, passing over those in reviewed sections (all of them, if that's all there is).
+function rvStepFlag(dir) {
+  const fs = RV.data.flags, n = fs.length;
+  if (!n) return;
+  for (let k = 1; k <= n; k++) {
+    const i = (((RV.flag + dir * k) % n) + n) % n;
+    if (!rvSpanLocked(fs[i].start, Math.max(fs[i].end, fs[i].start + 0.3))) return rvGoFlag(i);
+  }
+  rvGoFlag(((RV.flag + dir) % n + n) % n);
+}
 function rvGoFlag(i) {
   const f = RV.data.flags[i];
   if (!f) return;
@@ -939,6 +1061,8 @@ function rvGoFlag(i) {
 // Speaker menu ------------------------------------------------------------------------------------------
 function rvWhoMenu(ev, lineId) {
   rvClosePop();
+  const l = RV.data.lines.find((x) => x.id === lineId);
+  if (l && rvLineLocked(l)) return toast("🔒 This line is in a part marked reviewed. Unlock it to change it.");
   const pop = document.createElement("div");
   pop.className = "rv-pop";
   const now = lineWho(RV.data.lines.find((l) => l.id === lineId));
@@ -995,9 +1119,39 @@ document.addEventListener("click", (ev) => {
 });
 
 // Inspector ------------------------------------------------------------------------------------------------
+// What's selected, if it lies in a reviewed section: shown read-only, with Unlock.
+function rvSelLock() {
+  const s = RV.sel, d = RV.data;
+  if (!s) return null;
+  if (s.type === "region") { const r = regionsNow().find((x) => x.id === s.id); return r ? rvSpanLocked(r.start, r.end) : null; }
+  if (s.type === "cue") { const q = d.cues.find((x) => x.key === s.id); return q ? rvSpanLocked(q.start, q.end) : null; }
+  if (s.type === "line") { const l = d.lines.find((x) => x.id === s.id); return l ? rvLockAt((l.start + l.end) / 2) : null; }
+  if (s.type === "flag") { const f = d.flags[s.id]; return f ? rvSpanLocked(f.start, Math.max(f.end, f.start + 0.3)) : null; }
+  return null;
+}
 function rvInspector() {
-  const box = $("#rvIns"), d = RV.data, s = RV.sel, ed = d.editable;
+  const box = $("#rvIns");
   if (!box) return;
+  const s = RV.sel;
+  if (s && s.type === "lock") {
+    const lock = RV.locks.find((x) => x.start === s.id);
+    if (!lock) { RV.sel = null; return rvInspector(); }
+    const n = RV.data.lines.filter((l) => l.kind === "speech" && rvLineLocked(l) && rvLockAt((l.start + l.end) / 2) === lock).length;
+    box.innerHTML = `<h4>Reviewed ${fmtT(lock.start)} – ${fmtT(lock.end)} <span class="chip dub">🔒 locked</span></h4>
+      <div class="grid"><span class="lab">Marked</span><span>${new Date(lock.at * 1000).toLocaleString()}</span>
+        <span class="lab">Lines</span><span>${n} spoken line${n === 1 ? "" : "s"}</span></div>
+      <p class="muted small" style="margin:8px 0 0">Nothing in it can be changed here, and its lines aren't voiced again.
+        ${RV.data.redub ? "<b>Redub with these changes</b> keeps its English and voices as they are in this dub; only the rest is dubbed again." : "It's dubbed as you left it."}</p>
+      ${RV.data.editable ? `<div class="row" style="margin-top:8px"><button data-unlock="${lock.start}">Unlock</button></div>` : ""}`;
+    rvWireUnlock(box);
+    return;
+  }
+  const lock = rvSelLock();
+  rvInspectorBody(!!lock);
+  if (lock) { box.insertAdjacentHTML("afterbegin", rvLockNote(lock)); rvWireUnlock(box); }
+}
+function rvInspectorBody(locked) {
+  const box = $("#rvIns"), d = RV.data, s = RV.sel, ed = d.editable && !locked;
   if (!s && RV.tab === "check" && RV.vf) { box.innerHTML = rvCheckSummary(); return; }
   if (!s) {
     box.innerHTML = `<h4>Details</h4><div class="muted small">Click a region, a subtitle or a speaker to see why Ai Dub decided what it did${ed ? " and change it" : ""}.
@@ -1060,7 +1214,7 @@ function rvInspector() {
           <span class="lab">Speaker</span><span class="row" style="gap:6px">${voice(l)}</span>${englishRow(l, ed)}`).join("")}
         ${ln ? `<span class="lab">Why</span><span class="muted small">${esc(rvWhy(q, ln))}</span>` : ""}
       </div>
-      ${!ed && lns.length ? `<p class="muted small" style="margin:8px 0 0">${RV_READONLY}</p>` : ""}
+      ${!ed && !locked && lns.length ? `<p class="muted small" style="margin:8px 0 0">${RV_READONLY}</p>` : ""}
       ${ed && q ? `<div class="row"><button class="btn-keep ${RV.dec.cues[q.key] === "keep" ? "on" : ""}" id="rvCKeep">Keep original</button>
         <button class="btn-dub ${RV.dec.cues[q.key] === "dub" ? "on" : ""}" id="rvCDub">Dub it</button>
         ${RV.dec.cues[q.key] ? `<button id="rvCAuto">Let Ai Dub decide</button>` : ""}
@@ -1279,6 +1433,19 @@ function rvDraw() {
       if (RV.redo && RV.redo[ln.id]) { g.strokeStyle = C.accent; g.lineWidth = 2; g.stroke(); }
     }
   }
+  // Reviewed sections: a band over every lane, and where the next one would start
+  const okCol = C.dub;
+  for (const x of RV.locks) {
+    const x0 = X(x.start), x1 = X(x.end);
+    if (x1 < 0 || x0 > W) continue;
+    const top = ys[1][0], sel = RV.sel && RV.sel.type === "lock" && RV.sel.id === x.start;
+    g.fillStyle = okCol; g.globalAlpha = sel ? 0.16 : 0.09;
+    g.fillRect(x0, top, x1 - x0, height - top); g.globalAlpha = 1;
+    g.fillRect(x0, top - 3, x1 - x0, 3);
+    if (sel) { g.strokeStyle = okCol; g.lineWidth = 1.5; g.strokeRect(x0 + 0.75, top, x1 - x0 - 1.5, height - top - 0.75); }
+    label(g, x0, x1, ys[1][0] + 9, "🔒 Reviewed", okCol, true);
+  }
+  if (RV.lockFrom != null) { const xf = X(RV.lockFrom); g.fillStyle = okCol; g.fillRect(xf - 1, ys[1][0] - 3, 2, height - ys[1][0] + 3); }
   // Playhead
   const xp = X(rvNow());
   if (xp >= 0 && xp <= W) { g.fillStyle = C.text; g.fillRect(xp - 1, 0, 2, height); }
@@ -1316,6 +1483,8 @@ function rvOverview(C) {
     g.fillStyle = r.source === "user" ? C.accent : shared ? C.show : C.keep;
     g.fillRect((r.start / d) * W, 4, Math.max(2, ((r.end - r.start) / d) * W), H - 8);
   }
+  g.fillStyle = C.dub;
+  for (const x of RV.locks) g.fillRect((x.start / d) * W, H - 3, Math.max(2, ((x.end - x.start) / d) * W), 3);
   g.fillStyle = C.look;
   for (const f of RV.data.flags) g.fillRect((f.start / d) * W, 0, 2, 4);
   const [v0, v1] = RV.view;
@@ -1343,7 +1512,8 @@ function rvWire() {
   const search = $("#rvSearch");
   search.oninput = () => { RV.search = search.value; rvList(); };
   $("#rvFollow").onclick = (e) => { RV.follow = !RV.follow; e.target.textContent = RV.follow ? "Follow video ✓" : "Follow video"; };
-  if ($("#rvNext")) { $("#rvNext").onclick = () => rvGoFlag((RV.flag + 1) % d.flags.length); $("#rvPrev").onclick = () => rvGoFlag((RV.flag - 1 + d.flags.length) % d.flags.length); }
+  if ($("#rvNext")) { $("#rvNext").onclick = () => rvStepFlag(1); $("#rvPrev").onclick = () => rvStepFlag(-1); }
+  if ($("#rvLock")) { $("#rvLock").onclick = () => rvLockHere(); $("#rvLockFrom").onclick = () => rvLockStart(); rvLockButton(); }
   if ($("#rvMark")) { $("#rvMark").onclick = () => rvMarkKey(); $("#rvMarkCancel").onclick = () => { RV.markIn = null; rvMarkButton(); rvDraw(); }; rvMarkButton(); }
   if (d.editable) {
     $("#rvSave").onclick = () => rvSave(false);
@@ -1351,15 +1521,21 @@ function rvWire() {
     if ($("#rvRedub")) $("#rvRedub").onclick = () => rvRedub();
     if ($("#rvRedo")) { $("#rvRedo").onclick = () => rvRedoLines(); rvRedoButton(); }
     $("#rvDiscard").onclick = async () => {
-      if (!confirm("Go back to Ai Dub's own decisions for this episode? Your marks and choices here are cleared. (Speaker names and merges are kept: they belong to the show.)")) return;
-      await api(`/jobs/${RV.id}/review`, { method: "PUT", body: { regions: [], cues: {}, lines: {} } });
+      if (!confirm("Go back to Ai Dub's own decisions for this episode? Your marks and choices here are cleared, except in the parts marked reviewed. (Speaker names and merges are kept: they belong to the show.)")) return;
+      // (what's in a reviewed part stays: it's locked)
+      const cue = (k) => { const q = RV.data.cues.find((c) => c.key === k); return q && rvSpanLocked(q.start, q.end); };
+      const line = (id) => { const l = RV.data.lines.find((x) => x.id === Number(id)); return l && rvLineLocked(l); };
+      await api(`/jobs/${RV.id}/review`, { method: "PUT", body: {
+        regions: RV.dec.regions.filter((r) => rvSpanLocked(r.start, r.end)),
+        cues: Object.fromEntries(Object.entries(RV.dec.cues).filter(([k]) => cue(k))),
+        lines: Object.fromEntries(Object.entries(RV.dec.lines).filter(([id]) => line(id))) } });
       const fresh = await api(`/jobs/${RV.id}/review`);
       RV.dec = rvClone(fresh.decisions); RV.dirty = false; RV.data = fresh;
       rvShell(); rvMedia(); rvList(); rvInspector(); rvDraw();
     };
   }
   if ($("#rvGood")) $("#rvGood").onclick = () => {
-    const main = rvMoments("check"), left = main.filter((i) => !RV.ticks.has(i)).length, o = RV.vf.original;
+    const main = rvMoments("check"), left = main.filter((i) => !rvMomentDone(i)).length, o = RV.vf.original;
     rvDecide("good", (left > 0 ? `You haven't ticked ${left} of the ${main.length} moments to check yet.\n\n` : "")
       + `Keep this dub and permanently delete the original${o.exists ? ` (${rvGB(o.size)})` : ""} and the working files? This can't be undone.`, "Kept");
   };
@@ -1398,8 +1574,9 @@ function rvLoop() {
 }
 async function rvRedub() {
   const n = Object.keys(RV.dec.cues).length + RV.dec.regions.filter((r) => r.source !== "hidden").length + Object.keys(RV.dec.lines).length;
+  const locked = RV.locks.length ? ` The ${RV.locks.length === 1 ? "part" : `${RV.locks.length} parts`} you marked reviewed keep${RV.locks.length === 1 ? "s" : ""} the English and voices of this dub.` : "";
   if (!confirm(`Put the original back, delete this dub and dub the episode again${n ? ` with your ${n} change${n === 1 ? "" : "s"}` : ""}? `
-    + "The analysis is kept, so it starts from translating.")) return;
+    + "The analysis is kept, so it starts from translating." + locked)) return;
   try {
     const r = await api(`/jobs/${RV.id}/review/redub`, { body: decisionsOut() });
     RV.dirty = false;
@@ -1426,6 +1603,7 @@ async function rvSave(start) {
 }
 function rvMarkKey() {
   const t = rvNow();
+  if (RV.markIn != null && rvGuard(Math.min(RV.markIn, t), Math.max(RV.markIn, t))) return;
   if (RV.markIn == null) { RV.markIn = t; toast("Song start marked. Play or seek to where it ends, then press “End song here”."); }
   else {
     const r = addRegion(Math.min(RV.markIn, t), Math.max(RV.markIn, t));
@@ -1471,7 +1649,7 @@ function rvTimelineWire() {
     if (p.lane === 2 || p.lane === 5) {
       const user = p.lane === 5;
       const sel = RV.sel && RV.sel.type === "region" ? regionsNow().find((r) => r.id === RV.sel.id) : null;
-      if (ed && sel && (sel.source === "user") === user) {
+      if (ed && sel && (sel.source === "user") === user && !rvSpanLocked(sel.start, sel.end)) {
         for (const edge of ["start", "end"]) {
           if (Math.abs((sel[edge] - p.t) * p.pxPerS) < 7) { RV.drag = { kind: "edge", edge, r: sel }; return; }
         }
@@ -1479,6 +1657,10 @@ function rvTimelineWire() {
       const hit = regionAt(p.t, user);
       if (hit) { RV.sel = { type: "region", id: hit.id }; rvInspector(); rvDraw(); RV.drag = { kind: "seek" }; rvSeek(p.t); return; }
       if (user && ed) { RV.drag = { kind: "new", t0: p.t, t1: p.t }; return; }
+    }
+    if (p.lane === 1 || p.lane === 0) {
+      const lock = rvLockAt(p.t);
+      if (lock) { RV.sel = { type: "lock", id: lock.start }; rvInspector(); }
     }
     if (p.lane === 3) {
       const q = RV.data.cues.find((c) => p.t >= c.start - 0.05 && p.t <= c.end + 0.05);
@@ -1495,7 +1677,7 @@ function rvTimelineWire() {
     const p = at(ev);
     if (!RV.drag) {
       const sel = RV.sel && RV.sel.type === "region" ? regionsNow().find((r) => r.id === RV.sel.id) : null;
-      const near = sel && RV.data.editable && (p.lane === 2 || p.lane === 5) && ["start", "end"].some((e) => Math.abs((sel[e] - p.t) * p.pxPerS) < 7);
+      const near = sel && RV.data.editable && !rvSpanLocked(sel.start, sel.end) && (p.lane === 2 || p.lane === 5) && ["start", "end"].some((e) => Math.abs((sel[e] - p.t) * p.pxPerS) < 7);
       cv.style.cursor = near ? "ew-resize" : p.lane === 5 && RV.data.editable ? "copy" : "crosshair";
       return;
     }
@@ -1573,15 +1755,18 @@ document.addEventListener("keydown", (ev) => {
       setRegion(r, action === "song" ? { action: "keep", kind: "song" } : { action }, true);
     } else if (sel.type === "cue") {
       const q = RV.data.cues.find((c) => c.key === sel.id);
+      if (q && rvGuard(q.start, q.end)) return;
       if (action === "song") { if (q) rvSongFromCue(q); return; }
       RV.dec.cues[sel.id] = action;
     } else if (sel.type === "line") {
       const ln = RV.data.lines.find((l) => l.id === sel.id);
-      if (ln) setSpan(+(ln.start - 0.05).toFixed(2), +(ln.end + 0.05).toFixed(2), action);
+      if (!ln || rvGuard(ln.start, ln.end)) return;
+      setSpan(+(ln.start - 0.05).toFixed(2), +(ln.end + 0.05).toFixed(2), action);
       toast(RV_ACTED[action]);
       return;
     } else if (sel.type === "flag") {
       const f = RV.data.flags[sel.id];
+      if (f && rvGuard(f.start, Math.max(f.end, f.start + 0.3))) return;
       if (f) setSpan(f.start, Math.max(f.end, f.start + 0.3), action);  // (a flag at one moment: a short stretch)
       toast(RV_ACTED[action]);
       return;
@@ -1597,11 +1782,14 @@ document.addEventListener("keydown", (ev) => {
   else if (k === "d" || k === "D") act("dub");
   else if (k === "s" || k === "S") act("song");
   else if ((k === "n" || k === "N" || k === "p" || k === "P") && RV.tab === "check" && RV.vf) {
-    const ids = rvMoments(RV.vgroup), n = ids.length, at = ids.indexOf(RV.m);
-    if (n) rvGoMoment(ids[k === "n" || k === "N" ? (at + 1) % n : (Math.max(at, 0) - 1 + n) % n]);
+    const all = rvMoments(RV.vgroup), open = all.filter((i) => !rvMomentLocked(RV.vf.moments[i]));
+    const ids = open.length ? open : all, n = ids.length, fwd = k === "n" || k === "N";
+    const at = fwd ? ids.findIndex((i) => i > RV.m) : ids.length - 1 - ids.slice().reverse().findIndex((i) => i < RV.m);
+    if (n) rvGoMoment(ids[fwd ? (at < 0 ? 0 : at) : (at >= n ? n - 1 : at)]);
   } else if ((k === "a" || k === "A") && RV.vf) rvAB(RV.m >= 0 ? RV.m : rvMoments(RV.vgroup)[0]);
-  else if ((k === "n" || k === "N") && RV.data.flags.length) rvGoFlag((RV.flag + 1) % RV.data.flags.length);
-  else if ((k === "p" || k === "P") && RV.data.flags.length) rvGoFlag((RV.flag - 1 + RV.data.flags.length) % RV.data.flags.length);
+  else if (k === "n" || k === "N") rvStepFlag(1);
+  else if (k === "p" || k === "P") rvStepFlag(-1);
+  else if ((k === "v" || k === "V") && ed) { if (ev.shiftKey) rvLockStart(); else rvLockHere(); }
   else if (k === "z" || k === "Z") {
     const span = RV.view[1] - RV.view[0], d = RV.data.duration;
     const next = span >= d - 1 ? 240 : span > 60 ? 30 : "all";

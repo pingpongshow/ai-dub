@@ -60,18 +60,90 @@ def folder(work: Path) -> Path:
 
 def load_decisions(work: Path) -> dict:
     f = work / "review" / "decisions.json"
-    return json.loads(f.read_text()) if f.exists() else {"regions": [], "cues": {}, "lines": {}}
+    return json.loads(f.read_text()) if f.exists() else {"regions": [], "cues": {}, "lines": {}, "locked": []}
 
 
 def save_decisions(work: Path, d: dict) -> None:
+    """`locked` (the sections marked reviewed) is kept as it was unless `d` has its own."""
+    locks = d["locked"] if "locked" in d else load_decisions(work).get("locked", [])
     clean = {"regions": [r for r in d.get("regions", []) if isinstance(r, dict) and float(r.get("end", 0)) > float(r.get("start", 0))],
              "cues": {str(k): v for k, v in (d.get("cues") or {}).items() if v in ("keep", "dub")},
              "lines": {str(k): v for k, v in (d.get("lines") or {}).items() if isinstance(v, dict)},
-             "started": bool(d.get("started")), "saved": time.time()}
+             "locked": clean_locks(locks), "started": bool(d.get("started")), "saved": time.time()}
     f = folder(work) / "decisions.json"
     tmp = f.with_suffix(".tmp")
     tmp.write_text(json.dumps(clean, ensure_ascii=False, indent=1))
     tmp.replace(f)
+
+
+# Reviewed sections ---------------------------------------------------------------------------
+# A stretch you marked reviewed is locked: the page changes nothing in it, a line in it isn't
+# voiced again, and a redub keeps its lines (English, voice and takes) as the dub had them.
+LOCKED_LINES = "locked-lines.json"
+LOCKED_TAKES = "locked"
+
+
+def clean_locks(locks) -> list[dict]:
+    out = []
+    for x in locks or []:
+        try:
+            a, b = round(float(x["start"]), 2), round(float(x["end"]), 2)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if b - a >= 0.5:
+            out.append({"start": a, "end": b, "at": float(x.get("at") or time.time())})
+    return sorted(out, key=lambda x: x["start"])
+
+
+def is_locked(ln: L.Line, locks: list[dict]) -> bool:
+    """A line belongs to the section its middle is in."""
+    mid = (ln.start + ln.end) / 2
+    return any(x["start"] <= mid <= x["end"] for x in locks)
+
+
+def keep_locked(work: Path) -> int:
+    """Before a redub: the reviewed sections' lines as the dub has them, and their takes,
+    set aside where the reset leaves them. Returns how many lines."""
+    d = folder(work)
+    shutil.rmtree(d / LOCKED_TAKES, ignore_errors=True)
+    (d / LOCKED_LINES).unlink(missing_ok=True)
+    locks = load_decisions(work).get("locked") or []
+    if not locks or not (work / "lines.json").exists():
+        return 0
+    keep = [ln for ln in L.load(work / "lines.json") if is_locked(ln, locks)]
+    for ln in keep:
+        src = work / "lines" / f"{ln.id:05d}"
+        if src.is_dir():
+            shutil.copytree(src, d / LOCKED_TAKES / src.name)
+    L.save(keep, d / LOCKED_LINES)
+    return len(keep)
+
+
+def locked_part(work: Path, lines: list[L.Line]) -> tuple[list[L.Line], list[L.Line]]:
+    """The translated lines outside the reviewed sections, and the dub's own lines inside
+    them (with their takes back in place). Without a set-aside dub, nothing is locked."""
+    f = work / "review" / LOCKED_LINES
+    if not f.exists():
+        return lines, []
+    kept = L.load(f)
+    locks = load_decisions(work).get("locked") or []
+    for ln in kept:
+        src = work / "review" / LOCKED_TAKES / f"{ln.id:05d}"
+        dst = work / "lines" / src.name
+        if src.is_dir() and not dst.exists():
+            shutil.copytree(src, dst)
+    return [ln for ln in lines if not is_locked(ln, locks)], kept
+
+
+def join_locked(free: list[L.Line], kept: list[L.Line]) -> list[L.Line]:
+    """Both together in time order. A new line carrying a kept line's id (a split line gets
+    the next free number) is numbered again: ids name the take folders."""
+    ids = {ln.id for ln in kept}
+    nxt = max([ln.id for ln in free + kept], default=0) + 1
+    for ln in free:
+        if ln.id in ids:
+            ln.id, nxt = nxt, nxt + 1
+    return sorted(free + kept, key=lambda l: (l.start, l.id))
 
 
 def media_status(work: Path) -> dict:
@@ -492,10 +564,11 @@ def reset_for_lines(work: Path, live: Path, changes: dict[int, dict], prof, save
     from .pipeline import STEP_NAMES
     lines = L.load(work / "lines.json")
     by_id = {ln.id: ln for ln in lines}
+    locks = load_decisions(work).get("locked") or []
     done = []
     for lid, ch in changes.items():
         ln = by_id.get(int(lid))
-        if not ln:
+        if not ln or is_locked(ln, locks):
             continue
         mine = (saved or {}).get(str(ln.id)) or {}
         if not ch.get("character") and mine.get("character") and mine["character"] != ln.character:

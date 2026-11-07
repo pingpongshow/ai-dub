@@ -2263,3 +2263,41 @@ def test_backcheck_contraction_heard_as_the_word_it_sounds_like():
     assert speak.wer("They're here.", "There here.") == 0
     assert speak.wer("Your centurions.", "You're centurions.") == 0
     assert speak.wer("Your house.", "Yes house.") > 0
+
+
+def test_a_reviewed_section_keeps_its_lines_through_a_redub(tmp_path):
+    from aidub import review
+    work = tmp_path / "job-1"
+    (work / "lines" / "00002").mkdir(parents=True)
+    (work / "lines" / "00002" / "take_0.wav").write_bytes(b"x")
+    L.save([L.Line(1, 1.0, 2.0, kind=L.SPEECH, en="Before."), L.Line(2, 10.0, 12.0, kind=L.SPEECH, en="Heard and liked.", take="/t.wav"),
+            L.Line(3, 13.0, 14.0, kind=L.SPEECH, en="After.")], work / "lines.json")
+    review.save_decisions(work, {"regions": [], "locked": [{"start": 9.0, "end": 12.5}, {"start": 3, "end": 3.2}]})
+    review.save_decisions(work, {"regions": [], "cues": {"x": "keep"}})          # a later Save leaves the sections alone
+    assert review.load_decisions(work)["locked"] == [{"start": 9.0, "end": 12.5, "at": pytest.approx(review.load_decisions(work)["locked"][0]["at"])}]
+    assert review.keep_locked(work) == 1
+    import shutil
+    shutil.rmtree(work / "lines")                                                # what the reset does
+    # The redub's new lines: line 2 translated again, and (below) a split line that was given number 2.
+    new = [L.Line(1, 1.0, 2.0, kind=L.SPEECH, en="Before, again."), L.Line(2, 10.0, 12.0, kind=L.SPEECH, en="Something else."),
+           L.Line(3, 13.0, 14.0, kind=L.SPEECH, en="After, again.")]
+    free, kept = review.locked_part(work, new)
+    assert [l.id for l in free] == [1, 3] and kept[0].en == "Heard and liked." and kept[0].take == "/t.wav"
+    assert (work / "lines" / "00002" / "take_0.wav").exists()                    # its takes are back
+    free.append(L.Line(2, 15.0, 16.0, kind=L.SPEECH, en="Split off."))
+    out = review.join_locked(free, kept)
+    assert [(l.id, l.en) for l in out] == [(1, "Before, again."), (2, "Heard and liked."), (3, "After, again."), (4, "Split off.")]
+
+
+def test_a_line_in_a_reviewed_section_is_not_voiced_again(tmp_path):
+    import json as J
+    from aidub import review
+    work = tmp_path / "job-1"
+    (work / "lines").mkdir(parents=True)
+    L.save([L.Line(7, 1.0, 2.5, kind=L.SPEECH, en="Locked.", take="/x/t.wav"),
+            L.Line(8, 3.0, 4.5, kind=L.SPEECH, en="Free.", take="/x/t2.wav")], work / "lines.json")
+    (work / "state.json").write_text(J.dumps({"done": ["ingest", "speak", "mix"], "data": {}}))
+    review.save_decisions(work, {"locked": [{"start": 0.0, "end": 2.6}]})
+    assert review.reset_for_lines(work, tmp_path / "film.mkv", {7: {"en": "Changed"}, 8: {}}, None) == [8]
+    ln = {x.id: x for x in L.load(work / "lines.json")}
+    assert ln[7].en == "Locked." and ln[7].take == "/x/t.wav" and ln[8].take == ""

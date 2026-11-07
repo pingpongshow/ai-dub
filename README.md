@@ -237,8 +237,25 @@ Then press **Start dubbing**. Openings and endings marked here can apply to
 every episode of the show.
 
 Keys: Space play/pause · ←/→ seek 1 s (Shift: 5 s) · K keep · D dub · S song
-· N/P next/previous flag · I/O song start/end · Z zoom · Delete removes a
-region.
+· N/P next/previous flag · I/O song start/end · V reviewed to here · Z zoom ·
+Delete removes a region.
+
+**Marking parts reviewed.** As you work through a title, press **✓ Reviewed to
+here** (V). Everything from the end of the last reviewed part to the playhead is
+marked reviewed; the part ends after the line that's playing, not in the middle
+of it. **⇤ Start here** (Shift+V) starts the next part somewhere else. A
+reviewed part shows as a green band on the timeline, and it is locked:
+
+- nothing in it can be changed (songs, subtitles, speakers, English), and its
+  lines can't be put on the Redo list;
+- N/P and the lists pass over it: its flags count as decided, and its check
+  moments as ticked;
+- **Redub with these changes** keeps its lines as they are in the current dub
+  (the English, the voice and the takes) and dubs only the rest again.
+
+Click the band to see the part, and **Unlock** it to change it again. Reviewed
+parts are saved at once, without **Save**, and **Discard my changes** leaves
+your choices inside them alone.
 
 The review is available after a dub too, and that is where you check it
 (below).

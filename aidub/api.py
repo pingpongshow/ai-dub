@@ -313,6 +313,15 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
             bad(409, str(exc))
         return {"ok": True}
 
+    @app.put("/api/jobs/{jid}/review/locked")
+    def review_locked(jid: int, body: dict = Body(...)):
+        try:
+            return {"ok": True, "locked": svc.review_lock(jid, body.get("locked") or [])}
+        except KeyError:
+            bad(404, "no such job")
+        except ValueError as exc:
+            bad(409, str(exc))
+
     @app.post("/api/jobs/{jid}/subtitles/{action}")
     def job_subtitles(jid: int, action: str, body: dict = Body(default={})):
         try:

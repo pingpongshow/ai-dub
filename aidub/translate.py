@@ -1421,6 +1421,11 @@ def run(job: Job) -> None:
         except Exception as exc:
             job.log(f"glossary update skipped: {exc}")
 
-    lines = split_two_voices(job, join_sentences(job, said_once(job, lines)))
+    # A redub keeps the reviewed sections as the dub had them; only the rest is joined and split.
+    from .review import join_locked, locked_part
+    free, kept = locked_part(job.work, lines)
+    if kept:
+        job.log(f"{len(kept)} lines in reviewed sections keep their English and voice")
+    lines = join_locked(split_two_voices(job, join_sentences(job, said_once(job, free))), kept)
     L.save(lines, job.path("lines.json"))
     job.status(f"{sum(1 for l in lines if l.en)} lines translated")

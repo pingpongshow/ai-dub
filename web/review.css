@@ -112,6 +112,12 @@ button.chip { border: 0; cursor: pointer; font: inherit; font-size: 12px; font-w
 .said-box { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .said-box textarea, .rv-ins textarea { width: 100%; font-family: inherit; font-size: 13px; }
 .rv-vgroups { margin: 8px 10px; }
+.srow.locked > .x, .srow.locked > .chip { opacity: .55; }
+.srow .lk, .frow .lk { display: block; font-size: 11px; margin-top: 2px; }
+.frow .lk { display: inline; }
+.rv-locked { display: flex; align-items: center; gap: 8px; padding: 8px 10px; margin-bottom: 10px; border-radius: 8px; background: var(--ok-bg); border: 1px solid var(--ok); font-size: 12.5px; }
+.rv-locked span { flex: 1; }
+#rvLockFrom.on { border-color: var(--ok); color: var(--ok); }
 .vsep { width: 1px; align-self: stretch; background: var(--line); margin: 0 4px; }
 .vfm { grid-template-columns: 30px minmax(0, 1fr); align-items: start; }
 .vfm .tick { width: 26px; height: 26px; padding: 0; border-radius: 50%; color: transparent; border: 1.5px solid var(--line); background: none; }
