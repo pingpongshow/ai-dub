@@ -198,9 +198,15 @@ def needs_look(job, lines: list[L.Line]) -> list[dict]:
     for ln in lines:
         if ln.kind == L.SPEECH and (ln.voice_note.startswith("voice of") or ln.voice_note.startswith("generic voice")):
             borrowed.setdefault(ln.character, ln)
+    near = job.get("voice_suggestions") or {}
     for ln in borrowed.values():
-        add("voice", ln, "Dubbed with a borrowed voice", f"Too little of this speaker to clone: {ln.voice_note}.",
-            [x.id for x in lines if x.character == ln.character])
+        like = [n for _, n, _ in near.get(ln.character, [])]
+        add("voice", ln, "Dubbed with a borrowed voice",
+            f"Too little of this speaker to clone: {ln.voice_note}. Speaker detection is least sure of voices this small; "
+            + (f"by sound they're most like {', '.join(like)}. " if like else "")
+            + "If you know who it is, give the lines to them.",
+            [x.id for x in lines if x.character == ln.character
+             and (x.voice_note.startswith("voice of") or x.voice_note.startswith("generic voice"))])
     by_id = {ln.id: ln for ln in lines}
     for m in job.get("mixed_characters") or []:
         mine = [by_id[i] for i in m.get("lines", []) if i in by_id]

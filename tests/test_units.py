@@ -256,6 +256,9 @@ class _StubJob:
     def get(self, k, d=None):
         return self._data.get(k, d)
 
+    def set(self, k, v):
+        self._data[k] = v
+
 
 def test_named_characters_merged_by_diarization_keep_own_voices(tmp_path):
     from aidub import voicebank
@@ -2212,6 +2215,39 @@ def test_an_echoey_clip_is_not_lent_as_a_voice(tmp_path):
         prof.characters[cid]["refs"] = [{"file": f"refs/{cid}/a.flac", "score": 1.0}]
     ids = list(prof.characters)
     assert voicebank.clear_ref(prof, ids[0]) and not voicebank.clear_ref(prof, ids[1])
+
+
+def test_a_borrowed_voice_follows_how_the_speaker_sounds_not_a_guessed_gender(tmp_path):
+    from aidub import voicebank
+    prof = profiles.Profiles(tmp_path).get_or_create("Show")
+    man_v, woman_v = [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]
+    man = prof.new_character("Editor", gender="male", age="adult")
+    woman = prof.new_character("Typist", gender="female", age="adult")
+    for cid, v in ((man, man_v), (woman, woman_v)):
+        prof.characters[cid]["refs"] = [{"file": f"refs/{cid}/a.flac", "score": 1.0, "embedding": v, "duration": 9.0}]
+        prof.characters[cid]["embedding"] = v
+    tiny = prof.new_character("Character 9", gender="female")      # a few seconds, guessed wrong
+    lines = [L.Line(1, 0, 0.3, kind=L.SPEECH, en="Over there!", character=tiny, speaker="S9", overlap=True, scene=5),
+             L.Line(2, 1, 2.5, kind=L.SPEECH, en="Got it.", character=man, speaker="S1", scene=1),
+             L.Line(3, 3, 4.5, kind=L.SPEECH, en="Yes.", character=woman, speaker="S2", scene=2),
+             L.Line(4, 5, 6.5, kind=L.SPEECH, en="Right away.", character=tiny, speaker="S9", overlap=True, scene=5)]
+    voices = {4: {"emb": [0.9, 0.1, 0.0]}}                        # its one longer line sounds like a man
+    job = _StubJob({}, {})
+    job.qc, job.cfg_get = {}, None
+    job.cfg = type("C", (), {"get": lambda s, k, d=None: d})()
+    job.path = lambda *a: tmp_path / "x.wav"
+    import aidub.voicebank as VB
+    VB.generic_voices, real = (lambda job: []), VB.generic_voices
+    VB.clear_ref, real_clear = (lambda prof, cid: True), VB.clear_ref
+    VB.own_voice_clips, real_own = (lambda *a, **k: {}), VB.own_voice_clips
+    try:
+        prof.characters[man]["clean_s"] = prof.characters[woman]["clean_s"] = 9.0
+        prof.clean_seconds = lambda cid: 9.0 if cid in (man, woman) else 0.5
+        voicebank.assign_voices(job, prof, lines, voices)
+    finally:
+        VB.generic_voices, VB.clear_ref, VB.own_voice_clips = real, real_clear, real_own
+    assert lines[0].voice_note == "voice of Editor"                 # not the woman's, despite the guess
+    assert job.get("voice_suggestions")[tiny][0][1] == "Editor"
 
 
 def test_initials_are_said_letter_by_letter():

@@ -44,6 +44,48 @@ def quiet_db(x: np.ndarray, sr: int) -> float:
     return float(np.percentile(e, 20) - np.percentile(e, 90))
 
 
+def character_sounds(lines: list[L.Line], voices: dict[int, dict]) -> dict[str, list]:
+    """Each character's voiceprint from their lines long enough to judge, and failing those from
+    the other lines of the diarized speakers they came from."""
+    by_char: dict[str, list] = defaultdict(list)
+    by_spk: dict[str, list] = defaultdict(list)
+    spk_of: dict[str, set] = defaultdict(set)
+    for ln in lines:
+        if ln.kind != L.SPEECH or not ln.character:
+            continue
+        if ln.speaker:
+            spk_of[ln.character].add(ln.speaker)
+        if ln.id in voices:
+            by_char[ln.character].append(voices[ln.id]["emb"])
+            if ln.speaker:
+                by_spk[ln.speaker].append(voices[ln.id]["emb"])
+    out = {}
+    for cid in spk_of.keys() | by_char.keys():
+        prints = by_char.get(cid) or [e for s in spk_of.get(cid, ()) for e in by_spk.get(s, [])]
+        if prints:
+            out[cid] = speakers.mean_embedding(prints)
+    return out
+
+
+def _sounds_like_one(prof: Profile, sound: list, cid: str) -> float:
+    refs = [r["embedding"] for r in prof.refs(cid) if r.get("embedding")]
+    if refs:
+        return float(np.mean([speakers.cosine(sound, r) for r in refs]))
+    emb = prof.characters.get(cid, {}).get("embedding")
+    return speakers.cosine(sound, emb) if emb else -1.0
+
+
+def sounds_like(prof: Profile, sound: list, exclude: set[str] = frozenset()) -> list[tuple[float, str]]:
+    """The show's characters with a voice of their own, most alike to this voiceprint first."""
+    out = []
+    for cid in prof.characters:
+        src = prof.voice_source(cid)
+        if src != cid or cid in exclude or not prof.refs(cid):
+            continue
+        out.append((_sounds_like_one(prof, sound, cid), cid))
+    return sorted(out, reverse=True)
+
+
 def clear_ref(prof: Profile, cid: str) -> bool:
     """Is the character's top clip free of echo and noise? A borrowed voice is lent to someone
     else's lines: one 8 dB clip, lent, made two lines sound ghostly however often they were redone."""
@@ -354,24 +396,37 @@ def assign_voices(job: Job, prof: Profile, lines: list[L.Line], voices: dict[int
         scenes_of[prof.voice_source(ln.character)].add(ln.scene)
     generic = generic_voices(job)
     subs: dict[str, tuple[str, str]] = {}
+    sounds = character_sounds(lines, voices or {})
+    suggestions: dict[str, list] = {}
     for cid in {ln.character for ln in lines if ln.kind == L.SPEECH and ln.character}:
         src = prof.voice_source(cid)
         if prof.clean_seconds(src) >= min_s:
             continue
         ch = prof.characters[cid]
-        # 1. Another character from the show: same gender and age range, never in the same scene.
+        sound = sounds.get(cid)
+        if sound:
+            suggestions[cid] = sounds_like(prof, sound, exclude={src})[:3]
+        # 1. Another character from the show, never one in the same scene: the one this speaker
+        # sounds most like, from any of their lines long enough to judge. Only with nothing to go by,
+        # the same gender and age range: a gender guessed from a few seconds lent a woman's voice to
+        # a man's lines. (Sound can't name the person reliably from so little either; the review
+        # page shows the closest voices for you to choose from.)
         best, best_sim = None, -2.0
         for oid, other in prof.characters.items():
             o_src = prof.voice_source(oid)
             if o_src == src or prof.clean_seconds(o_src) < min_s or not clear_ref(prof, o_src):
                 continue
-            if ch.get("gender") and other.get("gender") and ch["gender"] != other["gender"]:
+            if not sound and ch.get("gender") and other.get("gender") and ch["gender"] != other["gender"]:
                 continue
-            if ch.get("age") and other.get("age") and ch["age"] != other["age"]:
+            if ch.get("age") and other.get("age") and (
+                    (ch["age"] == "child") != (other["age"] == "child") if sound else ch["age"] != other["age"]):
                 continue
             if scenes_of[src] & scenes_of.get(o_src, set()):
                 continue
-            sim = speakers.cosine(ch["embedding"], other["embedding"]) if ch.get("embedding") and other.get("embedding") else 0
+            if sound:
+                sim = _sounds_like_one(prof, sound, o_src)
+            else:
+                sim = speakers.cosine(ch["embedding"], other["embedding"]) if ch.get("embedding") and other.get("embedding") else 0
             if sim > best_sim:
                 best, best_sim = oid, sim
         if best:
@@ -384,6 +439,8 @@ def assign_voices(job: Job, prof: Profile, lines: list[L.Line], voices: dict[int
         if fits:
             v = fits[int(hashlib.sha1(f"{prof.slug}:{cid}".encode()).hexdigest(), 16) % len(fits)]
             subs[cid] = (v["path"], f"generic voice {v.get('name', '')}".strip())
+    job.set("voice_suggestions", {c: [[o, prof.characters[o].get("name", o), round(s, 2)] for s, o in v]
+                                  for c, v in suggestions.items() if v})
     used = Counter()
     voices = voices or {}
     min_match = float(job.cfg.get("speakers.line_voice_min", 0.35))
