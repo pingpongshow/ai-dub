@@ -1132,6 +1132,13 @@ async function pageSettings() {
 }
 
 // Routing ------------------------------------------------------------------------------------
+// A dub waiting to be checked is checked on its review page (Check tab), where its lines can be
+// fixed too. Only a dub without its review files still has the check page of its own.
+async function pageCheck(id) {
+  const r = await api(`/jobs/${id}/review`).catch(() => null);
+  if (r && r.redub) { location.replace(`#review/${id}`); return; }
+  return pageVerify(id);
+}
 async function route() {
   clearInterval(timer); clearTimeout(timer);
   const [page, arg, extra] = (location.hash.slice(1) || "queue").split("/");
@@ -1143,7 +1150,7 @@ async function route() {
   try {
     await ({ queue: pageQueue, history: pageHistory, profiles: () => pageProfiles(arg && decodeURIComponent(arg)),
       originals: pageOriginals, models: pageModels, settings: pageSettings, review: () => pageReview(arg, extra),
-      verify: () => pageVerify(arg) }[page] || pageQueue)();
+      verify: () => pageCheck(arg) }[page] || pageQueue)();
   } catch (e) { main.innerHTML = `<div class="callout bad">Couldn't load this page: ${esc(e.message)}</div>`; }
 }
 

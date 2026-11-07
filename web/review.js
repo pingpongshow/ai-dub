@@ -180,12 +180,16 @@ async function pageReview(id, lineId) {
     return;
   }
   const keep = RV && RV.id === Number(id) ? RV : null;
+  // A dub waiting to be checked: its check list, Keep the dub and Put the original back are here too.
+  const vf = data.redub ? await api(`/jobs/${id}/verify`).catch(() => null) : null;
   RV = {
-    id: Number(id), data, dec: keep && keep.dirty ? keep.dec : rvClone(data.decisions || {}),
-    dirty: keep ? keep.dirty : false, tab: keep ? keep.tab : "subs", sel: keep ? keep.sel : null, hear: "orig",
+    id: Number(id), data, vf: vf && vf.ready ? vf : null, dec: keep && keep.dirty ? keep.dec : rvClone(data.decisions || {}),
+    dirty: keep ? keep.dirty : false, tab: keep ? keep.tab : vf && vf.ready ? "check" : "subs", sel: keep ? keep.sel : null, hear: "orig",
     search: "", spk: null, follow: true, view: keep ? keep.view : [0, Math.min(240, data.duration)], markIn: null, flag: -1,
     redo: keep && keep.redo ? keep.redo : {},
+    ticks: new Set(store.get(`ticks.${id}`, [])), m: -1, ab: null,
   };
+  if (RV.vf) RV.vgroup = keep && keep.vgroup || VF_TABS.map(([g]) => g).find((g) => RV.vf.moments.some((m) => m.group === g)) || "check";
   for (const k of ["regions", "cues", "lines"]) if (!RV.dec[k]) RV.dec[k] = k === "regions" ? [] : {};
   // Opened at a line (the check page's Fix): that line selected, the video just before it.
   const at = lineId && data.lines.find((l) => l.id === Number(lineId));
@@ -201,7 +205,7 @@ async function pageReview(id, lineId) {
 function rvShell() {
   const d = RV.data, base = `/api/jobs/${RV.id}/review/media/`;
   const nLook = d.flags.length;
-  const statusChip = d.redub ? `<span class="chip dub">Dubbed: change anything, then redub</span>`
+  const statusChip = RV.vf ? `<span class="chip keep">Dubbed: not checked yet</span>` : d.redub ? `<span class="chip dub">Dubbed: change anything, then redub</span>`
     : d.editable ? `<span class="chip keep">Waiting for review</span>` : `<span class="chip plain">${esc(d.job.status)}</span>`;
   main.innerHTML = `
   <div class="rv ${d.editable ? "editable" : ""}">
@@ -210,12 +214,17 @@ function rvShell() {
       ${statusChip}${nLook ? `<span class="chip look">${nLook} to check</span>` : `<span class="chip dub">Nothing flagged</span>`}
       <span class="grow"></span>
       ${d.editable ? `<button id="rvDiscard">Discard my changes</button><button id="rvSave">${RV.dirty ? "Save" : "Saved"}</button>
-        ${d.redub ? `<a class="button" href="#verify/${RV.id}">Check page</a><button class="primary" id="rvRedo" hidden title="Voice just these lines again; every other line keeps its voice"></button>
+        ${d.redub ? `<button class="primary" id="rvRedo" hidden title="Voice just these lines again; every other line keeps its voice"></button>
           <button id="rvRedub" title="Put the original back and dub again from here with your changes">Redub with these changes ›</button>`
           : `<button class="primary" id="rvStart">Start dubbing ›</button>`}` : ""}
+      ${RV.vf ? `<span class="vsep"></span><button class="ghost" id="rvRestore" title="Delete the dub and put the original file back">Put the original back</button>
+        <button class="primary" id="rvGood" title="Keep the dub; the original and the working files are deleted for good">✓ Keep the dub${rvFrees() ? ` · frees ${rvGB(rvFrees())}` : ""}</button>` : ""}
       ${d.can_hold ? `<button class="primary" id="rvHold" title="The job stops here before anything is translated">Stop for review</button>` : ""}
     </div>
-    ${d.redub ? `<div class="rv-note">This episode is dubbed. Everything here can still be changed: <b>Redub with these changes</b> puts the original back and dubs again from this point, keeping the analysis (no need to wait for it again). Hear <b>Dub</b> to listen to the current dub.</div>`
+    ${RV.vf ? `<div class="rv-note">This episode is dubbed and waiting for your check. <b>Check</b> lists what's worth a listen: <b>A/B</b> plays each moment as the original, then the dub.
+      To fix a line, click it and change its English, speaker or voice in <b>Details</b>, then press <b>↻ Redo</b>: only those lines are voiced again.
+      <b>Keep the dub</b> once you're happy. <b>Redub with these changes</b> dubs the whole episode again, for changes to songs or subtitles.</div>`
+      : d.redub ? `<div class="rv-note">This episode is dubbed. Everything here can still be changed: <b>Redub with these changes</b> puts the original back and dubs again from this point, keeping the analysis (no need to wait for it again). Hear <b>Dub</b> to listen to the current dub.</div>`
       : d.editable ? "" : d.can_hold ? `<div class="rv-note">You can look now. To change anything before it's dubbed, press <b>Stop for review</b>: the job pauses here even with nothing flagged.</div>`
       : `<div class="rv-note">This job is past its review step, so you can look but not change anything yet. Once it's dubbed, open the review again from its check page to change anything and redub.</div>`}
     <div class="rv-body">
@@ -266,7 +275,7 @@ function rvShell() {
       <div class="rv-keys">
         <span><kbd>Space</kbd> play / pause</span><span><kbd>←</kbd><kbd>→</kbd> 1 s</span><span><kbd>Shift</kbd>+<kbd>←</kbd><kbd>→</kbd> 5 s</span>
         ${d.editable ? `<span><kbd>I</kbd> <kbd>O</kbd> song starts / ends here</span><span><kbd>K</kbd> keep original</span><span><kbd>D</kbd> dub</span><span><kbd>S</kbd> song</span><span><kbd>Delete</kbd> remove region</span>` : ""}
-        <span><kbd>N</kbd> <kbd>P</kbd> next / previous to check</span><span><kbd>Z</kbd> zoom</span>
+        <span><kbd>N</kbd> <kbd>P</kbd> next / previous to check</span>${RV.vf ? `<span><kbd>A</kbd> A/B: original, then dub</span>` : ""}<span><kbd>Z</kbd> zoom</span>
       </div>
     </div>
   </div>`;
@@ -276,7 +285,8 @@ function rvShell() {
 
 function rvTabs() {
   const d = RV.data;
-  const tabs = [["subs", "Subtitles", d.cues.length || d.lines.length], ["voices", "Voices", d.speakers.length],
+  const main = RV.vf ? rvMoments("check") : [];
+  const tabs = [...(RV.vf ? [["check", "Check", `${main.filter((i) => RV.ticks.has(i)).length}/${main.length}`]] : []), ["subs", "Subtitles", d.cues.length || d.lines.length], ["voices", "Voices", d.speakers.length],
     ["look", "Needs a look", d.flags.length], ["kept", "Kept", rvKeptItems().length], ["songs", "Songs", rvSongSections().length],
     ["rules", "Show rules", (d.rules.regions || []).length]];
   $("#rvTabs").innerHTML = tabs.map(([k, t, n]) => `<button data-tab="${k}" class="${RV.tab === k ? "on" : ""}">${t}<span class="n">${n}</span></button>`).join("");
@@ -322,6 +332,7 @@ function rvSubsMode(mode) {
   }
 }
 function rvSeek(t) {
+  rvStopAB();
   const v = $("#rvv");
   t = Math.max(0, Math.min(RV.data.duration, t));
   if (v && v.readyState) pairedSeek(v, rvAudio(RV.hear), t);
@@ -387,7 +398,8 @@ function rvClock() {
   $("#rvTime").textContent = `${fmtT(t)} / ${fmtT(RV.data.duration, false)}${RV.loading ? " · loading…" : ""}`;
   const r = regionsNow().find((x) => t >= x.start && t <= x.end && x.action === "keep");
   const ln = RV.data.lines.find((l) => t >= l.start && t <= l.end && (l.kind === "speech" || l.kind === "song"));
-  $("#rvTag").innerHTML = r ? `<span class="chip keep">♪ ${esc(RV_KINDS[r.kind] || "Song")} · keeps original</span>`
+  $("#rvTag").innerHTML = RV.ab ? (RV.ab.phase === "A" ? `<span class="chip plain">A · original</span>` : `<span class="chip dub">B · the dub</span>`)
+    : r ? `<span class="chip keep">♪ ${esc(RV_KINDS[r.kind] || "Song")} · keeps original</span>`
     : ln && ln.kind === "speech" ? `<span class="chip dub">Dubbed · <span class="vdot" style="background:${rvColor(lineWho(ln))}"></span>${esc(whoLabel(lineWho(ln)))}</span>` : "";
   if (RV.follow && RV.tab === "subs") {
     const rows = $("#rvList").querySelectorAll(".srow");
@@ -424,7 +436,8 @@ function rvList() {
   const tab = RV.tab;
   const keepScroll = RV.listTab === tab ? box.scrollTop : 0;
   RV.listTab = tab;
-  if (tab === "subs") box.innerHTML = rvSubRows();
+  if (tab === "check") box.innerHTML = rvCheckRows();
+  else if (tab === "subs") box.innerHTML = rvSubRows();
   else if (tab === "voices") box.innerHTML = rvVoiceRows();
   else if (tab === "look") {
     const n = RV.data.flags.filter(flagDecided).length;
@@ -455,6 +468,101 @@ function rvList() {
   rvListWire();
   rvClock();
   rvShowSelected();
+}
+// Check: what's worth a listen in the finished dub ---------------------------------------------------
+// Nothing is left out: what most needs a listen first, each song as one row, then every other note.
+function rvMoments(group) {
+  return RV.vf.moments.map((m, i) => (m.group === group ? i : -1)).filter((i) => i >= 0);
+}
+function rvFrees() { return RV.vf ? (RV.vf.original.exists ? RV.vf.original.size : 0) + (RV.vf.work_size || 0) : 0; }
+function rvGB(n) { return (n / 1e9).toFixed(2) + " GB"; }
+function rvCheckRows() {
+  const ms = RV.vf.moments, ids = rvMoments(RV.vgroup);
+  const groups = VF_TABS.map(([g, label]) => {
+    const all = rvMoments(g);
+    return `<button data-vgroup="${g}" class="${RV.vgroup === g ? "on" : ""}">${label} ${all.filter((i) => RV.ticks.has(i)).length}/${all.length}</button>`;
+  }).join("");
+  const rows = ids.map((i) => {
+    const m = ms[i], ln = m.line != null && RV.data.lines.find((l) => l.id === m.line);
+    const sel = RV.m === i || (ln && RV.sel && RV.sel.type === "line" && RV.sel.id === ln.id);
+    return `<div class="frow vfm ${RV.ticks.has(i) ? "ticked" : ""} ${sel ? "sel" : ""}" data-m="${i}" data-a="${m.t}" data-b="${m.end || m.t + 4}">
+      <button class="tick" data-tick="${i}" title="Tick it off once you've listened" aria-label="Listened">✓</button>
+      <div><span class="rv-time muted">${fmtT(m.t, false)}</span> <b>${esc(m.title)}</b>${m.detail ? `<span class="d">${esc(m.detail)}</span>` : ""}
+        <div class="row" style="margin-top:6px;gap:6px"><button class="sm" data-ab="${i}" title="Play these few seconds as the original, then as the dub (A)">A/B</button>
+          ${ln ? (RV.redo[ln.id] ? `<span class="chip dub">↻ On the Redo list</span>` : `<span class="small muted">Click to fix this line in Details</span>`) : ""}</div></div></div>`;
+  }).join("");
+  return `<div class="seg rv-vgroups">${groups}</div>` + (rows || `<div class="rv-empty">${ms.length ? "Nothing here." : "Nothing stood out. Play a few scenes to be sure."}</div>`);
+}
+function rvGoMoment(i, noSeek = false) {
+  const m = RV.vf.moments[i];
+  if (!m) return;
+  rvStopAB();
+  RV.m = i;
+  const ln = m.line != null && RV.data.lines.find((l) => l.id === m.line);
+  RV.sel = ln ? { type: "line", id: ln.id } : null;
+  if (!noSeek) rvSeek(Math.max(0, m.t - 2));
+  rvList(); rvInspector();
+  const row = document.querySelector(`#rvList .vfm[data-m="${i}"]`);
+  if (row) { row.scrollIntoView({ block: "nearest" }); RV.holdList = Date.now() + 4000; }
+}
+function rvHearSet(h) {
+  RV.hear = h;
+  $("#rvHear").querySelectorAll("button").forEach((b) => b.classList.toggle("on", b.dataset.v === h));
+  rvSync(true);
+}
+// A/B: the same few seconds as the original, then as the dub.
+function rvAB(i) {
+  const m = RV.vf.moments[i], v = $("#rvv");
+  if (!m || !v || !v.readyState) return;
+  const a = Math.max(0, m.t - 1.5), b = Math.min(RV.data.duration, m.t + 4.5);
+  rvGoMoment(i, true);
+  RV.ab = { phase: "A", a, b };
+  rvHearSet("orig");
+  pairedSeek(v, null, a);
+  v.play().catch(() => {});
+  clearInterval(RV.abTimer);
+  RV.abTimer = setInterval(() => {
+    if (!RV || !RV.ab) return clearInterval(RV && RV.abTimer);
+    if (v.paused && !v._pairBusy) return;
+    if (v.currentTime < RV.ab.b) return;
+    if (RV.ab.phase === "A") {
+      RV.ab.phase = "B";
+      rvHearSet("dub");
+      pairedSeek(v, $("#rvDub"), RV.ab.a);
+    } else { v.pause(); rvStopAB(); }
+    rvClock();
+  }, 100);
+  rvClock();
+}
+function rvStopAB() { if (RV && RV.ab) { RV.ab = null; clearInterval(RV.abTimer); } }
+function rvTick(i) {
+  RV.ticks.has(i) ? RV.ticks.delete(i) : RV.ticks.add(i);
+  store.set(`ticks.${RV.id}`, [...RV.ticks]);
+  rvList();
+}
+async function rvDecide(verdict, question, done) {
+  const n = Object.keys(RV.redo).length;
+  const lost = [n ? `${n} line${n === 1 ? " is" : "s are"} on the Redo list` : "", RV.dirty ? "you have unsaved changes" : ""].filter(Boolean).join(" and ");
+  if (!confirm((lost ? `${lost[0].toUpperCase() + lost.slice(1)}; they're dropped.\n\n` : "") + question)) return;
+  try {
+    const r = await api(`/jobs/${RV.id}/verify`, { body: { verdict } });
+    RV.redo = {}; RV.dirty = false;
+    toast(r.message || done);
+    location.hash = "#queue";
+  } catch (e) { toast(e.message); }
+}
+function rvCheckSummary() {
+  const v = RV.vf, q = v.qc;
+  return `<h4>When you're happy with it</h4>
+    <div class="grid">
+      <span class="lab">Original</span><span>${v.original.exists ? `${rvGB(v.original.size)}, set aside next to the dub` : "already gone"}</span>
+      <span class="lab">Dubbed lines</span><span>${q.dubbed_lines ?? "?"}${q.fallback_rate != null ? ` · ${(q.fallback_rate * 100).toFixed(1)} % left in Japanese` : ""}</span>
+      ${q.readback && q.readback.lines ? `<span class="lab">Listened back</span><span>${q.readback.lines - q.readback.hard_to_hear} of ${q.readback.lines} lines heard clearly in the finished track${q.dub_channels === 6 ? " · 5.1" : ""}</span>` : ""}
+      ${q.free_timing ? `<span class="lab">Timing</span><span>latest start ${q.free_timing.max_wait_s} s after its original</span>` : ""}
+      <span class="lab">Working files</span><span>${rvGB(v.work_size || 0)}, kept so you can change and redo</span>
+    </div>
+    <p class="muted small" style="margin:8px 0 0"><b>Keep the dub</b> deletes the original and the working files, for good.
+      <b>Put the original back</b> deletes the dub instead. Click a moment to fix its line here.</p>`;
 }
 function rvRegionRow(r) {
   const sel = RV.sel && RV.sel.type === "region" && RV.sel.id === r.id;
@@ -629,6 +737,10 @@ function rvListWire() {
     a.play().catch(() => toast("Couldn't play the sample"));
   }));
   box.querySelectorAll("[data-flag]").forEach((row) => (row.onclick = () => rvGoFlag(Number(row.dataset.flag))));
+  box.querySelectorAll(".vfm[data-m]").forEach((row) => (row.onclick = () => rvGoMoment(Number(row.dataset.m))));
+  box.querySelectorAll("[data-tick]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); rvTick(Number(b.dataset.tick)); }));
+  box.querySelectorAll("[data-ab]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); rvAB(Number(b.dataset.ab)); }));
+  box.querySelectorAll("[data-vgroup]").forEach((b) => (b.onclick = () => { RV.vgroup = b.dataset.vgroup; RV.m = -1; rvList(); box.scrollTop = 0; }));
   box.querySelectorAll("[data-region]").forEach((row) => (row.onclick = () => {
     const r = regionsNow().find((x) => x.id === row.dataset.region);
     RV.sel = { type: "region", id: r.id }; rvSeek(r.start); rvList(); rvInspector();
@@ -886,6 +998,7 @@ document.addEventListener("click", (ev) => {
 function rvInspector() {
   const box = $("#rvIns"), d = RV.data, s = RV.sel, ed = d.editable;
   if (!box) return;
+  if (!s && RV.tab === "check" && RV.vf) { box.innerHTML = rvCheckSummary(); return; }
   if (!s) {
     box.innerHTML = `<h4>Details</h4><div class="muted small">Click a region, a subtitle or a speaker to see why Ai Dub decided what it did${ed ? " and change it" : ""}.
       ${d.flags.length ? `Start with <a href="#" id="rvFirst">the first thing to check</a>.` : ""}</div>`;
@@ -1220,10 +1333,10 @@ function rvWire() {
   v.onseeked = () => rvSync(false);
   v.ontimeupdate = () => { rvSync(false); rvClock(); if (!RV.looping) { try { rvDraw(); } catch (e) { /* drawn next time */ } } };
   v.onloadedmetadata = () => { if (RV.t) v.currentTime = RV.t; };
-  $("#rvPlay").onclick = () => { if (v._pairBusy) $("#rvPlay").textContent = pairedToggle(v) ? "❚❚" : "▶"; else pairedToggle(v); };
+  $("#rvPlay").onclick = () => { rvStopAB(); if (v._pairBusy) $("#rvPlay").textContent = pairedToggle(v) ? "❚❚" : "▶"; else pairedToggle(v); };
   $("#rvBack").onclick = () => rvSeek(rvNow() - 5);
   $("#rvFwd").onclick = () => rvSeek(rvNow() + 5);
-  segWire("#rvHear", (val) => { RV.hear = val; rvSync(true); });
+  segWire("#rvHear", (val) => { rvStopAB(); RV.hear = val; rvSync(true); });
   segWire("#rvRate", (val) => { v.playbackRate = Number(val); rvSync(false); });
   segWire("#rvSubs", (val) => rvSubsMode(val));
   segWire("#rvZoom", (val) => rvZoom(val));
@@ -1245,6 +1358,12 @@ function rvWire() {
       rvShell(); rvMedia(); rvList(); rvInspector(); rvDraw();
     };
   }
+  if ($("#rvGood")) $("#rvGood").onclick = () => {
+    const main = rvMoments("check"), left = main.filter((i) => !RV.ticks.has(i)).length, o = RV.vf.original;
+    rvDecide("good", (left > 0 ? `You haven't ticked ${left} of the ${main.length} moments to check yet.\n\n` : "")
+      + `Keep this dub and permanently delete the original${o.exists ? ` (${rvGB(o.size)})` : ""} and the working files? This can't be undone.`, "Kept");
+  };
+  if ($("#rvRestore")) $("#rvRestore").onclick = () => rvDecide("restore", "Put the original back and delete this dub?", "Original put back");
   if ($("#rvHold")) $("#rvHold").onclick = async () => {
     try {
       const r = await api(`/jobs/${RV.id}/review/hold`, { body: {} });
@@ -1477,6 +1596,10 @@ document.addEventListener("keydown", (ev) => {
   else if (k === "k" || k === "K") act("keep");
   else if (k === "d" || k === "D") act("dub");
   else if (k === "s" || k === "S") act("song");
+  else if ((k === "n" || k === "N" || k === "p" || k === "P") && RV.tab === "check" && RV.vf) {
+    const ids = rvMoments(RV.vgroup), n = ids.length, at = ids.indexOf(RV.m);
+    if (n) rvGoMoment(ids[k === "n" || k === "N" ? (at + 1) % n : (Math.max(at, 0) - 1 + n) % n]);
+  } else if ((k === "a" || k === "A") && RV.vf) rvAB(RV.m >= 0 ? RV.m : rvMoments(RV.vgroup)[0]);
   else if ((k === "n" || k === "N") && RV.data.flags.length) rvGoFlag((RV.flag + 1) % RV.data.flags.length);
   else if ((k === "p" || k === "P") && RV.data.flags.length) rvGoFlag((RV.flag - 1 + RV.data.flags.length) % RV.data.flags.length);
   else if (k === "z" || k === "Z") {

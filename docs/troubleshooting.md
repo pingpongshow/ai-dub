@@ -119,26 +119,25 @@ by itself from the step it was on.
 
 ## The dub doesn't sound right
 
-Everything here can be fixed on the review page. Open it from the check
-screen (**Review and change…**) or from History, change what's wrong, and
-press **Redub with these changes**. The analysis is kept, so only
-translation and voicing run again. For one or two lines, use **↻ Voice again** or
-**Change words…** on the check screen. It works on a flagged moment, or on the
-line playing under the player. Only those lines are voiced again, with fresh
-takes.
+Everything here can be fixed on the review page, where a finished dub is
+checked. For one or two lines, select the line (a moment on the **Check** tab, a
+subtitle, or the timeline), change its English, speaker or voice in **Details**,
+and press **↻ Redo**: only those lines are voiced again, with fresh takes. For
+bigger changes, press **Redub with these changes**. The analysis is kept, so only
+translation and voicing run again.
 
 | Problem | Fix |
 |---|---|
-| Foreign speech left in | The check screen lists the lines that stayed in the original language. Usually every take was heard back wrong, often a sound word or name recognition can't spell ("peep-oo"). **↻ Voice again** or **Change words…** on the check screen, or on the review page set the stretch to **Dub** (key D). |
+| Foreign speech left in | The **Check** tab lists the lines that stayed in the original language. Usually every take was heard back wrong, often a sound word or name recognition can't spell ("peep-oo"). **↻ Redo this line**, with new English if it needs it, or set the stretch to **Dub** (key D). |
 | Voices sound spliced in over a noisy scene | Check that `mix.room_tone` is on: it keeps the scene's background noise steady under the English lines. If one speaker stands out as much louder, lower `mix.level_spread` (0 is the default). |
 | The original voice can be heard behind the dub, like an echo | On a 5.1 film this is speech in the surround channels. Check that `stages.separate.surrounds` is on; a dub made before it was needs to be queued again with **Redo** to separate them. On stereo, the separation left some voice in the music: there is no setting for that. |
 | Shouts and whispers sound too alike, or flat | Raise `mix.level_spread` (to `0.5`, say) and lower `mix.even_within` (to `2`) |
 | Delivery sounds overdone, or flat | Lower or raise `speak.emo_alpha` (default `0.6`) |
-| Word endings sound cut off | The trim keeps a final consonant that is still sounding; if a word still sounds short, **↻ Voice again** gives the line fresh takes |
-| Loud lines crackle or sound clipped | The voice model's output is turned down before it would be cut at full scale. A take that still sounds rough: **↻ Voice again**. |
+| Word endings sound cut off | The trim keeps a final consonant that is still sounding; if a word still sounds short, **↻ Redo this line** gives it fresh takes |
+| Loud lines crackle or sound clipped | The voice model's output is turned down before it would be cut at full scale. A take that still sounds rough: **↻ Redo this line**. |
 | A song was dubbed | Mark it as a song: **♪ Mark a song**, or select it and press S. Mark it "for every episode" if it's the opening or ending. |
 | Speech was kept as if it were a song | Select the region and press D (dub) |
-| A line has the wrong voice | On the check screen, **Voice…** on the line: hear each speaker's clip and give it to the right one. If the speaker is right but their voice is wrong, find a line of theirs that sounds right in the original and press **Make this line their voice**, then voice their other lines again with it. On the review page the same is under the line, and the ▾ by the speaker's name. If two characters keep getting mixed up, merge or split them on **Shows → Voices**. |
+| A line has the wrong voice | Select the line and press the speaker's name: hear each speaker's clip and give it to the right one. If the speaker is right but their voice is wrong, find a line of theirs that sounds right in the original and press **Make this line their voice** under it; their other lines go on the **↻ Redo** list with it. If two characters keep getting mixed up, merge or split them on **Shows → Voices**. |
 | A line is in a voice of the wrong gender, or someone else's | Speaker detection is least sure of voices with only a few seconds of speech: those lines borrow another character's voice, picked by how the speaker sounds. The review page flags them as "Dubbed with a borrowed voice" with the voices they sound most like; give the lines to the right person (on a finished dub this puts them on the **↻ Redo** list). |
 | Two people share one character (one voice for both, or the wrong one) | The review page flags "may be more than one person" with the lines in question. Give them to the right speaker or a new one; on a finished dub this puts them on the **↻ Redo** list. On **Shows → Voices**, split the other person's clips off into a character of their own. |
 | One person is split into several voices | Merge them on **Shows → Voices**, or try the "sound like the same person?" suggestions. You can also lower `speakers.link_threshold`. |

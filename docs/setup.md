@@ -176,7 +176,7 @@ Open `http://<server>:8790`.
    **Test** next to Bazarr's address.
 5. **Try one short episode.** Queue it with **Review before dubbing: Always**,
    so that you see what Ai Dub found before it spends time voicing. Check the
-   result on the check screen, then keep the dub or put the original back.
+   result on the review page's Check tab, then keep the dub or put the original back.
 
 A no-risk test from the command line dubs the first five minutes into a
 separate file and never touches the source:

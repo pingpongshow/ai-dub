@@ -111,6 +111,7 @@ button.chip { border: 0; cursor: pointer; font: inherit; font-size: 12px; font-w
 .said.japanese { color: var(--bad); font-weight: 600; }
 .said-box { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
 .said-box textarea, .rv-ins textarea { width: 100%; font-family: inherit; font-size: 13px; }
+.rv-vgroups { margin: 8px 10px; }
 .vsep { width: 1px; align-self: stretch; background: var(--line); margin: 0 4px; }
 .vfm { grid-template-columns: 30px minmax(0, 1fr); align-items: start; }
 .vfm .tick { width: 26px; height: 26px; padding: 0; border-radius: 50%; color: transparent; border: 1.5px solid var(--line); background: none; }

@@ -136,7 +136,7 @@ clear error rather than silently using another.
   start and end. Only then does the new file take the original's name. The
   original is set aside as `<name>.<ext>.aidub-original`.
 - A set-aside original is deleted only when you say so: **✓ Keep the dub** on
-  the check screen, or **Delete** on the **Originals** page. Nothing deletes
+  the Check tab, or **Delete** on the **Originals** page. Nothing deletes
   it on a timer.
 - Files that already have English audio are skipped. So are files whose
   untagged audio turns out to be English, and files already dubbed by Ai Dub
@@ -240,17 +240,15 @@ Keys: Space play/pause · ←/→ seek 1 s (Shift: 5 s) · K keep · D dub · S 
 · N/P next/previous flag · I/O song start/end · Z zoom · Delete removes a
 region.
 
-The review is available after a dub too. Open it from the job, change
-anything, and press **Redub with these changes**. The original goes back,
-and the job restarts from its review step without redoing the analysis. To fix
-a few lines only, voice them again from the check screen (below).
+The review is available after a dub too, and that is where you check it
+(below).
 
 ### Check (after dubbing)
 
 When a dub finishes, Ai Dub deletes its working files but keeps a small
-preview and the review data. Then it asks you to check the dub. The check
-screen plays the preview with the original sound or the dub, and nothing is
-left off its three lists:
+preview and the review data. Then it asks you to check the dub, on the same
+review page: it opens on its **Check** tab, and **Hear** gains a **Dub**
+choice beside the original. Nothing is left off the Check tab's three lists:
 
 - **To check**: lines left in the original language, subtitles nothing voiced,
   lines hard to hear in the mix, takes with an unclear word (including nearly
@@ -261,38 +259,42 @@ left off its three lists:
   from the speech, lines voiced from their own clip).
 
 Tick each one off as you go. For each, **A/B** plays the original and then the
-dub. Keys: Space, ←/→, N/P (within the list), D (hear the dub), O (hear the
-original).
+dub (key A). N/P move through the list.
 
 Before any of this, the **Listen back** step has already heard the finished
 track: a track silent while the original plays, or one where most lines can't be
 made out, stops the job with the original untouched.
 
-A line that came out wrong (a word missing or mangled, or a voice that isn't
-them: **Try the other voice**) can be fixed right there:
+A line that came out wrong is fixed in **Details**: click its moment on the
+Check tab, or any line on the Subtitles tab or the timeline.
 
-- **↻ Voice again** keeps the same words.
-- **Change words…** lets you edit the English first.
-- **Voice…** shows who the line is voiced as and from which clip, with every
-  speaker's voice clip to hear (▶). Give the line to the right speaker, or to a new
-  one. If a line sounds right in the original and is that speaker, **Make this line
-  their voice**: its audio becomes the clip they are voiced from (kept, so it is used
-  first, here and in later episodes), and the other lines using their usual voice can
-  be voiced again with it in one go.
+- **↻ Redo this line** voices it again; type new English first to change the
+  words, including on the Subtitles tab (**✎ Change English**).
+- **Try the other voice** voices it from its own clip instead of the speaker's
+  usual voice, or the other way round.
+- The speaker's name opens the list of speakers, each with their voice clip to
+  hear (▶). Give the line to the right one, or to a new speaker.
+- If a line sounds right in the original and is that speaker, **Make this line
+  their voice**: its audio becomes the clip they are voiced from (kept, so it is
+  used first, here and in later episodes), and their lines using the usual voice
+  go on the Redo list with it.
 
-This works for any flagged moment, and for whatever line is playing (shown
-under the player). Then press **Voice them again**. Only those lines are
-redone, each with four fresh takes, and the dub comes back to be checked.
+Every line you change goes on one list. **↻ Redo** at the top voices just those
+lines again, each with four fresh takes; every other line keeps its voice, and the
+dub comes back to be checked.
 
-Then choose one:
+Then choose one, at the top of the page:
 
-- **✓ Keep the dub**: deletes the set-aside original and the check files,
+- **✓ Keep the dub**: deletes the set-aside original and the working files,
   and shows how much space that frees.
 - **Put the original back**: deletes the dub.
-- **Review and change…**: opens the review page to change things and
-  redub. On older dubs without review data, this button is **Redo with
-  review**, which puts the original back and queues the episode again with a
-  review stop.
+- **Redub with these changes**: for changes to songs, subtitles or what is kept,
+  puts the original back and dubs the episode again from its review step,
+  without redoing the analysis.
+
+Older dubs without review data still have a check page of their own, with
+**Redo with review** to put the original back and queue the episode again with
+a review stop.
 
 To turn the check off, see [`verify.enabled`](docs/configuration.md#settings-worth-knowing).
 
