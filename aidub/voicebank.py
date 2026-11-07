@@ -31,6 +31,19 @@ def _bleed_db(dlg: np.ndarray, mne: np.ndarray) -> float:
     return 20 * np.log10(m / d)
 
 
+REF_QUIET_DB = 12.0  # a reference clip's quiet parts this far under its speech, or it ranks last
+
+
+def quiet_db(x: np.ndarray, sr: int) -> float:
+    """How loud a clip's quiet parts are against its speech, in dB (below 0; nearer 0 = echo or noise)."""
+    hop = int(sr * 0.02)
+    n = len(x) // hop
+    if n < 10:
+        return -99.0
+    e = 10 * np.log10((x[: n * hop].reshape(n, hop) ** 2).mean(axis=1) + 1e-12)
+    return float(np.percentile(e, 20) - np.percentile(e, 90))
+
+
 def _at_least(a: float, b: float, seconds: float) -> list[float]:
     grow = max(0.0, seconds - (b - a)) / 2
     return [max(0.0, a - grow), b + grow]
@@ -201,10 +214,14 @@ def update_refs(job: Job, prof: Profile, mapping: dict[str, str], lines: list[L.
         centroid = prof.characters[cid].get("embedding") or []
         sim = speakers.cosine(emb, centroid) if centroid else 0.5
         a, b = int(start * sr), int(end * sr)
+        # Echoey or noisy between words: the voice model copies that into every take (one such
+        # clip, 8 dB, made a borrowed voice sound ghostly). Ranked last, not refused: continuous
+        # speech can read the same way, and a character with nothing else still needs a clip.
+        echoey = quiet_db(dlg[a:b, 0], sr) > -REF_QUIET_DB
         bleed = _bleed_db(dlg[a:b, 0], mne[a:b, 0]) if mne is not None else -20.0
         # Prefer consistent voice, little music under it, 6-10 s long.
         length_pref = 1.0 - min(1.0, abs(d - 8.0) / 8.0)
-        score = 0.6 * sim + 0.3 * float(np.clip((-bleed - 3) / 25, 0, 1)) + 0.1 * length_pref
+        score = 0.6 * sim + 0.3 * float(np.clip((-bleed - 3) / 25, 0, 1)) + 0.1 * length_pref - (0.5 if echoey else 0.0)
         cand = {"clips": [[start, end]], "duration": d, "score": round(score, 4), "sim": sim,
                 "bleed": round(bleed, 1), "emb": emb}
         (by_char if d >= lo else short)[cid].append(cand)

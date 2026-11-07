@@ -46,7 +46,8 @@ def separate(args):
         sep.model_instance.output_dir = str(out)
     files = sep.separate(args["input"])
     paths = [Path(f) if Path(f).is_absolute() else out / f for f in files]
-    vocals = next((p for p in paths if "(vocals)" in p.name.lower()), None)
+    want = f"({args.get('stem') or 'vocals'})"  # the part kept: vocals, or noreverb from an echo-removal model
+    vocals = next((p for p in paths if want in p.name.lower()), None)
     other = next((p for p in paths if p is not vocals), None)
     if not vocals or not other:
         raise RuntimeError(f"unexpected separator output: {[p.name for p in paths]}")

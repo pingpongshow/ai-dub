@@ -2050,6 +2050,21 @@ def test_the_background_holds_steady_under_a_dubbed_line():
     assert float(np.abs(silent).max()) == 0.0
 
 
+def test_room_tone_takes_only_the_quietest_moments_not_voices_between_lines():
+    from aidub import mix
+    rnd = np.random.default_rng(7)
+    n = mix.SR * 30
+    hiss = rnd.normal(0, 0.002, (n, 1)).astype(np.float32)
+    dlg = hiss.copy()
+    for s in range(1, 29, 3):                       # someone talking in the "gaps", no line covers it
+        dlg[mix.SR * s: mix.SR * s + mix.SR // 2] += rnd.normal(0, 0.05, (mix.SR // 2, 1)).astype(np.float32)
+    lines = [L.Line(1, 14.6, 15.4)]
+    g = mix.keep_gain(n, [(14.6, 15.4)], 0.03)
+    room = mix.room_tone(dlg, g, mix.between_lines(n, lines))
+    under = room[int(mix.SR * 14.7): int(mix.SR * 15.3)]
+    assert float(under.std()) < 0.004               # the hiss, not the talk (0.05)
+
+
 def test_surrounds_are_separated_only_when_the_speech_reaches_them():
     from aidub import separate
     rnd = np.random.default_rng(5)

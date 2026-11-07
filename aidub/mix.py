@@ -178,7 +178,11 @@ def room_tone(dlg: np.ndarray, g: np.ndarray, free: np.ndarray, grain_s: float =
         if hi - lo < 4:
             continue
         near, loud = places[lo:hi], level[lo:hi]
-        near = near[loud <= np.median(loud) * 2.0]  # (a breath or a word no line covers isn't room)
+        # Only the quietest moments: in a busy scene most "gaps" hold voices no line covers, and
+        # repeated under a dubbed line their fragments sound like a ghostly echo of speech.
+        near = near[loud <= float(np.percentile(loud, 15))]
+        if len(near) < 3:
+            continue
         for at in range(max(0, a - hop), min(b + hop, len(out) - size), hop):
             k = int(rnd.choice(near))
             out[at:at + size] += dlg[k:k + size] * window
