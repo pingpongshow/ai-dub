@@ -658,7 +658,7 @@ function englishRow(l, ed) {
       ${can ? `<textarea data-redo-en="${l.id}" rows="2" placeholder="New English for this line (optional)">${esc((pending && pending.en) || "")}</textarea>
         <span class="row"><button class="sm ${pending ? "primary" : ""}" data-redo="${l.id}">${pending ? "✓ Will be redone" : "↻ Redo this line"}</button>
           ${pending ? `<button class="sm ghost" data-unredo="${l.id}">Don't redo</button>` : ""}</span>
-        ${l.kind === "speech" ? `<span class="muted">Voice: ${/^own line/.test(l.voice_note || "") ? "from this line's own clip" : esc(l.voice_note || "the speaker's usual voice")}</span>
+        ${l.kind === "speech" ? `<span class="muted">Voice: ${esc(voiceFrom(l.voice_note || ""))}</span>
         <span class="row"><button class="sm ${pending && pending.other_voice ? "primary" : ""}" data-other="${l.id}"
           title="Voice it from ${/^own line/.test(l.voice_note || "") ? "the speaker's usual voice" : "this line's own clip"} instead">${pending && pending.other_voice ? "✓ Other voice" : "Try the other voice"}</button></span>` : ""}` : ""}</span>`;
   }
@@ -695,6 +695,13 @@ function wireEnglish(box) {
     delete RV.redo[Number(b.dataset.unredo)];
     rvRedoButton(); rvInspector(); rvList(); rvDraw();
   }));
+}
+// Where a dubbed line's voice came from, in words.
+function voiceFrom(note) {
+  const mine = /your choice/.test(note) ? " (your choice)" : "";
+  if (/^own line/.test(note)) return `this line's own clip${mine}`;
+  if (/^(voice of|generic voice)/.test(note)) return note;
+  return `the speaker's usual voice${mine}`;
 }
 function rvRedoButton() {
   const b = $("#rvRedo");
