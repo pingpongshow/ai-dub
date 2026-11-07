@@ -273,8 +273,12 @@ them: **Try the other voice**) can be fixed right there:
 
 - **↻ Voice again** keeps the same words.
 - **Change words…** lets you edit the English first.
-- **Other speaker…** opens the line on the review page to give it another
-  voice.
+- **Voice…** shows who the line is voiced as and from which clip, with every
+  speaker's voice clip to hear (▶). Give the line to the right speaker, or to a new
+  one. If a line sounds right in the original and is that speaker, **Make this line
+  their voice**: its audio becomes the clip they are voiced from (kept, so it is used
+  first, here and in later episodes), and the other lines using their usual voice can
+  be voiced again with it in one go.
 
 This works for any flagged moment, and for whatever line is playing (shown
 under the player). Then press **Voice them again**. Only those lines are

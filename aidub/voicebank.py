@@ -79,6 +79,9 @@ def closest_ref(prof: Profile, cid: str, emb: list | None) -> dict | None:
     refs = prof.refs(cid)
     if not refs:
         return None
+    kept = [r for r in refs if r.get("locked")]
+    if kept:  # the clips you chose (Keep, or a line you said is their voice) are theirs
+        refs = kept
     if not emb:
         return refs[0]
     scored = [(speakers.cosine(emb, r["embedding"]), r) for r in refs if r.get("embedding")]

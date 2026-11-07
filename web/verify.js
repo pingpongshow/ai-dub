@@ -18,6 +18,8 @@ async function pageVerify(id) {
     redo: store.get(`redo.${id}`, {}), now: null };
   VF.tab = d.moments.some((m) => (m.group || "check") === "check") ? "check" : d.moments.some((m) => m.group === "songs") ? "songs" : "notes";
   VF.en = Object.fromEntries((d.lines || []).map(([lid, , , en]) => [lid, en]));
+  VF.line = Object.fromEntries((d.lines || []).map(([lid, a, b, , who, kind]) => [lid, { a, b, who, kind }]));
+  VF.speakers = d.speakers || [];
   d.moments.forEach((m) => { if (m.line != null && m.en != null) VF.en[m.line] = m.en; });
   const frees = (d.original.exists ? d.original.size : 0) + (d.work_size || 0);
   const base = `/api/jobs/${id}/verify/media/`;
@@ -266,13 +268,51 @@ function vfActionHtml(lid) {
     return `<div class="row" style="gap:6px"><button class="sm" data-vo="${lid}" title="Voice this line again with the same words: fresh takes, the best one is kept">↻ Voice again</button>
       <button class="sm" data-vv="${lid}" title="Voice it again with the other voice: from this line's own clip, or in the character's usual voice">Try the other voice</button>
       <button class="sm ghost" data-vw="${lid}" title="Change the English, then voice it again">Change words…</button>
-      <a class="button sm ghost" href="#review/${VF.id}/${lid}" title="Give the line to another speaker on the review page">Other speaker…</a></div>`;
+      ${VF.speakers.length ? `<button class="sm ghost" data-vp="${lid}" title="Whose voice this line has: hear each speaker, give it to the right one, or make this line their voice">Voice…</button>`
+        : `<a class="button sm ghost" href="#review/${VF.id}/${lid}" title="Give the line to another speaker on the review page">Other speaker…</a>`}</div>
+      ${VF.voiceOpen === lid ? vfVoicePanel(lid) : ""}`;
   }
-  return `<div class="vf-marked"><span class="chip dub">↻ Will be voiced again${r.other_voice ? " in the other voice" : ""}${r.en != null ? " with your words" : ""}</span>
+  const as = r.character ? vfSpeakerName(r.character) : "";
+  return `<div class="vf-marked"><span class="chip dub">↻ Will be voiced again${as ? ` as ${esc(as)}` : ""}${r.other_voice ? " in the other voice" : ""}${r.en != null ? " with your words" : ""}</span>
       ${r.en != null ? `<textarea rows="2" data-ven="${lid}" aria-label="English to voice">${esc(r.en)}</textarea>
         <span class="small muted">Saved as you type. Sent with the others when you press “Voice them again”.</span>` : ""}
       <div class="row" style="gap:6px">${r.en == null ? `<button class="sm ghost" data-vw="${lid}">Change words…</button>` : ""}
         <button class="sm ghost" data-vx="${lid}">Don't voice it again</button></div></div>`;
+}
+function vfSpeakerName(cid) {
+  if (String(cid).startsWith("new:")) return String(cid).slice(4);
+  const s = VF.speakers.find((x) => x.id === cid);
+  return s ? s.name : cid;
+}
+const VF_KIND = { own: "this line's own clip", usual: "their usual voice", other: "another speaker's voice" };
+// Whose voice a line has, and the ways to change it, without leaving the check page.
+function vfVoicePanel(lid) {
+  const ln = VF.line[lid] || {}, who = ln.who, long = (ln.b - ln.a) >= 1.5;
+  const rows = VF.speakers.map((s) => `<div class="row" style="gap:6px;align-items:center">
+      ${s.sample ? `<button class="sm ghost" data-vplay="${esc(s.sample)}" title="Hear ${esc(s.name)}'s voice clip">▶</button>` : `<span style="width:30px"></span>`}
+      <button class="sm ${s.id === who ? "primary" : ""}" data-vgive="${lid}" data-cid="${esc(s.id)}"
+        title="${s.id === who ? "Voice it again as this speaker" : "Give the line to this speaker and voice it again"}">${esc(s.name)}</button>
+      <span class="small muted">${s.lines} line${s.lines === 1 ? "" : "s"}${s.gender ? ` · ${esc(s.gender)}` : ""}${s.id === who ? " · now" : ""}</span></div>`).join("");
+  return `<div class="vf-voice">
+    <div class="small">Voiced as <b>${esc(vfSpeakerName(who) || "nobody")}</b>, from ${esc(VF_KIND[ln.kind] || "their voice")}.</div>
+    <div class="small muted" style="margin:6px 0 4px">Who is really speaking? ▶ hears each speaker's voice clip.</div>
+    <div class="vf-voice-list">${rows}</div>
+    <div class="row" style="gap:6px;margin-top:6px"><button class="sm ghost" data-vnew="${lid}">New speaker…</button></div>
+    <div class="small muted" style="margin:10px 0 4px">${long ? `Does this line sound right in the original, and is it ${esc(vfSpeakerName(who))}? Then it can be their voice:`
+      : "This line is too short to be someone's voice clip (1.5 s or more is needed)."}</div>
+    ${long ? `<button class="sm" data-vas="${lid}" title="This line's original audio becomes the clip ${esc(vfSpeakerName(who))} is voiced from, here and in later episodes">Make this line ${esc(vfSpeakerName(who))}'s voice</button>` : ""}
+    <div data-vasdone="${lid}"></div></div>`;
+}
+let vfSample = null;
+function vfPlaySample(file, btn) {
+  if (vfSample) { vfSample.pause(); if (vfSample.btn) vfSample.btn.textContent = "▶"; }
+  if (vfSample && vfSample.file === file) { vfSample = null; return; }
+  const a = new Audio(`/api/profiles/${encodeURIComponent(VF.d.profile)}/ref?file=${encodeURIComponent(file)}`);
+  Object.assign(a, { file, btn });
+  a.onended = () => { btn.textContent = "▶"; vfSample = null; };
+  btn.textContent = "■";
+  a.play().catch(() => { toast("Couldn't play the clip"); btn.textContent = "▶"; });
+  vfSample = a;
 }
 function vfActions() {
   document.querySelectorAll(".vf-act[data-line]").forEach((box) => (box.innerHTML = vfActionHtml(Number(box.dataset.line))));
@@ -301,6 +341,44 @@ function vfActions() {
     }
   }));
   root.querySelectorAll("[data-vx]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); delete VF.redo[b.dataset.vx]; vfRedoSave(); vfActions(); }));
+  root.querySelectorAll("[data-vp]").forEach((b) => (b.onclick = (e) => {
+    e.stopPropagation();
+    const lid = Number(b.dataset.vp);
+    VF.voiceOpen = VF.voiceOpen === lid ? null : lid; vfActions();
+  }));
+  root.querySelectorAll("[data-vplay]").forEach((b) => (b.onclick = (e) => { e.stopPropagation(); vfPlaySample(b.dataset.vplay, b); }));
+  root.querySelectorAll("[data-vgive]").forEach((b) => (b.onclick = (e) => {
+    e.stopPropagation();
+    VF.redo[b.dataset.vgive] = { character: b.dataset.cid }; VF.voiceOpen = null; vfRedoSave(); vfActions();
+  }));
+  root.querySelectorAll("[data-vnew]").forEach((b) => (b.onclick = (e) => {
+    e.stopPropagation();
+    const name = prompt("Name for the new speaker (their voice comes from this line)", "");
+    if (!name || !name.trim()) return;
+    VF.redo[b.dataset.vnew] = { character: `new:${name.trim()}`, other_voice: true }; VF.voiceOpen = null; vfRedoSave(); vfActions();
+  }));
+  root.querySelectorAll("[data-vas]").forEach((b) => (b.onclick = async (e) => {
+    e.stopPropagation();
+    const lid = b.dataset.vas, box = root.querySelector(`[data-vasdone="${lid}"]`);
+    b.disabled = true;
+    try {
+      const r = await api(`/jobs/${VF.id}/lines/${lid}/as-voice`, { body: { character: (VF.line[lid] || {}).who || "" } });
+      const others = r.usual.filter((x) => String(x) !== String(lid));
+      const sp = VF.speakers.find((s) => s.id === r.character);
+      if (sp) sp.sample = r.ref;
+      box.innerHTML = `<div class="callout" style="margin-top:6px">✓ ${esc(r.message)}.
+        ${others.length ? `<br>${others.length} other line${others.length === 1 ? "" : "s"} use${others.length === 1 ? "s" : ""} ${esc(r.name)}'s usual voice.
+          <button class="sm primary" data-vasall="${esc(r.character)}" data-ids="${others.join(",")}">Voice ${others.length === 1 ? "it" : "them"} again with this voice</button>` : ""}</div>`;
+      VF.redo[lid] = { character: r.character }; vfRedoSave();
+      box.querySelectorAll("[data-vasall]").forEach((x) => (x.onclick = (ev) => {
+        ev.stopPropagation();
+        for (const id of x.dataset.ids.split(",")) VF.redo[id] = { ...(VF.redo[id] || {}), character: x.dataset.vasall };
+        vfRedoSave(); VF.voiceOpen = null; vfActions(); toast(`${others.length + 1} lines to voice again`);
+      }));
+      const n = Object.keys(VF.redo).length;
+      $("#vfRedoBar").hidden = !n; $("#vfRedoN").textContent = `${n} line${n === 1 ? "" : "s"} to voice again`;
+    } catch (err) { toast(err.message); b.disabled = false; }
+  }));
   root.querySelectorAll("[data-ven]").forEach((t) => {
     t.onclick = (e) => e.stopPropagation();
     t.oninput = () => { if (VF.redo[t.dataset.ven]) { VF.redo[t.dataset.ven].en = t.value; vfRedoSave(); } };
@@ -332,7 +410,8 @@ async function vfRedoGo() {
   const lines = {};
   for (const lid of ids) {
     const en = (VF.redo[lid].en || "").trim();
-    lines[lid] = { ...(en && en !== (VF.en[lid] || "") ? { en } : {}), ...(VF.redo[lid].other_voice ? { other_voice: true } : {}) };
+    lines[lid] = { ...(en && en !== (VF.en[lid] || "") ? { en } : {}), ...(VF.redo[lid].other_voice ? { other_voice: true } : {}),
+      ...(VF.redo[lid].character ? { character: VF.redo[lid].character } : {}) };
   }
   const words = Object.values(lines).filter((x) => x.en).length;
   if (!confirm(`Voice ${ids.length} line${ids.length === 1 ? "" : "s"} again${words ? ` (${words} with your words)` : ""}?\n\n`

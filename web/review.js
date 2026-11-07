@@ -660,7 +660,8 @@ function englishRow(l, ed) {
           ${pending ? `<button class="sm ghost" data-unredo="${l.id}">Don't redo</button>` : ""}</span>
         ${l.kind === "speech" ? `<span class="muted">Voice: ${esc(voiceFrom(l.voice_note || ""))}</span>
         <span class="row"><button class="sm ${pending && pending.other_voice ? "primary" : ""}" data-other="${l.id}"
-          title="Voice it from ${/^own line/.test(l.voice_note || "") ? "the speaker's usual voice" : "this line's own clip"} instead">${pending && pending.other_voice ? "✓ Other voice" : "Try the other voice"}</button></span>` : ""}` : ""}</span>`;
+          title="Voice it from ${/^own line/.test(l.voice_note || "") ? "the speaker's usual voice" : "this line's own clip"} instead">${pending && pending.other_voice ? "✓ Other voice" : "Try the other voice"}</button>
+          ${l.end - l.start >= 1.5 ? `<button class="sm ghost" data-asvoice="${l.id}" title="This line's original audio becomes the clip ${esc(whoLabel(lineWho(l)))} is voiced from, here and in later episodes">Make this line ${esc(whoLabel(lineWho(l)))}'s voice</button>` : ""}</span>` : ""}` : ""}</span>`;
   }
   if (!ed || !(l.kind === "speech" || l.kind === "song" || l.kind === "wordless")) return "";
   return `<span class="lab">English</span><span><textarea data-en-pre="${l.id}" rows="2"
@@ -684,6 +685,16 @@ function wireEnglish(box) {
     const id = Number(b.dataset.redo), t = box.querySelector(`[data-redo-en="${id}"]`);
     RV.redo[id] = { en: t ? t.value.trim() : "" };
     rvRedoButton(); rvInspector(); rvList(); rvDraw();
+  }));
+  box.querySelectorAll("[data-asvoice]").forEach((b) => (b.onclick = async () => {
+    const id = Number(b.dataset.asvoice), l = RV.data.lines.find((x) => x.id === id);
+    b.disabled = true;
+    try {
+      const r = await api(`/jobs/${RV.id}/lines/${id}/as-voice`, { body: { character: lineWho(l) || "" } });
+      for (const x of [id, ...r.usual]) RV.redo[x] = { ...(RV.redo[x] || { en: "" }) };
+      toast(`${r.message}: ${r.usual.length + 1 > 1 ? `${r.usual.length + 1} lines` : "the line"} put on the Redo list`);
+      rvRedoButton(); rvInspector(); rvList(); rvDraw();
+    } catch (e) { toast(e.message); b.disabled = false; }
   }));
   box.querySelectorAll("[data-other]").forEach((b) => (b.onclick = () => {
     const id = Number(b.dataset.other), t = box.querySelector(`[data-redo-en="${id}"]`);

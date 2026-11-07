@@ -249,6 +249,15 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
             filtered, out = len(out) - len(keep), keep
         return {"files": out, "skipped": skipped, "filtered": filtered}
 
+    @app.post("/api/jobs/{jid}/lines/{lid}/as-voice")
+    def line_as_voice(jid: int, lid: int, character: str = Body("", embed=True)):
+        try:
+            return svc.line_as_voice(jid, lid, character)
+        except KeyError:
+            bad(404, "no such job")
+        except ValueError as exc:
+            bad(409, str(exc))
+
     @app.post("/api/jobs/{jid}/lines/redo")
     def redo_lines(jid: int, lines: dict = Body(..., embed=True)):
         try:

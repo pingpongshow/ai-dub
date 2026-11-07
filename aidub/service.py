@@ -20,6 +20,31 @@ from .profiles import Profiles, guess_name
 log = logging.getLogger("aidub")
 
 
+LINE_VOICE_MIN_S = 1.5   # shorter than this, a clip gives the voice model too little to go by
+
+
+def _voice_kind(prof, ln) -> str:
+    if not ln.voice:
+        return "own"
+    if "/refs/" in ln.voice and ln.voice.split("/refs/")[-1].split("/")[0] == prof.voice_source(ln.character):
+        return "usual"
+    return "other"
+
+
+def _speakers(prof, lines) -> list[dict]:
+    from collections import Counter
+    count = Counter(ln.character for ln in lines if ln.character and ln.en)
+    out = []
+    for cid, n in count.most_common():
+        ch = prof.characters.get(cid)
+        if not ch:
+            continue
+        refs = prof.refs(cid)
+        out.append({"id": cid, "name": ch.get("name", cid), "lines": n, "gender": ch.get("gender", ""),
+                    "sample": refs[0]["file"] if refs else ""})
+    return out
+
+
 class Service:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -357,8 +382,49 @@ class Service:
         return verify.pending(self.store, self.cfg.work)
 
     def verify_view(self, jid: int) -> dict:
+        from . import lines as L
         from . import verify
-        return verify.view(self.store, self.cfg.work, jid)
+        out = verify.view(self.store, self.cfg.work, jid)
+        j = self.store.get(jid)
+        prof = self.profiles.get(j["profile"]) if j else None
+        work = self.cfg.work / f"job-{jid}"
+        if out.get("can_redo_lines") and prof and (work / "lines.json").exists():
+            # Who speaks each line and from which voice, and every speaker with a clip to hear,
+            # so a voice can be changed from the check page itself.
+            lines = {ln.id: ln for ln in L.load(work / "lines.json")}
+            out["lines"] = [row + [lines[row[0]].character, _voice_kind(prof, lines[row[0]])]
+                            for row in out["lines"] if row[0] in lines]
+            out["speakers"] = _speakers(prof, lines.values())
+            out["profile"] = prof.slug
+        return out
+
+    def line_as_voice(self, jid: int, lid: int, cid: str = "") -> dict:
+        """Make a line's original audio the clip a speaker is voiced from: for a voice that
+        came out wrong when you can point to a line where it's right. Kept, so it is used
+        first, and in this show's later episodes too."""
+        from . import lines as L
+        from . import review
+        j = self.store.get(jid)
+        if not j:
+            raise KeyError(jid)
+        work = self.cfg.work / f"job-{jid}"
+        prof = self.profiles.get(j["profile"])
+        lines = {ln.id: ln for ln in L.load(work / "lines.json")} if (work / "lines.json").exists() else {}
+        ln = lines.get(int(lid))
+        if not prof or not ln:
+            raise ValueError("this dub's lines aren't kept any more")
+        cid = cid or ln.character
+        if cid not in prof.characters:
+            raise ValueError("choose a speaker for this line first")
+        if ln.duration < LINE_VOICE_MIN_S:
+            raise ValueError(f"this line is too short to clone a voice from ({ln.duration:.1f} s); choose one of {LINE_VOICE_MIN_S:.1f} s or more")
+        rel = review.line_as_ref(work, prof, ln, cid)
+        prof.save()
+        src = prof.voice_source(cid)
+        usual = sorted(x.id for x in lines.values() if x.kind == L.SPEECH and x.voice and prof.voice_source(x.character) == src
+                       and f"/refs/{src}/" in x.voice)
+        return {"ok": True, "ref": rel, "character": cid, "name": prof.characters[cid].get("name", cid), "usual": usual,
+                "message": f"this line is now {prof.characters[cid].get('name', cid)}'s voice"}
 
     def verify_verdict(self, jid: int, choice: str) -> dict:
         from . import verify

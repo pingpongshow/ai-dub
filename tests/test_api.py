@@ -321,6 +321,18 @@ def test_redo_a_few_lines_of_a_finished_dub(client, cfg, media_root):
     assert voiced[-1].endswith("takes: 4/4"), voiced[-1]
     assert len(list((work / "lines" / f"{one['id']:05d}").glob("take_*.wav"))) == 4
     assert originals.aside_name(ep).exists() and j["record"]["verify"] == "pending"
+    # A line can be made its speaker's voice from the check page.
+    v = c.get(f"/api/jobs/{jid}/verify").json()
+    assert v["speakers"] and all(len(x) == 6 for x in v["lines"])
+    longest = max((x for x in v["lines"] if x[4]), key=lambda x: x[2] - x[1])
+    res = c.post(f"/api/jobs/{jid}/lines/{longest[0]}/as-voice", json={"character": longest[4]})
+    assert res.status_code == 200, res.text
+    prof = svc.profiles.get(svc.store.get(jid)["profile"])
+    first = prof.refs(longest[4])[0]
+    assert first["file"] == res.json()["ref"] and first["locked"] and (prof.root / first["file"]).exists()
+    short = min(v["lines"], key=lambda x: x[2] - x[1])
+    if short[2] - short[1] < 1.5:
+        assert c.post(f"/api/jobs/{jid}/lines/{short[0]}/as-voice", json={}).status_code == 409
     # The English is remembered for a later redub of the whole episode.
     assert c.get(f"/api/jobs/{jid}/review").json()["decisions"]["lines"][str(one["id"])]["en"] == "A brand new line."
 

@@ -427,6 +427,42 @@ def outcome(ln: L.Line) -> str:
     return "unclear" if UNCLEAR in ln.check_note else "dubbed"
 
 
+def line_as_ref(work: Path, prof, ln: L.Line, cid: str) -> str:
+    """A line's original voice as a kept reference clip of `cid`; its path in the profile."""
+    import hashlib
+    import tempfile
+    import time
+
+    import soundfile as sf
+    own = work / "lines" / f"{ln.id:05d}" / "orig.wav"
+    if own.exists():
+        data, sr = media.read_wav(own, mono=True)
+        data = data[:, 0]
+    else:  # a line voiced in another voice has no clip of its own yet: from the review's voices track
+        src = work / "review" / "voices.m4a"
+        if not src.exists():
+            raise ValueError("this dub's audio isn't kept any more")
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "clip.wav"
+            media.run(["ffmpeg", "-nostdin", "-v", "error", "-y", "-ss", f"{max(0.0, ln.start - 0.05):.3f}",
+                       "-t", f"{ln.duration + 0.1:.3f}", "-i", str(src), "-ac", "1", "-ar", "48000", str(out)])
+            data, sr = media.read_wav(out, mono=True)
+            data = data[:, 0]
+    src_id = prof.voice_source(cid)
+    rel = f"refs/{src_id}/{hashlib.sha1(f'line:{work.name}:{ln.id}'.encode()).hexdigest()[:10]}.flac"
+    path = prof.root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    peak = float(np.max(np.abs(data))) or 1.0
+    sf.write(str(path), (data * min(1.0, 0.9 / peak)).astype(np.float32), sr, format="FLAC", subtype="PCM_16")
+    refs = prof.characters[src_id].setdefault("refs", [])
+    refs[:] = [r for r in refs if r["file"] != rel]
+    top = max([float(r.get("score", 0)) for r in refs] + [1.0])
+    refs.append({"file": rel, "duration": round(ln.duration, 2), "score": round(top + 1.0, 4), "bleed_db": None,
+                 "embedding": [], "episode": work.name, "joined": False, "locked": True, "added": time.time(),
+                 "from_line": ln.id})
+    return rel
+
+
 def can_redo_lines(work: Path) -> bool:
     return can_redub(work) and (work / "lines").is_dir() and (work / "lines.json").exists()
 
