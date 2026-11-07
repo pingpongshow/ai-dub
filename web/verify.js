@@ -184,16 +184,26 @@ function vfDraw() {
 }
 function vfLoop() {
   const v = $("#vfv");
-  if (!v || v.paused || !location.hash.startsWith("#verify/")) return;
-  vfDraw();
+  if (!v || v.paused || !location.hash.startsWith("#verify/")) { VF.looping = false; return; }
+  VF.looping = true;
+  try { vfDraw(); } catch (e) {
+    if (!VF.drawFailed) { VF.drawFailed = true; console.error("check bar", e); }  // keep going: one bad frame mustn't stop the bar
+  }
   requestAnimationFrame(vfLoop);
 }
 function vfWire() {
   const v = $("#vfv"), d = VF.d;
-  v.onplay = () => { $("#vfPlay").textContent = "❚❚"; vfSync(false); vfLoop(); };
+  v.onplay = () => { $("#vfPlay").textContent = "❚❚"; vfSync(false); if (!VF.looping) vfLoop(); };
+  v.onplaying = () => { VF.loading = false; if (!VF.looping) vfLoop(); };
+  v.onwaiting = () => { VF.loading = true; $("#vfTime").textContent = `${fmtT(v.currentTime)} / ${fmtT(d.duration, false)} · loading…`; };
   v.onpause = () => { if (v._pairBusy) return; $("#vfPlay").textContent = "▶"; vfSync(false); vfDraw(); };
   v.onseeked = () => vfSync(false);
-  v.ontimeupdate = () => { vfSync(false); $("#vfTime").textContent = `${fmtT(v.currentTime)} / ${fmtT(d.duration, false)}`; vfNowLine(); };
+  v.ontimeupdate = () => {
+    vfSync(false);
+    $("#vfTime").textContent = `${fmtT(v.currentTime)} / ${fmtT(d.duration, false)}${VF.loading ? " · loading…" : ""}`;
+    vfNowLine();
+    if (!VF.looping) { try { vfDraw(); } catch (e) { /* drawn next time */ } }
+  };
   $("#vfPlay").onclick = () => { vfStopAB(); if (v._pairBusy) $("#vfPlay").textContent = pairedToggle(v) ? "❚❚" : "▶"; else pairedToggle(v); };
   $("#vfBack").onclick = () => vfSeek(vfNow() - 5);
   $("#vfFwd").onclick = () => vfSeek(vfNow() + 5);

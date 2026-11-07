@@ -378,9 +378,10 @@ function rvSync(force) {
   for (const k of ["voices", "music", "dub"]) pairedSync(v, rvAudio(k), RV.hear === k, force);
   v.muted = RV.hear !== "orig";
 }
+function rvLoading(on) { RV.loading = on; rvClock(); }
 function rvClock() {
   const t = rvNow();
-  $("#rvTime").textContent = `${fmtT(t)} / ${fmtT(RV.data.duration, false)}`;
+  $("#rvTime").textContent = `${fmtT(t)} / ${fmtT(RV.data.duration, false)}${RV.loading ? " · loading…" : ""}`;
   const r = regionsNow().find((x) => t >= x.start && t <= x.end && x.action === "keep");
   const ln = RV.data.lines.find((l) => t >= l.start && t <= l.end && (l.kind === "speech" || l.kind === "song"));
   $("#rvTag").innerHTML = r ? `<span class="chip keep">♪ ${esc(RV_KINDS[r.kind] || "Song")} · keeps original</span>`
@@ -656,7 +657,10 @@ function englishRow(l, ed) {
       <span>${l.en ? `“${esc(l.en)}”` : `<i class="muted">nothing: no English was voiced</i>`}</span>
       ${can ? `<textarea data-redo-en="${l.id}" rows="2" placeholder="New English for this line (optional)">${esc((pending && pending.en) || "")}</textarea>
         <span class="row"><button class="sm ${pending ? "primary" : ""}" data-redo="${l.id}">${pending ? "✓ Will be redone" : "↻ Redo this line"}</button>
-          ${pending ? `<button class="sm ghost" data-unredo="${l.id}">Don't redo</button>` : ""}</span>` : ""}</span>`;
+          ${pending ? `<button class="sm ghost" data-unredo="${l.id}">Don't redo</button>` : ""}</span>
+        ${l.kind === "speech" ? `<span class="muted">Voice: ${/^own line/.test(l.voice_note || "") ? "from this line's own clip" : esc(l.voice_note || "the speaker's usual voice")}</span>
+        <span class="row"><button class="sm ${pending && pending.other_voice ? "primary" : ""}" data-other="${l.id}"
+          title="Voice it from ${/^own line/.test(l.voice_note || "") ? "the speaker's usual voice" : "this line's own clip"} instead">${pending && pending.other_voice ? "✓ Other voice" : "Try the other voice"}</button></span>` : ""}` : ""}</span>`;
   }
   if (!ed || !(l.kind === "speech" || l.kind === "song" || l.kind === "wordless")) return "";
   return `<span class="lab">English</span><span><textarea data-en-pre="${l.id}" rows="2"
@@ -681,6 +685,12 @@ function wireEnglish(box) {
     RV.redo[id] = { en: t ? t.value.trim() : "" };
     rvRedoButton(); rvInspector(); rvList(); rvDraw();
   }));
+  box.querySelectorAll("[data-other]").forEach((b) => (b.onclick = () => {
+    const id = Number(b.dataset.other), t = box.querySelector(`[data-redo-en="${id}"]`);
+    const was = RV.redo[id] || { en: t ? t.value.trim() : "" };
+    RV.redo[id] = { ...was, other_voice: !was.other_voice };
+    rvRedoButton(); rvInspector(); rvList(); rvDraw();
+  }));
   box.querySelectorAll("[data-unredo]").forEach((b) => (b.onclick = () => {
     delete RV.redo[Number(b.dataset.unredo)];
     rvRedoButton(); rvInspector(); rvList(); rvDraw();
@@ -702,6 +712,7 @@ async function rvRedoLines() {
     if (RV.redo[id].en) ch.en = RV.redo[id].en;
     const who = (RV.dec.lines[id] || {}).character;
     if (who) ch.character = who;
+    if (RV.redo[id].other_voice) ch.other_voice = true;
     changes[id] = ch;
   }
   if (!confirm(`Voice ${ids.length} line${ids.length === 1 ? "" : "s"} again${Object.values(changes).some((c) => c.en) ? " with your English" : ""}? `
@@ -756,6 +767,9 @@ function rvWhoMenu(ev, lineId) {
     const mine = { ...(RV.dec.lines[key] || {}) };
     if (character) mine.character = character; else delete mine.character;
     if (Object.keys(mine).length) RV.dec.lines[key] = mine; else delete RV.dec.lines[key];
+    // On a finished dub a new speaker only takes effect once the line is voiced again: put it on
+    // the list for Redo, which voices just these lines (a whole redub isn't needed for this).
+    if (RV.data.redub && RV.data.redo_lines) { RV.redo[key] = { ...(RV.redo[key] || { en: "" }) }; rvRedoButton(); }
   };
   pop.querySelectorAll("[data-who]").forEach((b) => (b.onclick = () => {
     const w = b.dataset.who;
@@ -1118,10 +1132,12 @@ function rvOverview(C) {
 // Wiring -------------------------------------------------------------------------------------------------------
 function rvWire() {
   const v = $("#rvv"), d = RV.data;
-  v.onplay = () => { $("#rvPlay").textContent = "❚❚"; rvSync(false); rvLoop(); };
+  v.onplay = () => { $("#rvPlay").textContent = "❚❚"; rvSync(false); if (!RV.looping) rvLoop(); };
+  v.onplaying = () => { rvLoading(false); if (!RV.looping) rvLoop(); };
+  v.onwaiting = () => rvLoading(true);
   v.onpause = () => { if (v._pairBusy) return; $("#rvPlay").textContent = "▶"; rvSync(false); rvDraw(); };
   v.onseeked = () => rvSync(false);
-  v.ontimeupdate = () => { rvSync(false); rvClock(); };
+  v.ontimeupdate = () => { rvSync(false); rvClock(); if (!RV.looping) { try { rvDraw(); } catch (e) { /* drawn next time */ } } };
   v.onloadedmetadata = () => { if (RV.t) v.currentTime = RV.t; };
   $("#rvPlay").onclick = () => { if (v._pairBusy) $("#rvPlay").textContent = pairedToggle(v) ? "❚❚" : "▶"; else pairedToggle(v); };
   $("#rvBack").onclick = () => rvSeek(rvNow() - 5);
@@ -1169,10 +1185,15 @@ function segWire(sel, fn) {
 }
 function rvLoop() {
   const v = $("#rvv");
-  if (!v || v.paused || !location.hash.startsWith("#review/")) return;
-  const t = v.currentTime;
-  if (RV.follow && (t > RV.view[1] || t < RV.view[0])) rvKeepInView(t);
-  rvDraw();
+  if (!v || v.paused || !location.hash.startsWith("#review/")) { RV.looping = false; return; }
+  RV.looping = true;
+  try {
+    const t = v.currentTime;
+    if (RV.follow && (t > RV.view[1] || t < RV.view[0])) rvKeepInView(t);
+    rvDraw();
+  } catch (e) {
+    if (!RV.drawFailed) { RV.drawFailed = true; console.error("review timeline", e); }  // keep going: one bad frame mustn't stop the bar
+  }
   requestAnimationFrame(rvLoop);
 }
 async function rvRedub() {
