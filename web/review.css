@@ -132,3 +132,5 @@ button.chip { border: 0; cursor: pointer; font: inherit; font-size: 12px; font-w
 @media (max-width: 980px) { .rv.vf .rv-right { contain: none; max-height: 75vh; } }
 .vf-voice { margin-top: 8px; padding: 8px 10px; border: 1px solid var(--line, #333); border-radius: 8px; }
 .vf-voice-list { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow: auto; }
+.said-edit { display: flex; flex-direction: column; gap: 6px; margin: 4px 0; }
+.said-edit textarea { width: 100%; font-family: inherit; font-size: 13px; }

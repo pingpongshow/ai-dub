@@ -521,15 +521,30 @@ function rvSubRows() {
     const saidCls = said.some((l) => l.outcome === "japanese") ? "japanese" : said.some((l) => l.outcome === "unclear") ? "unclear" : "";
     const saidText = said.map((l) => l.en).filter(Boolean).join(" ");
     const dubSays = said.length ? `<span class="said ${saidCls}">${saidCls === "japanese" ? "Left in Japanese" : `🔊 ${esc(saidText)}`}</span>` : "";
+    const change = d.editable && d.redo_lines ? said.map((l) => rvEnglishHere(l)).join("") : "";
     const why = ln ? `<span class="why"><button class="who" data-line="${ln.id}" title="${RV.data.editable ? "Change whose voice says this line" : "Speakers can't be changed right now"}"><span class="vdot" style="background:${rvColor(who)}"></span>${esc(whoLabel(who))}${RV.data.editable ? ` <span class="faint">▾</span>` : ""}</button>
       ${ln.kept_why && ln.kind === "song" ? `<span>· ${esc(ln.kept_why)}</span>` : ""}${flaggedLine(ln.id) ? `<span>· sounds sung</span>` : ""}
       ${ln.voice_note === "moved by pitch" ? `<span>· moved by pitch</span>` : ""}
       ${ln.fallback && ln.kind === "speech" ? `<span style="color:var(--bad)" title="${esc(ln.fallback)}">· left in Japanese in the dub</span>` : ""}</span>` : "";
     return `<div class="srow ${sel ? "sel" : ""}" data-key="${esc(c.key)}" data-a="${c.start}" data-b="${c.end}">
-      <span class="t">${fmtT(c.start, false)}</span><div class="x">${text}${dubSays}${why}</div>
+      <span class="t">${fmtT(c.start, false)}</span><div class="x">${text}${dubSays}${change}${why}</div>
       ${c.cue && d.editable ? `<button class="chip ${cls}" data-cycle="${esc(c.key)}" title="Click: keep original / dub / Ai Dub decides">${esc(label)}</button>`
         : `<span class="chip ${cls}">${esc(label)}</span>`}</div>`;
   }).join("");
+}
+// Changing what a dubbed line says, right in the list: the English to voice, then Redo voices it.
+function rvEnglishHere(l) {
+  const pending = RV.redo[l.id];
+  if (RV.editing === l.id) {
+    return `<span class="said-edit"><textarea rows="2" data-ledit-text="${l.id}">${esc((pending && pending.en) || l.en || "")}</textarea>
+      <span class="row" style="gap:6px"><button class="sm primary" data-ledit-ok="${l.id}">Redo with this English</button>
+        <button class="sm ghost" data-ledit-cancel="${l.id}">Cancel</button></span></span>`;
+  }
+  if (pending) {
+    return `<span class="row" style="gap:6px;align-items:center"><span class="chip dub">↻ Will be redone${pending.en ? `: “${esc(pending.en)}”` : ""}</span>
+      <button class="sm ghost" data-ledit="${l.id}">✎ Change English</button><button class="sm ghost" data-lundo="${l.id}">Don't redo</button></span>`;
+  }
+  return `<span class="row"><button class="sm ghost" data-ledit="${l.id}" title="Change what the dub says here, then voice just this line again">✎ Change English</button></span>`;
 }
 function rvVoiceRows() {
   const sp = RV.data.speakers;
@@ -571,10 +586,31 @@ function rvListWire() {
   box.onmouseenter = () => (RV.listHover = true);
   box.onmouseleave = () => (RV.listHover = false);
   box.querySelectorAll(".srow").forEach((row) => (row.onclick = (ev) => {
-    if (ev.target.closest("button")) return;
+    if (ev.target.closest("button, textarea")) return;
     RV.sel = { type: "cue", id: row.dataset.key };
     rvSeek(Number(row.dataset.a));
     rvList(); rvInspector();
+  }));
+  box.querySelectorAll("[data-ledit]").forEach((b) => (b.onclick = () => {
+    RV.editing = Number(b.dataset.ledit); rvList();
+    const t = box.querySelector(`[data-ledit-text="${RV.editing}"]`);
+    if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); }
+  }));
+  box.querySelectorAll("[data-ledit-cancel]").forEach((b) => (b.onclick = () => { RV.editing = null; rvList(); }));
+  box.querySelectorAll("[data-ledit-ok]").forEach((b) => (b.onclick = () => {
+    const id = Number(b.dataset.leditOk), t = box.querySelector(`[data-ledit-text="${id}"]`);
+    const en = t ? t.value.trim() : "", was = (RV.data.lines.find((l) => l.id === id) || {}).en || "";
+    RV.redo[id] = { ...(RV.redo[id] || {}), en: en && en !== was ? en : "" };
+    RV.editing = null;
+    rvRedoButton(); rvList(); rvInspector(); rvDraw();
+    toast("On the Redo list: press “↻ Redo” at the top to voice it");
+  }));
+  box.querySelectorAll("[data-lundo]").forEach((b) => (b.onclick = () => {
+    delete RV.redo[Number(b.dataset.lundo)]; rvRedoButton(); rvList(); rvInspector(); rvDraw();
+  }));
+  box.querySelectorAll("[data-ledit-text]").forEach((t) => (t.onkeydown = (ev) => {
+    if (ev.key === "Enter" && !ev.shiftKey) { ev.preventDefault(); box.querySelector(`[data-ledit-ok="${t.dataset.leditText}"]`).click(); }
+    if (ev.key === "Escape") { RV.editing = null; rvList(); }
   }));
   box.querySelectorAll("[data-cycle]").forEach((b) => (b.onclick = () => {
     const k = b.dataset.cycle, now = RV.dec.cues[k];
