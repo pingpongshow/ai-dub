@@ -752,9 +752,14 @@ function rvGoFlag(i) {
   RV.flag = i;
   const reg = regionsNow().find((r) => f.lines.some((id) => r.lines && r.lines.includes(id)));
   const cue = RV.data.cues.find((q) => overlap(q.start, q.end, f.start, f.end) > 0);
-  RV.sel = (f.kind === "voice" || f.kind === "nosub") && f.lines.length ? { type: "line", id: f.lines[0] }
+  // A voice flag lists every line of that speaker: the one it points at is the line at its own time
+  // (the first in the list can be minutes away, and K or D would then act on that one).
+  const here = f.lines.map((id) => RV.data.lines.find((l) => l.id === id)).filter(Boolean)
+    .find((l) => overlap(l.start, l.end, f.start - 0.05, f.end + 0.05) > 0);
+  const lineId = here ? here.id : f.lines[0];
+  RV.sel = (f.kind === "voice" || f.kind === "nosub") && f.lines.length ? { type: "line", id: lineId }
     : reg ? { type: "region", id: reg.id } : cue ? { type: "cue", id: cue.key }
-    : f.lines.length ? { type: "line", id: f.lines[0] } : { type: "flag", id: i };
+    : f.lines.length ? { type: "line", id: lineId } : { type: "flag", id: i };
   RV.selFlag = i;
   RV.pendingShow = true;
   rvSeek(Math.max(0, f.start - 1));
