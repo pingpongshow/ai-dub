@@ -479,8 +479,7 @@ async function loadNeeds() {
       <div><div class="title">${epLabel(x.name)}</div>
         <div class="sub"><span class="ep-show">${esc(episode(x.name).show)}</span><span class="tag ok">Dubbed</span>
           <span>finished ${esc(ago(x.finished))} · ${plural(x.moments, "moment")} to listen to · original (${gb(x.original_size)}) set aside</span></div></div>
-      <div class="btn-group"><a class="button" href="#review/${x.id}" title="The full review page: change anything and redub">Review &amp; change</a>
-        <a class="button primary" href="#verify/${x.id}">Check the dub</a></div></div>`).join("")}
+      <div class="btn-group"><a class="button primary" href="#verify/${x.id}" title="Listen to the dub, fix any line, then keep it or put the original back">Check the dub</a></div></div>`).join("")}
     </div>`;
   box.querySelectorAll("[data-log]").forEach((b) => (b.onclick = () => openLog(Number(b.dataset.log), b.dataset.name)));
   box.querySelectorAll("[data-use]").forEach((b) => (b.onclick = async () => {
