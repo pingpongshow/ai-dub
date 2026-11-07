@@ -103,6 +103,7 @@ songs:                      # songs keep the original voice; never translated
 speakers:
   link_threshold: 0.62      # cosine similarity to treat two clusters as one voice
   profile_threshold: 0.66   # cosine similarity to match a profile character
+  same_person_ratio: 0.86   # and line by line: two speakers' lines as alike as this share of each one's own likeness (one person split: 0.89-1.04; two men: up to 0.82)
   min_clean_seconds: 4.0    # less clean audio than this makes a "minor speaker"
   max_refs_per_character: 8
   ref_min_s: 3.0

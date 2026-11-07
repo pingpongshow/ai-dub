@@ -52,6 +52,39 @@ def line_voices(job: Job, lines: list[L.Line]) -> dict[int, dict]:
     return {ln.id: {"emb": e, **(ga.get(str(ln.id)) or {})} for ln, e in zip(todo, embs) if e}
 
 
+def same_person(a: list, b: list, ratio: float, least: int = 4) -> bool | None:
+    """Do two sets of line voiceprints sound like one person? Their likeness to each other,
+    against how alike each set is within itself: one speaker's lines split in two come out at
+    0.89 to 1.04 of it, two different men at most 0.82 (on one film of 12 speakers). A speaker's
+    average voiceprint can't tell: there two different men came out 0.76 alike and were
+    merged into one character. None with too few lines to judge."""
+    if len(a) < least or len(b) < least:
+        return None
+    A = np.asarray([speakers.normalize(x) for x in a], dtype=np.float32)
+    B = np.asarray([speakers.normalize(x) for x in b], dtype=np.float32)
+
+    def within(m: np.ndarray) -> float:
+        n = len(m)
+        return float(((m @ m.T).sum() - n) / (n * (n - 1)))
+    wa, wb = within(A), within(B)
+    if wa <= 0 or wb <= 0:
+        return None
+    return float((A @ B.T).mean()) / float(np.sqrt(wa * wb)) >= ratio
+
+
+def closest_ref(prof: Profile, cid: str, emb: list | None) -> dict | None:
+    """The character's reference clip that sounds most like this voiceprint, or their best
+    clip without one. A character whose clips came from more than one person (a merge that
+    should not have happened) then still speaks in the voice of the person on screen."""
+    refs = prof.refs(cid)
+    if not refs:
+        return None
+    if not emb:
+        return refs[0]
+    scored = [(speakers.cosine(emb, r["embedding"]), r) for r in refs if r.get("embedding")]
+    return max(scored, key=lambda x: x[0])[1] if scored else refs[0]
+
+
 def link_characters(job: Job, prof: Profile, lines: list[L.Line], voices: dict[int, dict] | None = None) -> dict[str, str]:
     """Map each diarized speaker (S1..) to a profile character id.
 
@@ -68,11 +101,28 @@ def link_characters(job: Job, prof: Profile, lines: list[L.Line], voices: dict[i
         if ln.name_hint and ln.speaker:
             names[ln.speaker][ln.name_hint] += 1
     mapping: dict[str, str] = {}
+    ratio = float(job.cfg.get("speakers.same_person_ratio", 0.86))
+    prints: dict[str, list] = defaultdict(list)  # each diarized speaker's line voiceprints
+    for ln in lines:
+        if ln.speaker and ln.id in voices and ln.kind == L.SPEECH:
+            prints[ln.speaker].append(voices[ln.id]["emb"])
     for s, info in sorted(spk.items(), key=lambda kv: -kv[1].get("seconds", 0)):
         hint = names[s].most_common(1)[0][0] if names[s] else ""
         cid = prof.by_name(hint) if hint else None
         if cid is None:
-            cid, sim = prof.match(info.get("embedding", []), thr)
+            # Matched by voice: the character must also sound like this speaker line by line, against
+            # the speakers already given it in this episode. (Not against clips from other episodes:
+            # recordings differ, and how much that lowers the likeness hasn't been measured.)
+            ruled_out: set[str] = set()
+            while True:
+                cid, sim = prof.match(info.get("embedding", []), thr, exclude=ruled_out)
+                if cid is None:
+                    break
+                theirs = [e for o, c in mapping.items() if c == cid for e in prints[o]]
+                if same_person(prints[s], theirs, ratio) is not False:
+                    break
+                job.log(f"{s} sounds like {prof.characters[cid].get('name', cid)} overall but not line by line: a character of its own")
+                ruled_out.add(cid)
             if cid and hint and prof.characters[cid]["name"].startswith("Character "):
                 prof.rename(cid, hint)
         if cid is None:
@@ -308,6 +358,11 @@ def assign_voices(job: Job, prof: Profile, lines: list[L.Line], voices: dict[int
     by_face = faces.characters_by_face(lines, faces.load(job))
     moved_by_face = 0
     prefer_own = bool(job.cfg.get("speakers.prefer_own_clip", True))
+    by_speaker: dict[str, list] = defaultdict(list)
+    for ln in lines:
+        if ln.speaker and ln.id in voices:
+            by_speaker[ln.speaker].append(voices[ln.id]["emb"])
+    speaker_print = {s: speakers.mean_embedding(v) for s, v in by_speaker.items()}
     elsewhere = own_voice_clips(job, prof, lines, own_min)
     for ln in lines:
         if ln.kind != L.SPEECH:
@@ -318,7 +373,9 @@ def assign_voices(job: Job, prof: Profile, lines: list[L.Line], voices: dict[int
             # Too little of this character in the bank: the line's own audio is the truest voice.
             ln.voice, ln.voice_note = "", "own line as reference"
         elif refs:
-            ln.voice = str(prof.root / refs[0]["file"])
+            # The clip closest to this line's voice, or to its speaker's when it is too short to judge.
+            near = closest_ref(prof, ln.character, (voices.get(ln.id) or {}).get("emb") or speaker_print.get(ln.speaker))
+            ln.voice = str(prof.root / near["file"])
         elif prof.voice_source(ln.character) in elsewhere:
             # A line too short to clone from: the same character's voice from another of their lines.
             ln.voice, ln.voice_note = elsewhere[prof.voice_source(ln.character)], "own voice from another line"
@@ -360,6 +417,24 @@ def assign_voices(job: Job, prof: Profile, lines: list[L.Line], voices: dict[int
                                       for pair in faces.split_people(lines, faces.load(job))]
     job.qc["minor_speaker_substitutions"] = dict(used)
     job.qc["lines_voiced_from_own_audio"] = own + sum(1 for ln in lines if ln.voice_note == "own line as reference")
+
+
+def mixed_characters(prof: Profile, lines: list[L.Line], voices: dict[int, dict], ratio: float) -> list[dict]:
+    """Characters whose lines come from diarized speakers who don't sound like one person
+    (a name in the subtitles can put two people under one character), for the review."""
+    out = []
+    by_char: dict[str, dict[str, list[L.Line]]] = defaultdict(lambda: defaultdict(list))
+    for ln in lines:
+        if ln.kind == L.SPEECH and ln.character and ln.speaker:
+            by_char[ln.character][ln.speaker].append(ln)
+    for cid, groups in by_char.items():
+        main = max(groups, key=lambda s: len(groups[s]))
+        mains = [voices[ln.id]["emb"] for ln in groups[main] if ln.id in voices]
+        for s, ls in groups.items():
+            if s != main and same_person([voices[ln.id]["emb"] for ln in ls if ln.id in voices], mains, ratio) is False:
+                out.append({"character": cid, "name": prof.characters.get(cid, {}).get("name", cid),
+                            "lines": [ln.id for ln in ls], "main_lines": len(groups[main])})
+    return out
 
 
 def voice_for(prof: Profile, ln: L.Line) -> None:
@@ -423,6 +498,7 @@ def run(job: Job) -> None:
     update_refs(job, prof, mapping, lines, voices)
     move_by_pitch(job, prof, lines)
     assign_voices(job, prof, lines, voices)
+    job.set("mixed_characters", mixed_characters(prof, lines, voices, float(job.cfg.get("speakers.same_person_ratio", 0.86))))
     if job.src.name not in prof.data.setdefault("episodes", []):
         prof.data["episodes"].append(job.src.name)
     prof.save()

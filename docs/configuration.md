@@ -181,6 +181,7 @@ ones you're most likely to want are below.
 | `songs.detect_by_pitch` | `true` | Find sung passages by held notes over music |
 | `songs.match_episodes` | `true` | Find the opening and ending shared with neighbouring episodes in the folder |
 | `speakers.link_threshold` | `0.62` | How alike two voices must sound (cosine similarity) to be treated as one speaker. Raise it if different people get merged; lower it if one person is split in two. |
+| `speakers.same_person_ratio` | `0.86` | Two speakers the speaker detection told apart become one character only if they also sound alike line by line: their lines must be this alike to each other, compared with how alike each one's own lines are. Two different men can match on average and still fail this. A character that still ends up with two voices is flagged on the review page. |
 | `speakers.prefer_own_clip` | `true` | Voice each line from its own clip, not the character's usual voice. In a blind listening test the own clip was acceptable on 36 of 48 lines, the usual voice on 16. On the check screen, **Try the other voice** swaps one line. |
 | `speak.max_wer` | `0.35` | How much of a take may be heard wrong by the back-check and still pass (word error rate) |
 | `speak.takes` | `2` | Takes voiced per line; the best one is kept |

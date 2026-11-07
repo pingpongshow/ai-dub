@@ -201,6 +201,13 @@ def needs_look(job, lines: list[L.Line]) -> list[dict]:
     for ln in borrowed.values():
         add("voice", ln, "Dubbed with a borrowed voice", f"Too little of this speaker to clone: {ln.voice_note}.",
             [x.id for x in lines if x.character == ln.character])
+    by_id = {ln.id: ln for ln in lines}
+    for m in job.get("mixed_characters") or []:
+        mine = [by_id[i] for i in m.get("lines", []) if i in by_id]
+        if mine:
+            add("voice", mine[0], f"{m['name']} may be more than one person",
+                f"{len(mine)} of {m['name']}'s lines sound like someone other than the voice of their other "
+                f"{m['main_lines']}. Give them to the right speaker, or a new one.", [ln.id for ln in mine])
     for r in regions(lines, duration):
         for q in talk:
             for edge in (r["start"], r["end"]):

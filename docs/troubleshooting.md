@@ -139,6 +139,7 @@ takes.
 | A song was dubbed | Mark it as a song: **♪ Mark a song**, or select it and press S. Mark it "for every episode" if it's the opening or ending. |
 | Speech was kept as if it were a song | Select the region and press D (dub) |
 | A line has the wrong voice | Give the line to the right speaker (the ▾ by the speaker's name). If two characters keep getting mixed up, merge or split them on **Shows → Voices**. |
+| Two people share one character (one voice for both, or the wrong one) | The review page flags "may be more than one person" with the lines in question. Give them to the right speaker or a new one; on a finished dub this puts them on the **↻ Redo** list. On **Shows → Voices**, split the other person's clips off into a character of their own. |
 | One person is split into several voices | Merge them on **Shows → Voices**, or try the "sound like the same person?" suggestions. You can also lower `speakers.link_threshold`. |
 | Names are wrong or mispronounced | Fix them on **Shows → Glossary**. Glossary names are also accepted by the back-check. With guided subtitles, names follow the English subtitle; a name it never says is read from the original's writing and can come out wrong. |
 | The English came from the wrong subtitle | A subtitle for another episode or cut scores low and is dropped; raise `subtitles.min_score` if a bad one got through. Check the sidecar file's name and language tag (`.en.srt`). |

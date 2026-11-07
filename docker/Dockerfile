@@ -21,7 +21,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ffmpeg mkvtoolnix rubberband-cli sox libsox-fmt-all libsndfile1 \
-      git git-lfs ca-certificates curl build-essential tini gosu \
+      git git-lfs ca-certificates curl build-essential tini gosu tzdata \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /uvx /usr/local/bin/

@@ -280,6 +280,59 @@ def test_named_characters_merged_by_diarization_keep_own_voices(tmp_path):
     assert prof2.characters[lines2[3].character].get("voice_of") == lines2[0].character
 
 
+def test_two_people_alike_on_average_but_not_line_by_line_stay_two_characters(tmp_path):
+    from aidub import voicebank
+    rnd = np.random.default_rng(4)
+    base = rnd.normal(0, 1, 32)
+
+    def voice():  # a person: a shared "male" direction plus their own
+        return base + rnd.normal(0, 1.0, 32)
+
+    def lines_of(v, n):  # each line wobbles around its person
+        return [list(v + rnd.normal(0, 0.6, 32)) for _ in range(n)]
+    a, b = voice(), voice()
+    pa, pb = lines_of(a, 8), lines_of(b, 8)
+    assert voicebank.same_person(pa[:4], pa[4:], 0.86) is True          # one person split in two
+    assert voicebank.same_person(pa, pb, 0.86) is False                 # two people
+    assert voicebank.same_person(pa[:2], pb, 0.86) is None              # too few to judge
+    # Diarization told them apart, and their average voiceprints are alike enough to match one
+    # character: line by line they aren't one person, so each gets a character of its own.
+    prof = profiles.Profiles(tmp_path).get_or_create("Paper")
+    job = _StubJob({}, {"diarization": {"speakers": {
+        "S1": {"embedding": list(base), "seconds": 60, "gender": "male"},
+        "S2": {"embedding": list(base * 0.98 + 0.02), "seconds": 50, "gender": "male"}}}})
+    lines = [L.Line(i, i * 3.0, i * 3.0 + 2, speaker="S1" if i < 8 else "S2") for i in range(16)]
+    voices = {ln.id: {"emb": (pa + pb)[ln.id]} for ln in lines}
+    job.log = lambda m: None
+    voicebank.link_characters(job, prof, lines, voices)
+    assert lines[0].character and lines[8].character and lines[0].character != lines[8].character
+    # The same person in two diarized clusters still becomes one character.
+    prof2 = profiles.Profiles(tmp_path / "b").get_or_create("One")
+    lines2 = [L.Line(i, i * 3.0, i * 3.0 + 2, speaker="S1" if i < 8 else "S2") for i in range(16)]
+    voices2 = {ln.id: {"emb": lines_of(a, 16)[ln.id]} for ln in lines2}
+    voicebank.link_characters(job, prof2, lines2, voices2)
+    assert lines2[0].character == lines2[8].character
+
+
+def test_a_line_uses_the_reference_clip_closest_to_its_voice(tmp_path):
+    from aidub import voicebank
+    prof = profiles.Profiles(tmp_path).get_or_create("Mixed")
+    cid = prof.new_character("Character 1")
+    prof.characters[cid]["refs"] = [{"file": "refs/x/one.flac", "score": 0.9, "embedding": [1.0, 0.0]},
+                                    {"file": "refs/x/two.flac", "score": 0.5, "embedding": [0.0, 1.0]}]
+    assert voicebank.closest_ref(prof, cid, [0.1, 0.9])["file"] == "refs/x/two.flac"
+    assert voicebank.closest_ref(prof, cid, None)["file"] == "refs/x/one.flac"   # nothing to go by: the best clip
+    lines = [L.Line(1, 0, 2, speaker="S1", character=cid), L.Line(2, 3, 5, speaker="S1", character=cid),
+             L.Line(3, 6, 8, speaker="S2", character=cid), L.Line(4, 9, 11, speaker="S2", character=cid),
+             L.Line(5, 12, 14, speaker="S2", character=cid), L.Line(6, 15, 17, speaker="S2", character=cid),
+             L.Line(7, 18, 20, speaker="S1", character=cid), L.Line(8, 21, 23, speaker="S1", character=cid)]
+    rnd = np.random.default_rng(1)
+    voices = {ln.id: {"emb": list((np.array([1.0, 0.0]) if ln.speaker == "S1" else np.array([0.0, 1.0])) * 5
+                                  + rnd.normal(0, 0.3, 2))} for ln in lines}
+    mixed = voicebank.mixed_characters(prof, lines, voices, 0.86)
+    assert len(mixed) == 1 and sorted(mixed[0]["lines"]) == [3, 4, 5, 6] and mixed[0]["main_lines"] == 4
+
+
 def test_unmarked_voice_takes_the_named_character(tmp_path):
     from aidub import voicebank
     prof = profiles.Profiles(tmp_path).get_or_create("Spy")
