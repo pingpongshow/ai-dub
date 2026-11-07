@@ -132,7 +132,9 @@ function decisionsOut() {
   const regs = RV.dec.regions.slice().sort((a, b) => (a.source === "hidden" ? 0 : 1) - (b.source === "hidden" ? 0 : 1));
   return { regions: regs, cues: RV.dec.cues, lines: RV.dec.lines };
 }
-function setRegion(r, patch) {
+// `chosen`: you pressed Keep (or Dub) yourself. Agreeing with Ai Dub's own keep is then still your
+// decision: the flag over it turns green rather than looking undecided.
+function setRegion(r, patch, chosen = false) {
   const list = RV.dec.regions;
   if (r.source === "user") {
     Object.assign(list.find((x) => x.id === r.id), patch);
@@ -141,13 +143,14 @@ function setRegion(r, patch) {
     let o = list.find((x) => x.id === r.id);
     if (!o) { o = { id: r.id, start: ai.start, end: ai.end, kind: ai.kind, action: "keep", source: "ai" }; list.push(o); }
     Object.assign(o, patch);
+    if (chosen) o.confirmed = true;
     const moved = o.start !== ai.start || o.end !== ai.end;
     RV.dec.regions = list.filter((x) => x.id !== r.id + "~was");
     if (moved && o.action === "keep") {
       // The part of Ai Dub's region you trimmed off is dubbed.
       RV.dec.regions.push({ id: r.id + "~was", start: ai.start, end: ai.end, kind: ai.kind, action: "dub", source: "hidden" });
     }
-    if (!moved && o.action === "keep" && !o.show_rule && o.kind === ai.kind) RV.dec.regions = RV.dec.regions.filter((x) => x.id !== r.id);
+    if (!moved && o.action === "keep" && !o.show_rule && o.kind === ai.kind && !o.confirmed) RV.dec.regions = RV.dec.regions.filter((x) => x.id !== r.id);
   }
   setDirty();
 }
@@ -855,8 +858,8 @@ function rvInspector() {
       setRegion(r, { start: a, end: b }); rvInspector(); rvDraw();
     };
     $("#rvFrom").onchange = setTimes; $("#rvTo").onchange = setTimes;
-    $("#rvKeep").onclick = () => { setRegion(r, { action: "keep" }); rvInspector(); rvDraw(); rvList(); };
-    $("#rvDub").onclick = () => { setRegion(r, { action: "dub" }); rvInspector(); rvDraw(); rvList(); };
+    $("#rvKeep").onclick = () => { setRegion(r, { action: "keep" }, true); rvInspector(); rvDraw(); rvList(); };
+    $("#rvDub").onclick = () => { setRegion(r, { action: "dub" }, true); rvInspector(); rvDraw(); rvList(); };
     if ($("#rvRemove")) $("#rvRemove").onclick = () => { removeRegion(r); rvInspector(); rvDraw(); rvList(); };
     if ($("#rvRule")) $("#rvRule").onchange = (e) => { setRegion(r, { show_rule: e.target.checked, label: RV_KINDS[r.kind] }); };
     $("#rvGrowB").onclick = () => rvGrow(r, -1);
@@ -1376,6 +1379,7 @@ function rvDrawDragged(r) {
   rvDraw();
   RV.dec.regions = saved;
 }
+const RV_ACTED = { keep: "✓ Keeps the original", dub: "✓ Will be dubbed", song: "✓ Marked as a song" };
 document.addEventListener("keydown", (ev) => {
   if (!RV || !location.hash.startsWith("#review/")) return;
   if ((ev.target.closest && ev.target.closest("input, select, textarea")) || ev.metaKey || ev.ctrlKey || ev.altKey) return;
@@ -1387,7 +1391,7 @@ document.addEventListener("keydown", (ev) => {
     if (sel.type === "region") {
       const r = regionsNow().find((x) => x.id === sel.id);
       if (!r) return;
-      setRegion(r, action === "song" ? { action: "keep", kind: "song" } : { action });
+      setRegion(r, action === "song" ? { action: "keep", kind: "song" } : { action }, true);
     } else if (sel.type === "cue") {
       const q = RV.data.cues.find((c) => c.key === sel.id);
       if (action === "song") { if (q) rvSongFromCue(q); return; }
@@ -1395,13 +1399,16 @@ document.addEventListener("keydown", (ev) => {
     } else if (sel.type === "line") {
       const ln = RV.data.lines.find((l) => l.id === sel.id);
       if (ln) setSpan(+(ln.start - 0.05).toFixed(2), +(ln.end + 0.05).toFixed(2), action);
+      toast(RV_ACTED[action]);
       return;
     } else if (sel.type === "flag") {
       const f = RV.data.flags[sel.id];
-      if (f && f.end > f.start + 0.2) setSpan(f.start, f.end, action);
+      if (f) setSpan(f.start, Math.max(f.end, f.start + 0.3), action);  // (a flag at one moment: a short stretch)
+      toast(RV_ACTED[action]);
       return;
     } else return;
     setDirty(); rvList(); rvInspector(); rvDraw();
+    toast(RV_ACTED[action]);
   };
   if (k === " ") { ev.preventDefault(); $("#rvPlay").click(); }
   else if (k === "ArrowLeft" || k === "ArrowRight") { ev.preventDefault(); rvSeek(rvNow() + (k === "ArrowLeft" ? -1 : 1) * (ev.shiftKey ? 5 : 1)); }
