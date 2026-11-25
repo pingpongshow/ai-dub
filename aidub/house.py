@@ -310,6 +310,13 @@ def recast(prof: Profile, cid: str) -> None:
     ch["house_salt"] = int(ch.get("house_salt", 0)) + 1
 
 
+def sample_text(job: Job, voice_path: str) -> str:
+    """The words a house voice's file says: the cloning model follows the voice more closely given them."""
+    from . import voices
+    generic = job.cfg.appdata / "voices" / "generic"
+    return voices.SAMPLE_TEXT if Path(voice_path).parent == generic else SAMPLE_TEXT
+
+
 def house_embedding(prof: Profile, voice_path: str) -> list | None:
     """The voiceprint of the house voice at this path, to check takes against."""
     if not voice_path:

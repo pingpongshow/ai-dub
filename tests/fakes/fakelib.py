@@ -235,7 +235,19 @@ def voicedesign_ops():
         Path(a["out"]).parent.mkdir(parents=True, exist_ok=True)
         sf.write(a["out"], y, sr)
         return {"path": a["out"], "sample_rate": sr}
-    return {"design": design}
+
+    def synthesize(a):
+        """Lines in a designed voice: its pitch, at natural length (no duration control)."""
+        assert all(it.get("speaker_text") for it in a["items"]), "a house voice's words go with it"
+        assert not any(k in it for it in a["items"] for k in ("emotion_ref", "emo_vector", "duration_factor"))
+        out = tts_ops()["synthesize"](a)
+        for p in out["done"]:
+            Path(p + ".json").write_text(json.dumps({"text": json.loads(Path(p + ".json").read_text())["text"],
+                                                     "by": "voicedesign"}))
+        return out
+    return {"load": lambda a: {"model": a.get("model") or "fake-voicedesign", "duration_control": False,
+                               "emotion_ref": False, "emotion_vector": False, "sample_rate": 22050},
+            "design": design, "synthesize": synthesize}
 
 
 def bwe_ops():

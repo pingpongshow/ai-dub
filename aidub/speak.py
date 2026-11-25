@@ -443,6 +443,8 @@ def _requests(job: Job, ln: L.Line, text: str, takes: int, tag: str, dlg, sr, fa
             raise RuntimeError(f"line {ln.id}: its house voice {ln.voice} is gone (recast while this job ran?)")
         ref = str(orig)
     req_base = {"text": spoken(text), "speaker_ref": ref}
+    if ln.voice_note.startswith("house voice") and ref == ln.voice:
+        req_base["speaker_text"] = house.sample_text(job, ref)  # the words the voice file says
     if caps.get("emotion_ref", True) and ln.duration >= min_emo and not ln.overlap:
         req_base["emotion_ref"] = str(orig)
         alpha = job.cfg.get("voice.house.emo_alpha") if ln.voice_note.startswith("house voice") else None
@@ -506,25 +508,37 @@ def _voices(job: Job):
     """The voice model, loaded in up to `speak.processes` processes sharing the GPU:
     one voice process leaves most of the card idle (it voices one line at a time).
     Extra processes start only while there is room for them; never waits for one."""
+    stage = tts_stage(job)
     want = max(1, int(job.cfg.get("speak.processes", 2)))
-    need = int((job.cfg.get("gpu.min_free_mb") or {}).get("speak", 4000))
+    need = int((job.cfg.get("gpu.min_free_mb") or {}).get(stage, 4000))
     with ExitStack() as stack:
-        ws = [stack.enter_context(job.worker("speak"))]
-        _load_tts(job, ws[0])
+        ws = [stack.enter_context(job.worker(stage))]
+        _load_tts(job, ws[0], stage)
         for _ in range(want - 1):
             st = gpu.query()
             if st.present and st.free_mb < need:
                 break
             w = stack.enter_context(Worker(job.cfg, ws[0].name, log=job.log))
-            w.call("load", {"model": job.cfg.get("stages.speak").get("model")})
+            w.call("load", {"model": job.cfg.get(f"stages.{stage}").get("model")})
             ws.append(w)
         if len(ws) > 1:
             job.log(f"voicing with {len(ws)} voice-model processes")
         yield ws
 
 
-def _load_tts(job: Job, w) -> dict:
-    cfg = job.cfg.get("stages.speak")
+def tts_stage(job: Job) -> str:
+    """Which voice model speaks this job: house voices are spoken by the model family that
+    designed them (voice.house.speaker: qwen), unless set to be spoken by the cloning model."""
+    from .workers import env_ready
+    name = job.cfg.get("stages.house_speak.worker")
+    if house.mode(job) == "house" and str(job.cfg.get("voice.house.speaker") or "qwen") == "qwen" \
+            and name and env_ready(job.cfg, name):
+        return "house_speak"
+    return "speak"
+
+
+def _load_tts(job: Job, w, stage: str = "speak") -> dict:
+    cfg = job.cfg.get(f"stages.{stage}")
     info = w.call("load", {"model": cfg.get("model")})
     job.models["voice"] = info.get("model", cfg.get("model", ""))
     caps = {"duration_control": bool(info.get("duration_control")), "emotion_ref": bool(info.get("emotion_ref", True)),

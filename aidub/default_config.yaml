@@ -33,6 +33,7 @@ stages:
   faces:       { worker: faces, enabled: true }  # optional: who is talking on screen, for lines the voice check doubts
   bwe:         { worker: bwe-flashsr, enabled: true, mode: auto }   # auto: only when the original is brighter
   voicedesign: { worker: voicedesign, model: Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign }
+  house_speak: { worker: voicedesign, model: Qwen/Qwen3-TTS-12Hz-1.7B-Base }   # speaks house voices (voice.house.speaker: qwen)
 
 # An OpenAI-compatible endpoint can stand in for the built-in translation
 # worker (for example a local llama.cpp or Ollama server). Local only.
@@ -54,6 +55,7 @@ gpu:
     speak: 10000
     faces: 3000
     voicedesign: 6000
+    house_speak: 8000
     bwe: 4000
     ocr: 2000
   poll_seconds: 30
@@ -98,7 +100,10 @@ voice:
                             # episode; per show in its Settings. house needs the voice-design model (Models page)
   house:
     design_min_s: 10        # characters with less speech than this get a generic voice of their gender and age range
-    emo_alpha:              # how much of the original line's emotion to carry (empty: speak.emo_alpha)
+    speaker: qwen           # qwen: the designed voices are spoken by Qwen3-TTS, the model that designed them (cleanest
+                            # by ear; no emotion or duration control: long lines are sped up after); indextts: by the
+                            # cloning model, with the original line's emotion (sounded more robotic)
+    emo_alpha:              # speaker indextts: how much of the original line's emotion to carry (empty: speak.emo_alpha)
 
 review:
   mode: unsure              # pause a job before translating for the review screen: off | unsure (only when

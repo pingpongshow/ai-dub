@@ -91,8 +91,9 @@ that would make the next one late is sped up a little first.
   the actors' own voices, cloned from the film (the default), or **house voices**:
   each character gets a voice of Ai Dub's own, designed to suit them from what the
   original tells (gender, age range, pitch, pace, loudness, liveliness, usual mood)
-  and kept for every episode. House voices copy nothing of the actors; each line still
-  follows the original's emotion and timing.
+  and kept for every episode. House voices copy nothing of the actors. Qwen3-TTS designs
+  each voice and then speaks every line in it, so a character stays one person; it
+  follows the original's timing (long lines are sped up) but not each line's emotion.
 - **One actor, one voice.** Speakers are told apart per scene and then linked across the
   film by voice, by the face that is talking (when "Who is talking on screen" is
   installed), and by folding the last few seconds of a speaker into the main speaker

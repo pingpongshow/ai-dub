@@ -266,6 +266,8 @@ def test_house_voices_replace_the_actors(cfg, media_root):
     assert houses[0]["file"] != houses[1]["file"]
     assert all(c.get("traits", {}).get("seconds") for c in prof.characters.values())
     assert job["record"]["qc"]["house_voices"]["designed_now"] == 2
+    # Spoken by the model that designed them, not the cloning model.
+    assert job["record"]["models"]["voice"] == cfg.get("stages.house_speak.model")
     # A second episode keeps the same voices.
     ep2 = synth.episode(show / "House Show - S01E02.mkv")
     job2 = run_service_job(svc, ep2, voice="house")

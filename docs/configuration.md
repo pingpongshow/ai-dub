@@ -163,7 +163,8 @@ ones you're most likely to want are below.
 
 | Setting | Default | What it does |
 |---|---|---|
-| `voice.mode` | `clone` | `clone`: each actor's own voice, cloned from the film. `house`: a voice of Ai Dub's own for each character, designed from what the original says about them (gender, age range, pitch, pace, loudness, liveliness, usual mood) and kept for every episode; the original line's emotion and timing are still followed. Needs the voice-design model (Models page). Per show on its Settings tab. |
+| `voice.mode` | `clone` | `clone`: each actor's own voice, cloned from the film. `house`: a voice of Ai Dub's own for each character, designed from what the original says about them (gender, age range, pitch, pace, loudness, liveliness, usual mood) and kept for every episode and spoken by the same model that designed it (see `voice.house.speaker`). Needs the house-voice model (Models page). Per show on its Settings tab. |
+| `voice.house.speaker` | `qwen` | Which model speaks house voices. `qwen`: Qwen3-TTS, which designed them; the cleanest by ear, one steady voice per character, but no emotion or duration control (long lines are sped up afterwards). `indextts`: the voice-cloning model, which carries the original line's emotion (`voice.house.emo_alpha`) and fits each line's length, but sounded more robotic |
 | `voice.house.design_min_s` | `10` | Characters with less speech than this get one of the generic voices of their gender and age range instead of one designed for them |
 | `speakers.face_links`, `speakers.absorb_s` | `true`, `20` | Telling one actor from another: speakers whose lines show the same face talking are joined, and a speaker with less than this many seconds joins the main speaker of the same gender it sounds most like |
 | `review.mode` | `unsure` | Stop before translating: `off`, `unsure` (only when something needs a look) or `always`. Also on the Settings page. |
