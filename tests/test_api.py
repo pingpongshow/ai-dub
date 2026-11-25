@@ -50,6 +50,17 @@ def test_queue_add_and_remove(client, media_root, tmp_path):
     assert c.get("/api/jobs", params={"view": "queue"}).json() == []
 
 
+def test_a_title_gets_its_own_voice_choice(client, media_root):
+    c, svc = client
+    ep = synth.episode(media_root / "Show - 03.mkv")
+    assert c.post("/api/jobs", json={"paths": [str(ep)], "voice": "actors"}).status_code == 400
+    r = c.post("/api/jobs", json={"paths": [str(ep)], "voice": "house"}).json()
+    assert svc.store.get(r["added"][0])["options"]["voice"] == "house"
+    ep2 = synth.episode(media_root / "Show - 04.mkv")
+    r = c.post("/api/jobs", json={"paths": [str(ep2)]}).json()
+    assert "voice" not in svc.store.get(r["added"][0])["options"]   # the show's setting decides
+
+
 def test_confirmations_and_secrets(client, cfg):
     c, svc = client
     assert c.post("/api/originals/delete", json={"ids": [1]}).status_code == 400

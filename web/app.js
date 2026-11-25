@@ -415,6 +415,8 @@ async function showAddForm() {
         <option value="zh">Mandarin</option><option value="yue">Cantonese</option></select></label>
       <label class="opt">Review before dubbing<select id="review"><option value="">Show's setting</option><option value="off">Off</option>
         <option value="unsure">When unsure</option><option value="always">Always</option></select></label>
+      <label class="opt" title="The actors' own voices are cloned from the film; house voices are designed to suit each character and copy nothing of the actors">Dub voices<select id="voice"><option value="">Show's setting</option>
+        <option value="clone">Actors' own voices</option><option value="house">House voices</option></select></label>
       <label style="padding-bottom:7px"><input type="checkbox" id="redo"> Redo</label>
       <label style="padding-bottom:7px" title="Saves the review choice as this show's setting, so later episodes use it too"><input type="checkbox" id="showrev" disabled> Use this review setting for every episode of the show</label>
       <span class="grow"></span>
@@ -432,7 +434,7 @@ async function showAddForm() {
     const body = { paths, profile: paths.length > 1 && prof === first.profile_guess ? null : prof || null,
       audio_stream: $("#track") && $("#track").value !== "" ? Number($("#track").value) : null,
       language: $("#lang").value || null, redo: $("#redo").checked, review: $("#review").value || null,
-      show_review: $("#showrev").checked };
+      show_review: $("#showrev").checked, voice: $("#voice").value || null };
     try {
       const res = await api("/jobs", { body });
       toast(`Added ${plural(res.added.length, "episode")}` + (res.errors.length ? `; ${res.errors.length} not added: ${res.errors[0].error}` : ""), !!res.errors.length);
@@ -536,6 +538,7 @@ async function loadQueue() {
         <div class="sub">${episode(j.path).show ? `<span class="ep-show">${esc(episode(j.path).show)}</span>` : ""}${st}
           ${j.status === "queued" && j.eta != null ? `<span>about ${mins(j.eta)}</span>` : ""}
           ${j.status === "queued" && j.options && j.options.start_now ? `<span class="tag accent" title="It runs even while the queue is paused">Starting next</span>` : ""}
+          ${j.options && j.options.voice === "house" ? `<span class="tag" title="Dubbed in house voices designed for each character, not the actors' own">House voices</span>` : ""}
           ${holding && early ? `<span class="tag accent" title="It pauses for your review before anything is translated">Will stop for review</span>` : ""}</div>
         ${j.status !== "queued" ? `<div class="meta"><span>${step}${j.message ? ` · ${esc(j.message)}` : ""}</span>
           <span class="num nowrap">${j.eta != null ? `about ${mins(j.eta)} left · ` : ""}${pct} %</span></div>

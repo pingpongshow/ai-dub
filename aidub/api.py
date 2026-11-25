@@ -201,13 +201,16 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
     @app.post("/api/jobs")
     def add_jobs(paths: list[str] = Body(...), profile: str | None = Body(None), audio_stream: int | None = Body(None),
                  language: str | None = Body(None), redo: bool = Body(False), review: str | None = Body(None),
-                 show_review: bool = Body(False)):
+                 show_review: bool = Body(False), voice: str | None = Body(None)):
         added, errors = [], []
         if review is not None and review not in ("off", "unsure", "always"):
             bad(400, "review must be off, unsure or always")
+        if voice is not None and voice not in ("clone", "house"):
+            bad(400, "voice must be clone or house")
         for p in paths:
+            # voice: this title's own choice of the actors' cloned voices or house voices (over the show's).
             opts = {k: v for k, v in {"audio_stream": audio_stream, "language": language, "redo": redo,
-                                      "review": review}.items() if v}
+                                      "review": review, "voice": voice}.items() if v}
             try:
                 added.append(svc.add(p, profile or None, opts))
             except Exception as exc:

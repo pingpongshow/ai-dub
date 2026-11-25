@@ -144,7 +144,7 @@ Edit these from the **Shows** page rather than by hand.
 
 | Setting | Where | Choices |
 |---|---|---|
-| Dub voices | Shows → Settings → Voices | The actors' own voices, cloned from the film (`clone`), or house voices designed to suit each character (`house`). Default: `voice.mode`. |
+| Dub voices | Shows → Settings → Voices | The actors' own voices, cloned from the film (`clone`), or house voices designed to suit each character (`house`). Default: `voice.mode`. A title can also be given its own choice when you add it (Add → Dub voices). |
 | Honorifics | Shows → Settings | Keep (-san, -kun…) or drop. Applies to lines translated from speech; lines dubbed from English subtitles keep the subtitle's wording. |
 | Style | Shows → Settings | Natural English, or close to the original |
 | Review before dubbing | Shows → Settings → Show rules | The default, Off, When unsure or Always |
