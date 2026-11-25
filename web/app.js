@@ -764,6 +764,12 @@ async function pageProfile(slug) {
 
 function profileSettings(slug, p) {
   $("#ptab").innerHTML = `
+    <div class="panel"><h3>Voices</h3>
+      <div class="field-grid" style="margin-top:10px">
+        <span class="lab">Dub voices</span><span><select id="vmode"><option value="">As in Settings (${p.default_voice === "house" ? "house voices" : "the actors' own"})</option>
+          <option value="clone">The actors' own voices, cloned from the film</option><option value="house">House voices, designed to suit each character</option></select></span>
+        <span class="help">House voices copy nothing of the actors: each character gets a voice of its own made to match their gender, age, pitch, pace and manner, kept for every episode. The original's emotion and timing are still followed. Applies to episodes dubbed from now on.</span>
+      </div></div>
     <div class="panel"><h3>Translation</h3>
       <div class="field-grid" style="margin-top:10px">
         <span class="lab">Honorifics</span><span><select id="hon"><option value="keep">Keep them (-san, -kun…)</option><option value="drop">Drop them</option></select></span>
@@ -774,8 +780,9 @@ function profileSettings(slug, p) {
   showRules(slug);
   $("#hon").value = p.settings.honorifics || "keep";
   $("#style").value = p.settings.style || "natural";
-  const save = () => api("/profiles/" + encodeURIComponent(slug), { method: "PATCH", body: { settings: { honorifics: $("#hon").value, style: $("#style").value } } }).then(() => toast("Saved")).catch(fail);
-  $("#hon").onchange = save; $("#style").onchange = save;
+  $("#vmode").value = p.settings.voice || "";
+  const save = () => api("/profiles/" + encodeURIComponent(slug), { method: "PATCH", body: { settings: { honorifics: $("#hon").value, style: $("#style").value, voice: $("#vmode").value } } }).then(() => toast("Saved")).catch(fail);
+  $("#hon").onchange = save; $("#style").onchange = save; $("#vmode").onchange = save;
 }
 
 // Every episode in the show's folders and how far it is; the rest can be queued from here.
@@ -832,6 +839,10 @@ async function profileVoices(slug, p) {
         <div class="head"><input type="text" value="${esc(c.name)}" class="cname" aria-label="Name"><button class="sm" data-act="rename">Rename</button></div>
         <div class="small muted" style="margin-top:6px">${esc([c.gender, c.age].filter(Boolean).join(", ") || "Gender and age unknown")} · ${c.clean_seconds} s of clean audio
           ${c.voice_of ? ` · speaks with ${esc((p.characters.find((x) => x.id === c.voice_of) || {}).name || c.voice_of)}'s voice` : ""}</div>
+        ${c.house ? `<div class="ref house" title="${esc(c.house.description || "")}"><span class="tag accent">House voice</span>
+          <audio controls preload="none" src="/api/profiles/${encodeURIComponent(p.slug)}/ref?file=${encodeURIComponent(c.house.file)}"></audio>
+          <button class="sm ghost" data-act="recast" title="Design a different voice for this character in the next dub">Recast</button></div>
+          <div class="small faint">${esc(c.house.description || "")}</div>` : ""}
         <div class="refs">${(c.refs || []).map((r) => `<div class="ref" data-ref="${esc(r.file)}">
           <audio controls preload="none" src="/api/profiles/${encodeURIComponent(p.slug)}/ref?file=${encodeURIComponent(r.file)}"></audio>
           <span class="small muted num nowrap">${Number(r.duration).toFixed(1)} s</span>
@@ -869,6 +880,7 @@ async function profileVoices(slug, p) {
           act({ action: "split", refs, name: prompt("Name for the new character", "") || "" });
         }
         if (a === "delchar" && confirm("Delete this character and its clips?")) act({ action: "delete", confirm: true });
+        if (a === "recast" && confirm("Design a different house voice for this character? The next dub of this show uses it.")) act({ action: "recast" });
       };
     });
     $(".cname", card).onkeydown = (e) => { if (e.key === "Enter") act({ action: "rename", name: e.target.value }); };

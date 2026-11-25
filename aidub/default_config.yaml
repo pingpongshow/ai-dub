@@ -53,6 +53,7 @@ gpu:
     translate: 26000
     speak: 10000
     faces: 3000
+    voicedesign: 6000
     bwe: 4000
     ocr: 2000
   poll_seconds: 30
@@ -91,6 +92,14 @@ translate:
 verify:
   enabled: true             # keep a small preview of each finished dub to check before its original is deleted
 
+voice:
+  mode: clone               # clone: each actor's own voice, cloned from the film; house: a voice of Ai Dub's own for each
+                            # character, designed to suit them (gender, age, pitch, pace, manner), the same in every
+                            # episode; per show in its Settings. house needs the voice-design model (Models page)
+  house:
+    design_min_s: 10        # characters with less speech than this get a generic voice of their gender and age range
+    emo_alpha:              # how much of the original line's emotion to carry (empty: speak.emo_alpha)
+
 review:
   mode: unsure              # pause a job before translating for the review screen: off | unsure (only when
                             # something needs a look) | always; per show on its profile, per job when adding it
@@ -103,6 +112,9 @@ songs:                      # songs keep the original voice; never translated
 speakers:
   link_threshold: 0.62      # cosine similarity to treat two clusters as one voice
   profile_threshold: 0.66   # cosine similarity to match a profile character
+  face_links: true          # once faces are known, speakers whose lines show one face talking are one person
+  absorb_s: 20              # a speaker with less speech than this joins the main speaker it sounds most like ...
+  absorb_threshold: 0.45    # ... at least this alike (never the other gender, nor someone talking in the same scene); 0 s: off
   same_person_ratio: 0.86   # and line by line: two speakers' lines as alike as this share of each one's own likeness (one person split: 0.89-1.04; two men: up to 0.82)
   min_clean_seconds: 4.0    # less clean audio than this makes a "minor speaker"
   max_refs_per_character: 8

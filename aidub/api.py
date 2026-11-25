@@ -444,11 +444,13 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
         p = _profile(slug)
         chars = []
         for cid, ch in p.characters.items():
-            chars.append({"id": cid, **{k: v for k, v in ch.items() if k not in ("embedding",)},
+            chars.append({"id": cid, **{k: v for k, v in ch.items() if k not in ("embedding", "house")},
+                          "house": {k: v for k, v in (ch.get("house") or {}).items() if k != "embedding"} or None,
                           "refs": [{k: v for k, v in r.items() if k != "embedding"} for r in ch.get("refs", [])],
                           "clean_seconds": round(p.clean_seconds(cid), 1)})
         chars.sort(key=lambda c: -c["clean_seconds"])
         return {"slug": p.slug, "name": p.name, "settings": p.settings, "glossary": p.glossary,
+                "default_voice": cfg.get("voice.mode", "clone"),
                 "characters": chars, "episodes": p.data.get("episodes", []), "size": p.size()}
 
     @app.get("/api/profiles/{slug}/episodes")
@@ -514,7 +516,9 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
         if "name" in body:
             p.data["name"] = str(body["name"]).strip() or p.name
         if "settings" in body and isinstance(body["settings"], dict):
-            allowed = {"honorifics", "style", "reflect"}
+            allowed = {"honorifics", "style", "reflect", "voice"}
+            if body["settings"].get("voice") not in (None, "", "clone", "house"):
+                bad(400, "voice must be clone or house")
             p.settings.update({k: v for k, v in body["settings"].items() if k in allowed})
         p.save()
         return {"ok": True}
@@ -550,6 +554,9 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
             p.remove_ref(cid, str(body.get("ref")))
         elif action == "lock_ref":
             p.lock_ref(cid, str(body.get("ref")), bool(body.get("locked", True)))
+        elif action == "recast":
+            from .house import recast
+            recast(p, cid)
         elif action == "set":
             for k in ("gender", "age"):
                 if k in body:
@@ -591,7 +598,7 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
         target = (p.root / file).resolve()
         if p.root.resolve() not in target.parents or not target.exists():
             bad(404, "not found")
-        return FileResponse(target, media_type="audio/flac")
+        return FileResponse(target, media_type="audio/wav" if target.suffix == ".wav" else "audio/flac")
 
     @app.put("/api/profiles/{slug}/glossary")
     def glossary_put(slug: str, source: str = Body(...), en: str = Body(...)):

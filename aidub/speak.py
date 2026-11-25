@@ -31,7 +31,7 @@ from pathlib import Path
 import numpy as np
 
 from . import fit as F
-from . import gpu
+from . import gpu, house
 from . import lines as L
 from . import media
 from . import pronounce
@@ -437,11 +437,16 @@ def _requests(job: Job, ln: L.Line, text: str, takes: int, tag: str, dlg, sr, fa
     orig = _orig_clip(job, ln, dlg, sr)
     min_emo = float(job.cfg.get("speak.min_emotion_ref_s", 1.0))
     # A voice-bank clip can be dropped by another episode's run while this job waits.
-    ref = next((v for v in (voice, ln.voice) if v and Path(v).exists()), str(orig))
+    ref = next((v for v in (voice, ln.voice) if v and Path(v).exists()), "")
+    if not ref:
+        if ln.voice_note.startswith("house voice"):
+            raise RuntimeError(f"line {ln.id}: its house voice {ln.voice} is gone (recast while this job ran?)")
+        ref = str(orig)
     req_base = {"text": spoken(text), "speaker_ref": ref}
     if caps.get("emotion_ref", True) and ln.duration >= min_emo and not ln.overlap:
         req_base["emotion_ref"] = str(orig)
-        req_base["emo_alpha"] = float(job.cfg.get("speak.emo_alpha", 0.6))
+        alpha = job.cfg.get("voice.house.emo_alpha") if ln.voice_note.startswith("house voice") else None
+        req_base["emo_alpha"] = float(alpha if alpha not in (None, "") else job.cfg.get("speak.emo_alpha", 0.6))
     else:
         vec = emo_vector(ln.emotion)
         if vec and caps.get("emotion_vector", True):
@@ -541,6 +546,9 @@ def run_speak(job: Job) -> None:
     redo_takes = max(takes, int(job.cfg.get("speak.redo_takes", 4)))
     rules = F.FitRules.from_config(job.cfg)
     dlg, sr = media.read_wav(job.path("audio", "dialogue.wav"), mono=True)
+    if house.mode(job) == "house":
+        house.cast(job, lines)  # every line in its character's designed voice, never the actor's
+        L.save(lines, job.path("lines.json"))
     with _voices(job) as w:
         caps = job.get("tts_caps", {})
         reqs = []
@@ -598,7 +606,8 @@ def score_files(job: Job, items: list[tuple[L.Line, str, str]]) -> dict[str, dic
     by_char: dict[str, list[float]] = {}
     for (ln, _, p), e in zip(items, embs):
         ch = prof.characters.get(prof.voice_source(ln.character), {})
-        target = ch.get("embedding")
+        # In a house voice the take should sound like that voice, not like the actor.
+        target = house.house_embedding(prof, ln.voice) if ln.voice_note.startswith("house voice") else ch.get("embedding")
         if target and e:
             sim = cosine(e, target)
             by_char.setdefault(ln.character, []).append(sim)

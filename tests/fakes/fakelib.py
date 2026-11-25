@@ -223,6 +223,21 @@ def tts_ops():
             "synthesize": synthesize}
 
 
+def voicedesign_ops():
+    """A tone whose pitch follows the brief: a woman's or child's higher, each timbre a step apart."""
+    def design(a):
+        d = a["description"].lower()
+        f = 230.0 if any(w in d for w in ("woman", "girl", "boy")) else 120.0
+        f += 12.0 * (sum(map(ord, d.split(" voice.")[0][-24:])) % 5)
+        sr = 24000
+        t = np.arange(int(3.0 * sr)) / sr
+        y = (0.3 * np.sin(2 * np.pi * f * t)).astype(np.float32)
+        Path(a["out"]).parent.mkdir(parents=True, exist_ok=True)
+        sf.write(a["out"], y, sr)
+        return {"path": a["out"], "sample_rate": sr}
+    return {"design": design}
+
+
 def bwe_ops():
     def upsample(a):
         for it in a["items"]:
@@ -237,7 +252,8 @@ def ocr_ops():
 
 
 OPS = {"separate": separate_ops, "diarize": diarize_ops, "speaker": speaker_ops, "asr": asr_ops,
-       "events": events_ops, "llm": llm_ops, "tts-indextts": tts_ops, "bwe-flashsr": bwe_ops, "ocr": ocr_ops}
+       "events": events_ops, "llm": llm_ops, "tts-indextts": tts_ops, "bwe-flashsr": bwe_ops, "ocr": ocr_ops,
+       "voicedesign": voicedesign_ops}
 
 
 def run(name: str) -> None:

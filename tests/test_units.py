@@ -2301,3 +2301,99 @@ def test_a_line_in_a_reviewed_section_is_not_voiced_again(tmp_path):
     assert review.reset_for_lines(work, tmp_path / "film.mkv", {7: {"en": "Changed"}, 8: {}}, None) == [8]
     ln = {x.id: x for x in L.load(work / "lines.json")}
     assert ln[7].en == "Locked." and ln[7].take == "/x/t.wav" and ln[8].take == ""
+
+
+def test_link_must_link_joins_unless_cannot():
+    v = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
+    assert len(set(speakers.link(v, 0.8))) == 3
+    labels = speakers.link(v, 0.8, must_link=[(0, 1)])
+    assert labels[0] == labels[1] != labels[2]
+    labels = speakers.link(v, 0.8, cannot_link={(0, 1)}, must_link=[(0, 1)])
+    assert labels[0] != labels[1]
+
+
+def test_absorb_small_joins_main_speaker_of_same_gender_only():
+    v = [[1, 0, 0], [0.8, 0.6, 0], [0, 1, 0], [0.75, 0.66, 0]]
+    labels = [0, 1, 2, 3]
+    secs = [60.0, 5.0, 60.0, 5.0]
+    out = speakers.absorb_small(v, labels, secs, ["male", "male", "female", "female"], set(), 20, 0.45)
+    assert out[1] == out[0]                  # a few seconds that sound like the main man join him
+    assert out[3] == out[2]                  # the woman's fragment joins the woman, though nearer the man
+    out = speakers.absorb_small(v, labels, secs, ["male", "male", "male", "male"], {(1, 0)}, 20, 0.45)
+    assert out[1] != out[0]                  # never someone talking in the same window
+
+
+class _Job:
+    """Just enough of a job for identity.relink and house.analyse."""
+    def __init__(self, tmp_path, state, rows=None, cfg=None):
+        import json
+        from aidub import config
+        self.work, self.state, self.qc, self.models = tmp_path, state, {}, {}
+        self.cfg = cfg or config.Config(config._merge(__import__("yaml").safe_load(config.DEFAULTS_FILE.read_text()), {}), None, {})
+        self.options = {}
+        if rows is not None:
+            (tmp_path / "faces.json").write_text(json.dumps(rows))
+
+    def get(self, k, d=None):
+        return self.state.get(k, d)
+
+    def set(self, k, v):
+        self.state[k] = v
+
+    def path(self, *p):
+        return self.work.joinpath(*p)
+
+    def log(self, m):
+        pass
+
+
+def test_relink_joins_one_face_across_windows(tmp_path):
+    from aidub import identity
+    face = [1.0] + [0.0] * 9
+    other = [0.0, 1.0] + [0.0] * 8
+    third = [0.0, 0.0, 1.0] + [0.0] * 7
+    # Window 0: A (the hero) and B; window 1: C (the hero, recorded differently) and D.
+    va, vb, vc, vd = [1, 0, 0, 0], [0, 1, 0, 0], [0.5, 0, 0.866, 0], [0, 0.3, 0, 0.95]
+    segs, lines, rows, t = [], [], [], 0.0
+    for win, spk, emb, fc in [(0, "S1", va, face), (0, "S2", vb, other), (1, "S3", vc, face), (1, "S4", vd, third)]:
+        for k in range(3):
+            segs.append({"start": t, "end": t + 3, "speaker": spk, "window": win, "overlap": False, "emb": emb,
+                         "local": f"{win}:{spk}"})
+            lines.append(L.Line(len(lines) + 1, t, t + 3, speaker=spk))
+            rows.append({"id": len(lines), "faces": [{"score": 1.0, "print": fc}]})
+            t += 4
+    spk = {s: {"embedding": [], "seconds": 30.0, "gender": "male", "age": "adult"} for s in ("S1", "S2", "S3", "S4")}
+    job = _Job(tmp_path, {"diarization": {"segments": segs, "speakers": spk}}, rows)
+    job.cfg.data["speakers"]["absorb_s"] = 0
+    identity.relink(job, lines)
+    who = {ln.id: ln.speaker for ln in lines}
+    assert who[1] == who[7]                   # the hero is one speaker, by his face
+    assert who[1] != who[4] and who[4] != who[10]   # B and D: different windows, voices unlike, no shared face
+    assert job.qc["speakers_relinked"]["after"] == 3
+    before = dict(who)
+    identity.relink(job, lines)               # again: nothing changes
+    assert {ln.id: ln.speaker for ln in lines} == before
+
+
+def test_house_describe_and_mode(tmp_path):
+    from aidub import house
+    ch = {"gender": "female", "age": "senior",
+          "traits": {"seconds": 40, "pitch_rel": -3.0, "spread_rel": 2.0, "rate_rel": 1.3, "loud_rel": -4,
+                     "emotions": {"ANGRY": 0.4, "NEUTRAL": 0.6}, "emotion_lift": {"ANGRY": 2.0, "NEUTRAL": 0.8}}}
+    d = house.describe(ch, "slightly husky")
+    assert d.startswith("An older woman in her late sixties with a low-pitched, slightly husky voice.")
+    for bit in ("Speaks quickly.", "Soft-spoken", "expressive", "Often sounds angry."):
+        assert bit in d
+    ch["traits"]["emotion_lift"]["ANGRY"] = 1.1     # angry no more often than the rest of the cast
+    assert "angry" not in house.describe(ch, "slightly husky")
+    assert house.describe({"gender": "male", "age": "child"}, "clear and bright").startswith("A boy of about ten")
+
+    class P:
+        settings = {}
+    job = _Job(tmp_path, {})
+    job.profile = P()
+    assert house.mode(job) == "clone"
+    P.settings = {"voice": "house"}
+    assert house.mode(job) == "house"
+    job.options = {"voice": "clone"}
+    assert house.mode(job) == "clone"          # a job's own choice wins over the show's

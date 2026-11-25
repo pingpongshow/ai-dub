@@ -87,6 +87,16 @@ that would make the next one late is sped up a little first.
 
 ### How the English is voiced and mixed
 
+- **Whose voice.** Two ways, chosen per show (Shows → Settings) or in `voice.mode`:
+  the actors' own voices, cloned from the film (the default), or **house voices**:
+  each character gets a voice of Ai Dub's own, designed to suit them from what the
+  original tells (gender, age range, pitch, pace, loudness, liveliness, usual mood)
+  and kept for every episode. House voices copy nothing of the actors; each line still
+  follows the original's emotion and timing.
+- **One actor, one voice.** Speakers are told apart per scene and then linked across the
+  film by voice, by the face that is talking (when "Who is talking on screen" is
+  installed), and by folding the last few seconds of a speaker into the main speaker
+  they sound like.
 - **Takes.** Each line is voiced twice, usually from the speaker's own clip, with the original
   line's emotion, and each take is listened back to: the one whose words come back right
   is kept. If no take passes but one is nearly right, it is used and flagged for a listen

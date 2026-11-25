@@ -245,3 +245,31 @@ def test_a_5_1_original_gets_a_5_1_dub(cfg, media_root):
     job = run_service_job(Service(cfg), src)
     assert job["status"] == J.DONE
     assert any(t.is_aidub and t.channels == 6 for t in media.probe(src).audio)
+
+
+def test_house_voices_replace_the_actors(cfg, media_root):
+    from aidub import lines as L
+    from aidub import workers
+    stamp = workers.env_dir(cfg, "voicedesign")
+    stamp.mkdir(parents=True, exist_ok=True)
+    (stamp / ".aidub-ready").write_text(workers.requirements_hash("voicedesign"))
+    cfg.data["voice"]["house"]["design_min_s"] = 0
+    show = media_root / "House Show"
+    show.mkdir(parents=True)
+    ep = synth.episode(show / "House Show - S01E01.mkv")
+    svc = Service(cfg)
+    job = run_service_job(svc, ep, voice="house")
+    assert job["status"] == J.DONE, job["message"]
+    prof = svc.profiles.get("house-show")
+    houses = [c["house"] for c in prof.characters.values() if c.get("house")]
+    assert len(houses) == 2 and all((prof.root / h["file"]).exists() and h["description"] for h in houses)
+    assert houses[0]["file"] != houses[1]["file"]
+    assert all(c.get("traits", {}).get("seconds") for c in prof.characters.values())
+    assert job["record"]["qc"]["house_voices"]["designed_now"] == 2
+    # A second episode keeps the same voices.
+    ep2 = synth.episode(show / "House Show - S01E02.mkv")
+    job2 = run_service_job(svc, ep2, voice="house")
+    assert job2["status"] == J.DONE, job2["message"]
+    assert job2["record"]["qc"]["house_voices"]["designed_now"] == 0
+    assert sorted(c["house"]["file"] for c in svc.profiles.get("house-show").characters.values() if c.get("house")) \
+        == sorted(h["file"] for h in houses)

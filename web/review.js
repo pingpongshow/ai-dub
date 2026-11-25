@@ -933,9 +933,9 @@ function englishRow(l, ed) {
         <span class="row"><button class="sm ${pending ? "primary" : ""}" data-redo="${l.id}">${pending ? "✓ Will be redone" : "↻ Redo this line"}</button>
           ${pending ? `<button class="sm ghost" data-unredo="${l.id}">Don't redo</button>` : ""}</span>
         ${l.kind === "speech" ? `<span class="muted">Voice: ${esc(voiceFrom(l.voice_note || ""))}</span>
-        <span class="row"><button class="sm ${pending && pending.other_voice ? "primary" : ""}" data-other="${l.id}"
+        ${/^house voice/.test(l.voice_note || "") ? "" : `<span class="row"><button class="sm ${pending && pending.other_voice ? "primary" : ""}" data-other="${l.id}"
           title="Voice it from ${/^own line/.test(l.voice_note || "") ? "the speaker's usual voice" : "this line's own clip"} instead">${pending && pending.other_voice ? "✓ Other voice" : "Try the other voice"}</button>
-          ${l.end - l.start >= 1.5 ? `<button class="sm ghost" data-asvoice="${l.id}" title="This line's original audio becomes the clip ${esc(whoLabel(lineWho(l)))} is voiced from, here and in later episodes">Make this line ${esc(whoLabel(lineWho(l)))}'s voice</button>` : ""}</span>` : ""}` : ""}</span>`;
+          ${l.end - l.start >= 1.5 ? `<button class="sm ghost" data-asvoice="${l.id}" title="This line's original audio becomes the clip ${esc(whoLabel(lineWho(l)))} is voiced from, here and in later episodes">Make this line ${esc(whoLabel(lineWho(l)))}'s voice</button>` : ""}</span>`}` : ""}` : ""}</span>`;
   }
   if (!ed || !(l.kind === "speech" || l.kind === "song" || l.kind === "wordless")) return "";
   return `<span class="lab">English</span><span><textarea data-en-pre="${l.id}" rows="2"
@@ -987,6 +987,7 @@ function wireEnglish(box) {
 // Where a dubbed line's voice came from, in words.
 function voiceFrom(note) {
   const mine = /your choice/.test(note) ? " (your choice)" : "";
+  if (/^house voice/.test(note)) return note;
   if (/^own line/.test(note)) return `this line's own clip${mine}`;
   if (/^(voice of|generic voice)/.test(note)) return note;
   return `the speaker's usual voice${mine}`;

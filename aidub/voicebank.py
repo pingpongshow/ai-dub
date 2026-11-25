@@ -12,7 +12,7 @@ from collections import Counter, defaultdict
 import numpy as np
 import soundfile as sf
 
-from . import faces
+from . import faces, house, identity
 from . import lines as L
 from . import media, speakers
 from .job import Job
@@ -583,11 +583,18 @@ def move_by_pitch(job: Job, prof: Profile, lines: list[L.Line]) -> int:
 def run(job: Job) -> None:
     prof: Profile = job.profile
     lines = L.load(job.path("lines.json"))
+    identity.relink(job, lines)
     voices = line_voices(job, lines)
     mapping = link_characters(job, prof, lines, voices)
     update_refs(job, prof, mapping, lines, voices)
     move_by_pitch(job, prof, lines)
     assign_voices(job, prof, lines, voices)
+    house.analyse(job, lines)
+    if house.mode(job) == "house":
+        # Voiced in a house voice: who it's cloned from no longer matters (chosen in the speak step).
+        for ln in lines:
+            if ln.kind == L.SPEECH:
+                ln.voice_note = "house voice"
     job.set("mixed_characters", mixed_characters(prof, lines, voices, float(job.cfg.get("speakers.same_person_ratio", 0.86))))
     if job.src.name not in prof.data.setdefault("episodes", []):
         prof.data["episodes"].append(job.src.name)

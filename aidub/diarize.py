@@ -114,7 +114,7 @@ def run(job: Job) -> None:
                 spk[name].update({"gender": v.get("gender", ""), "age": v.get("age", "")})
             job.models["gender_age"] = ga.get("model", "")
 
-    for s in raw:
-        s.pop("local", None)
+    # Each turn keeps its window speaker ("local"): the voice-bank step links them again
+    # once the faces are known (identity.relink).
     job.set("diarization", {"segments": sorted(raw, key=lambda s: s["start"]), "speakers": spk})
     job.status(f"{len(spk)} speakers in {len(raw)} turns")

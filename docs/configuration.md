@@ -137,18 +137,20 @@ Each show has a profile in `/config/profiles/<show>/`. It holds:
 
 - `profile.json`: settings, characters, glossary and rules;
 - `refs/`: the reference clips for each character's voice;
+- `house/`: each character's designed house voice, when the show uses house voices;
 - `fingerprints/`: the openings and endings it has learnt.
 
 Edit these from the **Shows** page rather than by hand.
 
 | Setting | Where | Choices |
 |---|---|---|
+| Dub voices | Shows → Settings → Voices | The actors' own voices, cloned from the film (`clone`), or house voices designed to suit each character (`house`). Default: `voice.mode`. |
 | Honorifics | Shows → Settings | Keep (-san, -kun…) or drop. Applies to lines translated from speech; lines dubbed from English subtitles keep the subtitle's wording. |
 | Style | Shows → Settings | Natural English, or close to the original |
 | Review before dubbing | Shows → Settings → Show rules | The default, Off, When unsure or Always |
 | Subtitle habits | Shows → Settings → Show rules | Romaji lines are lyrics · italics in quotation marks are lyrics · "~ text ~" is a sign, not spoken · the narrator's opening is dubbed. All on by default; switch off what doesn't fit the show. |
 | Recurring regions | Shows → Settings → Show rules | Openings, endings and songs marked on a review page "for every episode". Remove them here. |
-| Characters | Shows → Voices | Rename, merge, split off wrongly matched clips, delete, and hear the references; merge suggestions for voices that sound alike |
+| Characters | Shows → Voices | Rename, merge, split off wrongly matched clips, delete, and hear the references; merge suggestions for voices that sound alike. With house voices: hear each character's house voice, read the description it was designed from, and **Recast** it for the next dub |
 | Glossary | Shows → Glossary | Names and terms with their fixed English; click the English to change it |
 
 The review mode is chosen in this order: the episode's choice when you added
@@ -161,6 +163,9 @@ ones you're most likely to want are below.
 
 | Setting | Default | What it does |
 |---|---|---|
+| `voice.mode` | `clone` | `clone`: each actor's own voice, cloned from the film. `house`: a voice of Ai Dub's own for each character, designed from what the original says about them (gender, age range, pitch, pace, loudness, liveliness, usual mood) and kept for every episode; the original line's emotion and timing are still followed. Needs the voice-design model (Models page). Per show on its Settings tab. |
+| `voice.house.design_min_s` | `10` | Characters with less speech than this get one of the generic voices of their gender and age range instead of one designed for them |
+| `speakers.face_links`, `speakers.absorb_s` | `true`, `20` | Telling one actor from another: speakers whose lines show the same face talking are joined, and a speaker with less than this many seconds joins the main speaker of the same gender it sounds most like |
 | `review.mode` | `unsure` | Stop before translating: `off`, `unsure` (only when something needs a look) or `always`. Also on the Settings page. |
 | `verify.enabled` | `true` | Keep a preview of each finished dub to check before its original is deleted. With `false`, a finished dub's working files are deleted at once, and the original stays set aside on the Originals page. |
 | `translate.lead` | `subtitle_verbatim` | Where the English comes from. `subtitle_verbatim` dubs the English subtitles word for word wherever they cover a line. `subtitle_only` uses the subtitles as the script for every line they cover, but not word for word. `subtitle` uses a subtitle only where it means what was said. `audio` translates the speech and treats subtitles as hints. |
