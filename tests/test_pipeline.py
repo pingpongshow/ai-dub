@@ -234,6 +234,15 @@ def test_free_timing_starts_with_the_original(cfg, media_root):
     assert "free_timing" in job["record"]["qc"]
 
 
+def test_sync_timing_lays_lines_out_with_the_speaker(cfg, media_root):
+    cfg.data.setdefault("fit", {})["timing"] = "sync"
+    ep = synth.episode(media_root / "Sync (2020).mkv")
+    svc = Service(cfg)
+    job = run_service_job(svc, ep)
+    assert job["status"] == J.DONE, job["message"]
+    assert job["record"]["qc"]["sync"]["lines"] > 0 and "free_timing" in job["record"]["qc"]
+
+
 def test_a_5_1_original_gets_a_5_1_dub(cfg, media_root):
     src = media_root / "Show" / "Season 1" / "Show - S01E03.mkv"
     src.parent.mkdir(parents=True)

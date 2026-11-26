@@ -7,7 +7,8 @@ Japanese played, and the English came in 1.3 s late. And a line's first or last 
 breath of a word, a trailing "ne") is often left out of its words.
 
 retime: a line whose times are far too short for what it says (under half the time it
-needs) takes them from the voice heard around it.
+needs) takes them from the voice heard around it, and drops its word times (fit.timing: sync
+then follows the voice as one phrase, not the misplaced words).
 extents: how far each dubbed line's voice runs on past its times, joined to it, so the
 original is muted under all of it.
 """
@@ -144,6 +145,7 @@ def retime(job: Job, lines: list[L.Line], voice: "Voice | None" = None) -> int:
         job.log(f"line {ln.id} ({ln.source_text[:20]}): its voice is at {a:.2f}-{b:.2f}, "
                 f"not {ln.start:.2f}-{ln.end:.2f}")
         ln.start, ln.end = round(a, 3), round(b, 3)
+        ln.words = []  # they were where the aligner put them, not where they're said
         moved += 1
     if moved:
         job.qc["lines_retimed_by_voice"] = moved

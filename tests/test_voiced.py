@@ -44,9 +44,11 @@ def test_a_line_timed_far_too_short_takes_its_times_from_the_voice():
     # Woman in the Dunes: 何するんだい at 3857.24-3857.56, said from 3855.92 to 3856.96.
     v = _voice([(5.92, 6.96)])
     lines = [_line(1, 2.0, 3.0, "はい"), _line(2, 7.24, 7.56, "何するんだい"), _line(3, 8.5, 9.0, "うん")]
+    lines[1].words = [L.Word(text="何するんだい", start=7.24, end=7.56)]
     job = FakeJob()
     assert V.retime(job, lines, v) == 1
     assert (lines[1].start, lines[1].end) == (5.92, 7.56)
+    assert lines[1].words == []  # misplaced: sync timing must not follow them
     assert job.qc["lines_retimed_by_voice"] == 1
     # Already right: left alone, and asking again changes nothing.
     assert V.retime(job, lines, v) == 0 and lines[0].start == 2.0

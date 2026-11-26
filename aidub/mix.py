@@ -22,7 +22,7 @@ from . import lines as L
 from . import media
 from . import polish as P
 from . import voiced as V
-from .fit import free_timing, pace
+from .fit import free_timing, pace, sync_timing
 from .job import Job
 
 SR = 48000
@@ -216,6 +216,30 @@ def start_floors(job: Job, lines: list[L.Line], dubbed: list[L.Line]) -> list[fl
     return out
 
 
+def synced_take(job: Job, ln: L.Line, x: np.ndarray, cfg) -> tuple[np.ndarray, list]:
+    """The take laid out to follow the original speaker's mouth (fit.sync_pieces): pieces
+    placed where the original's phrases are, each slowed or sped up a little to fill them,
+    with silence where the original pauses. Starts at the line's start."""
+    spans = F.mouth_spans(ln.words, ln.start, ln.end, float(cfg.get("fit.sync_pause_ms", 250)) / 1000)
+    pieces = F.sync_pieces(spans, len(x) / SR, F.take_pauses(x, SR),
+                           float(cfg.get("fit.sync_slowest", 0.85)), float(cfg.get("fit.sync_fastest", 1.15)))
+    parts, end = [], 0
+    for n, (t0, t1, at, tempo) in enumerate(pieces):
+        y = x[int(t0 * SR): int(t1 * SR)]
+        if abs(tempo - 1.0) > 0.01 and len(y) > SR // 20:
+            raw = media.write_wav(job.path("mix", "synced", f"{ln.id}-{n}.wav"), y[:, None], SR)
+            fast = F.time_stretch(raw, raw.with_name(f"{ln.id}-{n}-t.wav"), tempo)
+            y = media.resample(*media.read_wav(fast, mono=True), SR)[:, 0]
+        y = fade(y.astype(np.float32), int(0.01 * SR))
+        a = max(0, int((at - ln.start) * SR))
+        parts.append((a, y))
+        end = max(end, a + len(y))
+    out = np.zeros(end, dtype=np.float32)
+    for a, y in parts:
+        out[a: a + len(y)] += y
+    return out, pieces
+
+
 def run(job: Job) -> None:
     lines = L.load(job.path("lines.json"))
     voice = V.Voice.load(job, lines)
@@ -245,11 +269,21 @@ def run(job: Job) -> None:
 
     dubbed = sorted((ln for ln in lines if ln.take and ln.kind == L.SPEECH and not ln.fallback), key=lambda l: l.start)
     free = free_timing(job)
+    sync = sync_timing(job)
     gap = float(cfg.get("fit.free_gap_ms", 120)) / 1000
-    takes = []
+    takes, sources, synced = [], [], []
     for ln in dubbed:
         take, tsr = media.read_wav(ln.take, mono=True)
-        takes.append(media.resample(take, tsr, SR)[:, 0].copy())
+        x = media.resample(take, tsr, SR)[:, 0].copy()
+        src_take = Path(ln.take)
+        if sync:
+            # Laid out to follow the original speaker's mouth before any pacing between lines.
+            x, pieces = synced_take(job, ln, x, cfg)
+            src_take = media.write_wav(job.path("mix", "synced", f"{ln.id}.wav"), x[:, None], SR)
+            ln.fit["sync"] = [list(pc) for pc in pieces]
+            synced.append((ln, len(x) / SR, pieces))
+        takes.append(x)
+        sources.append(src_take)
     plan = pace([(ln.start, len(x) / SR) for ln, x in zip(dubbed, takes)], gap,
                 float(cfg.get("fit.free_max_late_ms", 350)) / 1000, float(cfg.get("fit.force_stretch_max", 1.3)),
                 early=float(cfg.get("fit.free_early_ms", 400)) / 1000, floors=start_floors(job, lines, dubbed),
@@ -283,7 +317,7 @@ def run(job: Job) -> None:
             # and that one was sped up if it would have made this one late.
             start, tempo = plan[i]
             if tempo > 1.001:
-                fast = F.time_stretch(Path(ln.take), job.path("mix", "paced", f"{ln.id}.wav"), tempo)
+                fast = F.time_stretch(sources[i], job.path("mix", "paced", f"{ln.id}.wav"), tempo)
                 y, ysr = media.read_wav(fast, mono=True)
                 x = media.resample(y, ysr, SR)[:, 0].copy()
                 ln.fit["paced_tempo"] = tempo
@@ -412,4 +446,12 @@ def run(job: Job) -> None:
                                  "sped_up": sped, "ran_over_kept_lines": over_kept,
                                  "mean_wait_s": round(sum(waited) / len(waited), 2) if waited else 0.0}
         L.save(lines, job.path("lines.json"))
+    if synced:
+        ends = [ln.start + n - ln.end for ln, n, _ in synced]
+        job.qc["sync"] = {"lines": len(synced), "split_at_pauses": sum(len(pc) > 1 for *_, pc in synced),
+                          "slowed": sum(any(t < 0.99 for *_, t in pc) for *_, pc in synced),
+                          "sped_up": sum(any(t > 1.01 for *_, t in pc) for *_, pc in synced),
+                          "end_within_0_3s": round(sum(abs(e) <= 0.3 for e in ends) / len(ends), 3),
+                          "end_short_over_0_5s": round(sum(e < -0.5 for e in ends) / len(ends), 3),
+                          "end_over_0_5s": round(sum(e > 0.5 for e in ends) / len(ends), 3)}
     job.status(f"mixed {placed} dubbed lines")

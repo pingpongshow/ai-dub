@@ -1069,6 +1069,30 @@ def test_free_timing_late_lines_do_not_pile_up():
     assert fit.pace([(0.0, 1.0), (3.0, 1.0)], 0.12, 0.5, 1.3) == [(0.0, 1.0), (3.0, 1.0)]
 
 
+def test_sync_timing_follows_the_speakers_mouth():
+    W = L.Word
+    # The original pauses 0.6 s after its first half; the English pauses at about the same share.
+    spans = fit.mouth_spans([W("a", 10.0, 10.5), W("b", 10.5, 11.0), W("c", 11.6, 12.6)], 10.0, 12.6, 0.25)
+    assert spans == [(10.0, 11.0), (11.6, 12.6)]
+    assert fit.mouth_spans([W("a", 3.0, 3.0)], 2.9, 3.4, 0.25) == [(2.9, 3.4)]  # words with no length
+    pieces = fit.sync_pieces(spans, 2.0, [(0.8, 0.95)], slowest=0.85, fastest=1.15)
+    assert [p[2] for p in pieces] == [10.0, 11.6]               # each half starts with the mouth
+    assert pieces[0][:2] == (0.0, 0.8) and pieces[1][:2] == (0.95, 2.0)
+    assert pieces[0][3] == 0.85 and pieces[1][3] == pytest.approx(1.05)  # filled within the limits
+    # No pause in the English: one piece, slowed at most to the limit; a long one sped up at most to it.
+    assert fit.sync_pieces([(0.0, 2.0)], 1.0, [], 0.85, 1.15) == [(0.0, 1.0, 0.0, 0.85)]
+    assert fit.sync_pieces([(0.0, 2.0)], 3.0, [], 0.85, 1.15)[0][3] == 1.15
+    assert fit.sync_pieces([(0.0, 2.0)], 2.1, [], 0.85, 1.15)[0][3] == pytest.approx(1.05)
+    # An English pause far from any pause of the original isn't matched: the line stays whole.
+    assert len(fit.sync_pieces(spans, 2.0, [(0.1, 0.25)], 0.85, 1.15)) == 1
+    # A take's silences: the gap in the middle, not its ends.
+    sr = 16000
+    tone = np.sin(np.arange(sr // 2) * 0.3).astype(np.float32)
+    x = np.concatenate([np.zeros(sr // 10, np.float32), tone, np.zeros(sr // 5, np.float32), tone, np.zeros(sr // 10, np.float32)])
+    (a, b), = fit.take_pauses(x, sr)
+    assert a == pytest.approx(0.6, abs=0.03) and b == pytest.approx(0.8, abs=0.03)
+
+
 def test_free_timing_starts_early_only_when_it_helps():
     lines = [(5.0, 3.0), (7.0, 1.0)]  # the first runs 1.12 s into the second
     plan = fit.pace(lines, 0.12, 0.35, 1.3, early=0.4, gentle_tempo=1.12)

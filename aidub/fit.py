@@ -56,7 +56,104 @@ def free_timing(job) -> bool:
     timing = str(job.cfg.get("fit.timing", "auto"))
     if timing == "auto":
         return job.get("translate_lead") in ("subtitle_verbatim", "audio")
-    return timing == "start"
+    return timing in ("start", "sync")
+
+
+def sync_timing(job) -> bool:
+    """fit.timing: sync: natural English as with start, then each line is fitted to when the
+    character's mouth moves: its pieces start with the original's phrases, pause where the
+    original pauses, and are slowed or sped up a little to end with it."""
+    return str(job.cfg.get("fit.timing", "auto")) == "sync"
+
+
+def mouth_spans(words: list, start: float, end: float, pause: float) -> list[tuple[float, float]]:
+    """When the original speaker is talking within a line: its words, joined across gaps
+    shorter than `pause`. A line without word timings is one span."""
+    if not words:
+        return [(start, end)]
+    out = [[words[0].start, words[0].end]]
+    for w in words[1:]:
+        if w.start - out[-1][1] >= pause:
+            out.append([w.start, w.end])
+        else:
+            out[-1][1] = max(out[-1][1], w.end)
+    return [(a, b) for a, b in out if b > a] or [(start, max(end, start + 0.01))]
+
+
+def take_pauses(x: np.ndarray, sr: int, min_gap: float = 0.12, below_db: float = 30.0) -> list[tuple[float, float]]:
+    """The silences inside a take (not its ends), in seconds: 20 ms frames more than
+    `below_db` under the take's speech level, at least `min_gap` long."""
+    hop = max(1, int(sr * 0.02))
+    if x.size < 3 * hop:
+        return []
+    frames = x[: x.size // hop * hop].reshape(-1, hop)
+    db = 20 * np.log10(np.sqrt(np.mean(frames ** 2, axis=1)) + 1e-9)
+    quiet = db < float(np.percentile(db, 90)) - below_db
+    out, k, n = [], 0, len(quiet)
+    while k < n:
+        if quiet[k]:
+            j = k
+            while j < n and quiet[j]:
+                j += 1
+            if k > 0 and j < n and (j - k) * 0.02 >= min_gap:
+                out.append((k * 0.02, j * 0.02))
+            k = j
+        else:
+            k += 1
+    return out
+
+
+def sync_pieces(spans: list[tuple[float, float]], length: float, pauses: list[tuple[float, float]],
+                slowest: float, fastest: float, gap: float = 0.08, reach: float = 0.2) -> list[tuple[float, float, float, float]]:
+    """How a take of `length` seconds follows the original's mouth `spans`: pieces
+    (take from, take to, placed at, tempo), tempo >1 faster. The take's own pauses are matched
+    in order to the original's pauses that fall at about the same share of the speech
+    (within `reach`); each piece starts with its group of spans and is played at the tempo
+    that fills it, within [slowest, fastest]."""
+    talk = sum(b - a for a, b in spans)
+    talk_take = length - sum(b - a for a, b in pauses)
+    if talk <= 0 or talk_take <= 0:
+        return [(0.0, length, spans[0][0], 1.0)]
+    # Where each pause falls, as a share of the speech before it.
+    p, acc = [], 0.0
+    for (a, b), (c, _) in zip(spans, spans[1:]):
+        acc += b - a
+        p.append(acc / talk)
+    q, acc, prev = [], 0.0, 0.0
+    for a, b in pauses:
+        acc += a - prev
+        prev = b
+        q.append(acc / talk_take)
+    # The best ordered matching of take pauses (i) to original pauses (j).
+    m, k = len(p), len(q)
+    best = [[0.0] * (m + 1) for _ in range(k + 1)]
+    for i in range(1, k + 1):
+        for j in range(1, m + 1):
+            d = abs(q[i - 1] - p[j - 1])
+            take = best[i - 1][j - 1] + (1 - d / reach) if d < reach else float("-inf")
+            best[i][j] = max(best[i - 1][j], best[i][j - 1], take)
+    pairs, i, j = [], k, m
+    while i and j:
+        d = abs(q[i - 1] - p[j - 1])
+        if d < reach and abs(best[i][j] - (best[i - 1][j - 1] + 1 - d / reach)) < 1e-9:
+            pairs.append((i - 1, j - 1))
+            i, j = i - 1, j - 1
+        elif best[i][j] == best[i - 1][j]:
+            i -= 1
+        else:
+            j -= 1
+    pairs.reverse()
+    cuts = [(pauses[i], j) for i, j in pairs]
+    pieces, t0, s0, busy = [], 0.0, 0, float("-inf")
+    for (pa, pb), j in cuts + [((length, length), len(spans) - 1)]:
+        g0, g1 = spans[s0][0], spans[j][1]
+        piece = pa - t0
+        tempo = min(fastest, max(slowest, piece / max(g1 - g0, 1e-3)))
+        at = max(g0, busy + gap)
+        pieces.append((round(t0, 3), round(pa, 3), round(at, 3), round(tempo, 4)))
+        busy = at + piece / tempo
+        t0, s0 = pb, j + 1
+    return pieces
 
 
 def place(lines: list[tuple[float, float]], tempos: list[float], gap: float, early: float,

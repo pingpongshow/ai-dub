@@ -160,7 +160,11 @@ fit:
   tolerance_ms: 80
   timing: auto              # window: each line fits the time the character speaks (lip movement);
                             # start: starts with the original line at its natural length (lip movement ignored);
-                            # auto: start for the subtitles word for word or the speech alone, window otherwise
+                            # auto: start for the subtitles word for word or the speech alone, window otherwise;
+                            # sync: as start, then each line follows the speaker's mouth (pauses where they pause, ends with them)
+  sync_pause_ms: 250        # timing sync: a gap this long between the original's words is a pause to match
+  sync_slowest: 0.85        # ... a piece of English is played at most this much slower to fill its phrase
+  sync_fastest: 1.15        # ... or this much faster to end with it
   free_gap_ms: 120          # timing start: a line due while the previous English line still speaks follows it
   free_early_ms: 400        # ... or starts up to this early when that leaves the next line on time (never back over a shot change)
   free_max_late_ms: 350     # ... and at most this late: the lines running into it are sped up to make room,
