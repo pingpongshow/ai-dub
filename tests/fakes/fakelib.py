@@ -250,6 +250,26 @@ def voicedesign_ops():
             "design": design, "synthesize": synthesize}
 
 
+def haas_ops():
+    """Words of its own (timed by the recognition worker's aligner)."""
+    def transcribe(a):
+        return {"results": [{"text": "はーすのことば" if voiced(read_mono(it["path"], 16000), 16000) else "",
+                             "language": "ja", "words": []} for it in a["items"]]}
+    return {"transcribe": transcribe}
+
+
+def drama3_ops():
+    """House voices with a direction: like the cloning model, at natural length, no reference emotion."""
+    def synthesize(a):
+        assert all(it.get("speaker_text") for it in a["items"]), "a house voice's words go with it"
+        assert not any(k in it for it in a["items"] for k in ("emotion_ref", "emo_vector", "duration_factor"))
+        return tts_ops()["synthesize"](a)
+    return {"load": lambda a: {"model": a.get("model") or "fake-drama3", "duration_control": False,
+                               "emotion_ref": False, "emotion_vector": False, "emotion_tags": True,
+                               "sample_rate": 22050, "offload_layers": a.get("offload_layers")},
+            "synthesize": synthesize}
+
+
 def bwe_ops():
     def upsample(a):
         for it in a["items"]:
@@ -265,7 +285,7 @@ def ocr_ops():
 
 OPS = {"separate": separate_ops, "diarize": diarize_ops, "speaker": speaker_ops, "asr": asr_ops,
        "events": events_ops, "llm": llm_ops, "tts-indextts": tts_ops, "bwe-flashsr": bwe_ops, "ocr": ocr_ops,
-       "voicedesign": voicedesign_ops}
+       "voicedesign": voicedesign_ops, "asr-haas": haas_ops, "tts-drama3": drama3_ops}
 
 
 def run(name: str) -> None:

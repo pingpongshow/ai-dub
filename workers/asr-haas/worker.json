@@ -1,0 +1,7 @@
+{
+ "python": "3.12",
+ "title": "Japanese speech recognition",
+ "models": "Haas-ja-v1.0 (Third Intelligence; word timing still from Qwen3-ForcedAligner)",
+ "licence": "Apache-2.0",
+ "download": "~2.5 GB"
+}

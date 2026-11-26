@@ -247,6 +247,35 @@ def test_a_5_1_original_gets_a_5_1_dub(cfg, media_root):
     assert any(t.is_aidub and t.channels == 6 for t in media.probe(src).audio)
 
 
+def _ready(cfg, name):
+    from aidub import workers
+    d = workers.env_dir(cfg, name)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / ".aidub-ready").write_text(workers.requirements_hash(name))
+
+
+def test_house_voices_are_spoken_by_drama3_when_installed(cfg, media_root):
+    _ready(cfg, "voicedesign")
+    _ready(cfg, "tts-drama3")
+    cfg.data["voice"]["house"]["design_min_s"] = 0
+    ep = synth.episode(media_root / "Drama Show" / "Drama Show - S01E01.mkv")
+    svc = Service(cfg)
+    job = run_service_job(svc, ep, voice="house")
+    assert job["status"] == J.DONE, job["message"]
+    assert job["record"]["models"]["voice"] == cfg.get("stages.house_drama3.model")
+
+
+def test_japanese_words_come_from_their_own_model_timed_by_the_aligner(cfg, media_root):
+    _ready(cfg, "asr-haas")
+    ep = synth.episode(media_root / "Haas (2021).mkv")
+    svc = Service(cfg)
+    job = run_service_job(svc, ep)
+    assert job["status"] == J.DONE, job["message"]
+    own = job["record"]["qc"]["recognition_own_words"]
+    assert own["changed"] > 0
+    assert "(words)" in job["record"]["models"]["recognition"] and "(timing)" in job["record"]["models"]["recognition"]
+
+
 def test_house_voices_replace_the_actors(cfg, media_root):
     from aidub import lines as L
     from aidub import workers

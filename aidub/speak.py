@@ -31,7 +31,7 @@ from pathlib import Path
 import numpy as np
 
 from . import fit as F
-from . import gpu, house
+from . import gpu, house, voiced
 from . import lines as L
 from . import media
 from . import pronounce
@@ -445,7 +445,10 @@ def _requests(job: Job, ln: L.Line, text: str, takes: int, tag: str, dlg, sr, fa
     req_base = {"text": spoken(text), "speaker_ref": ref}
     if ln.voice_note.startswith("house voice") and ref == ln.voice:
         req_base["speaker_text"] = house.sample_text(job, ref)  # the words the voice file says
-    if caps.get("emotion_ref", True) and ln.duration >= min_emo and not ln.overlap:
+    if caps.get("emotion_tags"):
+        if ln.emotion:
+            req_base["emotion"] = ln.emotion  # said as a direction ([angry])
+    elif caps.get("emotion_ref", True) and ln.duration >= min_emo and not ln.overlap:
         req_base["emotion_ref"] = str(orig)
         alpha = job.cfg.get("voice.house.emo_alpha") if ln.voice_note.startswith("house voice") else None
         req_base["emo_alpha"] = float(alpha if alpha not in (None, "") else job.cfg.get("speak.emo_alpha", 0.6))
@@ -509,7 +512,7 @@ def _voices(job: Job):
     one voice process leaves most of the card idle (it voices one line at a time).
     Extra processes start only while there is room for them; never waits for one."""
     stage = tts_stage(job)
-    want = max(1, int(job.cfg.get("speak.processes", 2)))
+    want = max(1, int(job.cfg.get(f"stages.{stage}.processes") or job.cfg.get("speak.processes", 2)))
     need = int((job.cfg.get("gpu.min_free_mb") or {}).get(stage, 4000))
     with ExitStack() as stack:
         ws = [stack.enter_context(job.worker(stage))]
@@ -519,7 +522,7 @@ def _voices(job: Job):
             if st.present and st.free_mb < need:
                 break
             w = stack.enter_context(Worker(job.cfg, ws[0].name, log=job.log))
-            w.call("load", {"model": job.cfg.get(f"stages.{stage}").get("model")})
+            w.call("load", _stage_args(job, stage))
             ws.append(w)
         if len(ws) > 1:
             job.log(f"voicing with {len(ws)} voice-model processes")
@@ -530,19 +533,31 @@ def tts_stage(job: Job) -> str:
     """Which voice model speaks this job: house voices are spoken by the model family that
     designed them (voice.house.speaker: qwen), unless set to be spoken by the cloning model."""
     from .workers import env_ready
-    name = job.cfg.get("stages.house_speak.worker")
-    if house.mode(job) == "house" and str(job.cfg.get("voice.house.speaker") or "qwen") == "qwen" \
-            and name and env_ready(job.cfg, name):
-        return "house_speak"
+    if house.mode(job) != "house":
+        return "speak"
+    want = str(job.cfg.get("voice.house.speaker") or "drama3")
+    order = {"drama3": ["house_drama3", "house_speak"], "qwen": ["house_speak"]}.get(want, [])
+    for stage in order:
+        name = job.cfg.get(f"stages.{stage}.worker")
+        if name and env_ready(job.cfg, name):
+            if stage != order[0]:
+                job.log(f"house voices: {want} isn't installed (Models page); spoken by {stage} instead")
+            return stage
     return "speak"
+
+
+def _stage_args(job: Job, stage: str) -> dict:
+    cfg = dict(job.cfg.get(f"stages.{stage}") or {})
+    return {k: v for k, v in cfg.items() if k not in ("worker", "processes")}
 
 
 def _load_tts(job: Job, w, stage: str = "speak") -> dict:
     cfg = job.cfg.get(f"stages.{stage}")
-    info = w.call("load", {"model": cfg.get("model")})
+    info = w.call("load", _stage_args(job, stage))
     job.models["voice"] = info.get("model", cfg.get("model", ""))
     caps = {"duration_control": bool(info.get("duration_control")), "emotion_ref": bool(info.get("emotion_ref", True)),
-            "emotion_vector": bool(info.get("emotion_vector", True)), "sample_rate": int(info.get("sample_rate", 24000))}
+            "emotion_vector": bool(info.get("emotion_vector", True)), "emotion_tags": bool(info.get("emotion_tags")),
+            "sample_rate": int(info.get("sample_rate", 24000))}
     job.set("tts_caps", caps)
     return caps
 
@@ -560,6 +575,8 @@ def run_speak(job: Job) -> None:
     redo_takes = max(takes, int(job.cfg.get("speak.redo_takes", 4)))
     rules = F.FitRules.from_config(job.cfg)
     dlg, sr = media.read_wav(job.path("audio", "dialogue.wav"), mono=True)
+    if voiced.retime(job, lines):  # times far too short for the words: the voice's own
+        L.save(lines, job.path("lines.json"))
     if house.mode(job) == "house":
         house.cast(job, lines)  # every line in its character's designed voice, never the actor's
         L.save(lines, job.path("lines.json"))

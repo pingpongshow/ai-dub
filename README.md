@@ -92,8 +92,10 @@ that would make the next one late is sped up a little first.
   each character gets a voice of Ai Dub's own, designed to suit them from what the
   original tells (gender, age range, pitch, pace, loudness, liveliness, usual mood)
   and kept for every episode. House voices copy nothing of the actors. Qwen3-TTS designs
-  each voice and then speaks every line in it, so a character stays one person; it
-  follows the original's timing (long lines are sped up) but not each line's emotion.
+  each voice; Fish Audio Drama 3 speaks every line in it, with the original line's emotion
+  as a direction ([angry]), so a character stays one person. It follows the original's
+  timing (long lines are sped up). On a 32 GB card Drama 3 is slow (about a quarter of real
+  time, hours a film); `voice.house.speaker: qwen` has Qwen3-TTS speak them in minutes.
 - **One actor, one voice.** Speakers are told apart per scene and then linked across the
   film by voice, by the face that is talking (when "Who is talking on screen" is
   installed), and by folding the last few seconds of a speaker into the main speaker
@@ -124,13 +126,15 @@ that would make the next one late is sped up a little first.
 | Gender / age range | [audeering wav2vec2 age-gender](https://huggingface.co/audeering/wav2vec2-large-robust-24-ft-age-gender) | CC-BY-NC-SA-4.0 (non-commercial) |
 | Text similarity (subtitle vs speech) | [LaBSE](https://huggingface.co/sentence-transformers/LaBSE) | Apache-2.0 |
 | Speech recognition + word timing | [Qwen3-ASR 1.7B + ForcedAligner 0.6B](https://github.com/QwenLM/Qwen3-ASR) | Apache-2.0 |
+| Japanese speech recognition (words; timed by the aligner above) | [Haas-ja-v1.0](https://huggingface.co/third-intelligence/Haas-ja-v1.0) | Apache-2.0 |
 | Sound events / emotion / sung pitch | [SenseVoice-Small](https://github.com/FunAudioLLM/SenseVoice), FCPE | FunASR model licence; FCPE MIT |
 | Who is talking on screen (optional) | [Light-ASD](https://github.com/Junhua-Liao/Light-ASD), [YuNet and SFace](https://github.com/opencv/opencv_zoo) | MIT, MIT, Apache-2.0 |
 | Picture subtitles (PGS OCR) | [PaddleOCR](https://github.com/PaddlePaddle/PaddleOCR) PP-OCRv6 (ONNX, CPU) | Apache-2.0 |
 | Translation | [Qwen3.8-27B](https://huggingface.co/Qwen/Qwen3.8-27B), 4-bit, on [vLLM](https://github.com/vllm-project/vllm) | Apache-2.0 |
 | Voice cloning | [IndexTTS-2.5](https://github.com/index-tts/index-tts) | bilibili Model Use License |
 | Bandwidth extension | [FlashSR](https://github.com/jakeoneijk/FlashSR_Inference) | no licence declared by its authors |
-| Generic voices (minor speakers) | [Qwen3-TTS VoiceDesign](https://github.com/QwenLM/Qwen3-TTS) | Apache-2.0 |
+| House and generic voices (designed) | [Qwen3-TTS VoiceDesign and Base](https://github.com/QwenLM/Qwen3-TTS) | Apache-2.0 |
+| House voices, spoken with direction | [Fish Audio Drama 3](https://huggingface.co/fishaudio/drama-3) | Fish Audio Community License (free for personal use; no imitating a real person without consent, so house voices only) |
 
 **No model is included in this repository or the Docker image.** Each model
 is downloaded from its official source when you install it from the

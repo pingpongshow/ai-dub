@@ -21,6 +21,7 @@ from . import fit as F
 from . import lines as L
 from . import media
 from . import polish as P
+from . import voiced as V
 from .fit import free_timing, pace
 from .job import Job
 
@@ -217,6 +218,8 @@ def start_floors(job: Job, lines: list[L.Line], dubbed: list[L.Line]) -> list[fl
 
 def run(job: Job) -> None:
     lines = L.load(job.path("lines.json"))
+    voice = V.Voice.load(job, lines)
+    V.retime(job, lines, voice)  # (done before voicing too; here for jobs voiced before it)
     stems = json.loads(job.path("audio", "stems.json").read_text())
     src, src_sr = media.read_wav(job.path("audio", "source.wav"))
     n_ch = src.shape[1]
@@ -267,6 +270,8 @@ def run(job: Job) -> None:
     kept = [(l.start, l.end) for l in lines if l.id not in dub_ids]
     own = [(l.start, l.end) for l in dubbed]
     over_kept = placed = 0
+    # The original is muted under all of a line's voice, also where it runs on past the line's times.
+    heard = V.extents(job, lines, dubbed, voice)
     smoothing = P.level_for(cfg.get("mix.polish", "off"))
     even_within = float(cfg.get("mix.even_within", 4.0))
     for i, ln in enumerate(dubbed):
@@ -321,7 +326,8 @@ def run(job: Job) -> None:
             else:
                 v["dub"][a:b, 0] += x * share
         placed += 1
-        spans.append((min(ln.start, start) - 0.04, ln.end + 0.04))
+        v0, v1 = heard[ln.id]
+        spans.append((min(v0, start) - 0.04, max(v1, ln.end) + 0.04))
         run_on = (ln.end + 0.04, start + len(x) / SR + 0.04)
         if run_on[1] > run_on[0]:
             holes = [(k0, k1) for k0, k1 in kept if k1 > run_on[0] and k0 < run_on[1]]

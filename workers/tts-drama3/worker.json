@@ -1,0 +1,7 @@
+{
+ "python": "3.12",
+ "title": "House voices with direction (Fish Audio Drama 3)",
+ "models": "Fish Audio Drama 3 (36B MoE; on a 32 GB card about half its experts stay in RAM)",
+ "licence": "Fish Audio Community License (free for personal use; no imitating a real person without consent: house voices only)",
+ "download": "~42 GB"
+}

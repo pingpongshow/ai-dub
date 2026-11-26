@@ -24,6 +24,7 @@ stages:
   diarize:     { worker: diarize, model: nvidia/Nemotron-3-Diarization, window_max_s: 120 }
   speaker:     { worker: speaker }     # ECAPA voice embeddings, gender/age, LaBSE text similarity
   recognize:   { worker: asr, model: Qwen/Qwen3-ASR-1.7B, aligner: Qwen/Qwen3-ForcedAligner-0.6B }
+  recognize_ja: { worker: asr-haas, model: third-intelligence/Haas-ja-v1.0 }   # Japanese: these words, timed by recognize's aligner (heard what was said more often)
   events:      { worker: events, model: iic/SenseVoiceSmall }
   ocr:         { worker: ocr }
   translate:   { worker: llm, model: RedHatAI/Qwen3.8-27B-MXFP4, gpu_memory_utilization: 0.80, max_model_len: 16384,
@@ -34,6 +35,7 @@ stages:
   bwe:         { worker: bwe-flashsr, enabled: true, mode: auto }   # auto: only when the original is brighter
   voicedesign: { worker: voicedesign, model: Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign }
   house_speak: { worker: voicedesign, model: Qwen/Qwen3-TTS-12Hz-1.7B-Base }   # speaks house voices (voice.house.speaker: qwen)
+  house_drama3: { worker: tts-drama3, model: fishaudio/drama-3, offload_layers: 22, processes: 1 }   # speaks house voices (voice.house.speaker: drama3); offload_layers: layers whose experts stay in RAM on a card under 46 GB
 
 # An OpenAI-compatible endpoint can stand in for the built-in translation
 # worker (for example a local llama.cpp or Ollama server). Local only.
@@ -56,6 +58,8 @@ gpu:
     faces: 3000
     voicedesign: 6000
     house_speak: 8000
+    house_drama3: 28000
+    recognize_ja: 3000
     bwe: 4000
     ocr: 2000
   poll_seconds: 30
@@ -100,9 +104,11 @@ voice:
                             # episode; per show in its Settings. house needs the voice-design model (Models page)
   house:
     design_min_s: 10        # characters with less speech than this get a generic voice of their gender and age range
-    speaker: qwen           # qwen: the designed voices are spoken by Qwen3-TTS, the model that designed them (cleanest
-                            # by ear; no emotion or duration control: long lines are sped up after); indextts: by the
-                            # cloning model, with the original line's emotion (sounded more robotic)
+    speaker: drama3         # drama3: the designed voices are spoken by Fish Audio Drama 3, with each line's emotion as a
+                            # direction ([angry]); chosen by ear, but slow on a 32 GB card (a quarter of real time: hours a film).
+                            # qwen: by Qwen3-TTS, the model that designed them (clean, ~60x real time, no emotion);
+                            # indextts: by the cloning model, with the original line's emotion (sounded more robotic).
+                            # None has duration control but indextts: long lines are sped up after. Not installed: the next one
     emo_alpha:              # speaker indextts: how much of the original line's emotion to carry (empty: speak.emo_alpha)
 
 review:
