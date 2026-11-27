@@ -31,7 +31,7 @@ from pathlib import Path
 import numpy as np
 
 from . import lines as L
-from . import speakers
+from . import media, speakers
 from .job import Job
 from .pitch import Pitch
 from .profiles import Profile
@@ -48,6 +48,13 @@ TIMBRES = {
 }
 TOO_ALIKE = 0.62        # a new house voice this like another main character's is made again
 DESIGN_TRIES = 4
+# A line no speaker was found for (speech the relisten found): the character it sounds most
+# like voices it when it is clearly them (known lines: 89 of 94 right at 0.5 and over);
+# otherwise only that character's gender is taken, when the likeness says much at all,
+# and failing that the line's own pitch. (Woman in the Dunes: 18 such lines, some of the
+# men among them voiced by a young woman's generic voice.)
+MATCH_SIM, MATCH_MARGIN, GENDER_SIM = 0.5, 0.05, 0.35
+MALE_BELOW_ST, FEMALE_ABOVE_ST = 19.0, 22.4  # semitones over 55 Hz: 165 Hz and 200 Hz
 EMOTION_WORDS = {"HAPPY": "cheerful", "ANGRY": "angry", "SAD": "sad", "FEARFUL": "nervous",
                  "DISGUSTED": "scornful", "SURPRISED": "excitable"}
 
@@ -209,6 +216,54 @@ def _needs_design(job: Job, prof: Profile, cid: str) -> bool:
     return secs >= float(job.cfg.get("voice.house.design_min_s", 10.0))
 
 
+def _gender_by_pitch(p: "Pitch | None", ln: L.Line) -> str:
+    """Under 165 Hz a man, over 200 Hz a woman; between, the nearer (a coin toss would do worse)."""
+    m = p.median(ln.start, ln.end) if p is not None else None
+    return "" if m is None else "male" if m < (MALE_BELOW_ST + FEMALE_ABOVE_ST) / 2 else "female"
+
+
+def match_unknown(job: Job, prof: Profile, lines: list[L.Line]) -> dict[int, tuple[str, str]]:
+    """{line id: (character, gender)} for lines with no speaker: the character whose voice
+    they clearly are, else the gender they sound (either may be "")."""
+    if not lines:
+        return {}
+    p = Pitch.load(job)
+    chars = {c: ch for c, ch in prof.characters.items() if ch.get("embedding")}
+    embs: list = [None] * len(lines)
+    wav = job.path("audio", "dialogue16k.wav")
+    if chars and wav.exists():
+        x, sr = media.read_wav(wav, mono=True)
+        tmp = job.dir("house", "who")
+        paths = []
+        for ln in lines:
+            out = tmp / f"{ln.id}.wav"
+            media.write_wav(out, x[int(ln.start * sr): int(ln.end * sr)], sr)
+            paths.append(str(out))
+        try:
+            with job.worker("speaker") as w:
+                w.call("load", {})
+                embs = w.call("embed_files", {"paths": paths})["embeddings"]
+        except Exception as exc:  # the pitch still gives a gender
+            job.log(f"house voices: couldn't match lines with no speaker by voice ({exc})")
+    out: dict[int, tuple[str, str]] = {}
+    for ln, e in zip(lines, embs):
+        ranked = sorted(((speakers.cosine(e, ch["embedding"]), c) for c, ch in chars.items()), reverse=True) if e else []
+        top = ranked[0] if ranked else (0.0, "")
+        g = (chars.get(top[1]) or {}).get("gender", "") if top[0] >= GENDER_SIM else ""
+        # A man and a woman alike close ("You idiot!": 0.46 against 0.45): the pitch decides.
+        if g and len(ranked) > 1 and top[0] - ranked[1][0] < MATCH_MARGIN \
+                and (chars.get(ranked[1][1]) or {}).get("gender", "") != g:
+            g = ""
+        if top[0] >= MATCH_SIM and (len(ranked) < 2 or top[0] - ranked[1][0] >= MATCH_MARGIN):
+            out[ln.id] = (prof.voice_source(top[1]), g)
+        else:
+            out[ln.id] = ("", g or _gender_by_pitch(p, ln))
+    found = sum(1 for c, _ in out.values() if c)
+    job.log(f"house voices: {len(lines)} lines with no speaker; {found} matched to a character by voice, "
+            f"{sum(1 for c, g in out.values() if not c and g)} given a voice of the gender they sound")
+    return out
+
+
 def cast(job: Job, lines: list[L.Line]) -> None:
     """Give every dubbed line its character's house voice, designing the voices still missing."""
     prof: Profile = job.profile
@@ -225,8 +280,10 @@ def cast(job: Job, lines: list[L.Line]) -> None:
         prof.save()
     dia = (job.get("diarization") or {}).get("speakers") or {}
     made = Counter()
+    unknown = match_unknown(job, prof, [ln for ln in todo if not ln.character and not ln.speaker])
     for ln in todo:
-        cid = prof.voice_source(ln.character) if ln.character else ""
+        cid, heard_as = unknown.get(ln.id, ("", ""))
+        cid = prof.voice_source(ln.character) if ln.character else cid
         ch = prof.characters.get(cid, {})
         h = ch.get("house") or {}
         if h.get("file") and (prof.root / h["file"]).exists():
@@ -234,8 +291,9 @@ def cast(job: Job, lines: list[L.Line]) -> None:
             made["designed"] += 1
             continue
         # Little speech, or no character: a generic voice of the right gender and age range.
-        g = ch.get("gender") or (dia.get(ln.speaker) or {}).get("gender", "")
-        a = ch.get("age") or (dia.get(ln.speaker) or {}).get("age", "")
+        g = ch.get("gender") or (dia.get(ln.speaker) or {}).get("gender", "") or heard_as
+        # An age nobody told: an adult's voice, never a child's or an old person's by chance.
+        a = ch.get("age") or (dia.get(ln.speaker) or {}).get("age", "") or "adult"
         path = _generic_for(job, prof, cid or ln.speaker or str(ln.id), g, a)
         if path:
             ln.voice, ln.voice_note = path, f"house voice (generic {g or 'voice'} {a})".replace(" )", ")")

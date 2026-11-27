@@ -2421,3 +2421,17 @@ def test_house_describe_and_mode(tmp_path):
     assert house.mode(job) == "house"
     job.options = {"voice": "clone"}
     assert house.mode(job) == "clone"          # a job's own choice wins over the show's
+
+
+def test_a_line_with_no_speaker_is_voiced_in_the_gender_it_sounds():
+    import numpy as np
+    from aidub import house
+    from aidub.lines import Line
+    from aidub.pitch import Pitch
+    f0 = np.zeros(500, np.float32)
+    f0[0:100], f0[200:300] = 112.0, 260.0   # a man's line, then a woman's
+    p = Pitch(f0)
+    assert house._gender_by_pitch(p, Line(id=1, start=0.0, end=1.0)) == "male"
+    assert house._gender_by_pitch(p, Line(id=2, start=2.0, end=3.0)) == "female"
+    assert house._gender_by_pitch(p, Line(id=3, start=4.0, end=5.0)) == ""   # nothing voiced: not guessed
+    assert house._gender_by_pitch(None, Line(id=4, start=0.0, end=1.0)) == ""

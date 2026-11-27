@@ -59,3 +59,15 @@ def test_retiming_never_reaches_back_into_the_line_before():
     lines = [_line(1, 1.0, 2.0, "そうです", kind=L.WORDLESS), _line(2, 2.6, 2.7, "何するんだい")]
     V.retime(FakeJob(), lines, v)
     assert lines[1].start >= 2.0 + V.GAP_S - 1e-9
+
+
+def test_a_line_far_shorter_than_the_voice_under_its_own_subtitle_takes_that_voice():
+    # Woman in the Dunes: ワン (0.2 s) under "You idiot!", said from 7476.99 to 7479.33.
+    v = _voice([(1.0, 3.3)])
+    lines = [_line(1, 2.1, 2.3, "ワン"), _line(2, 5.0, 6.0, "はい")]
+    job = FakeJob()
+    assert V.retime(job, lines, v, cues=[(0.9, 3.5)]) == 1
+    assert (lines[0].start, lines[0].end) == (1.0, 3.3)
+    # A subtitle over two lines says nothing of either's voice.
+    lines = [_line(1, 2.1, 2.3, "ワン"), _line(2, 3.0, 3.2, "うん")]
+    assert V.retime(FakeJob(), lines, v, cues=[(0.9, 3.5)]) == 0

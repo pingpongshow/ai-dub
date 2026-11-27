@@ -8,7 +8,10 @@ breath of a word, a trailing "ne") is often left out of its words.
 
 retime: a line whose times are far too short for what it says (under half the time it
 needs) takes them from the voice heard around it, and drops its word times (fit.timing: sync
-then follows the voice as one phrase, not the misplaced words).
+then follows the voice as one phrase, not the misplaced words). So does a line far shorter
+than the voice under its own subtitle: recognition sometimes hears only a scrap of what is
+said (そうそう, 0.3 s, under "That reminds me:" with 1.8 s of voice), so the time its text
+needs says nothing; 14 lines of Woman in the Dunes left most of their Japanese playing so.
 extents: how far each dubbed line's voice runs on past its times, joined to it, so the
 original is muted under all of it.
 """
@@ -31,6 +34,9 @@ REACH_S = 1.0          # a line's voice runs on at most this far past its times 
 SEARCH_S = 1.5         # ... and a line timed far too short looks this far back for its voice
 TOO_SHORT = 0.5        # share of the time a line needs, under which its times are wrong
 GAP_S = 0.03           # kept clear of the lines either side
+CUE_REACH_S = 0.3      # a subtitle's voice: inside its times, this far either side
+CUE_SHARE = 0.5        # a line covering under this share of the voice under its own subtitle ...
+CUE_MORE_S = 0.4       # ... and at least this much less of it, is timed from that voice
 
 _KANA = re.compile(r"[぀-ヿ가-힯]")
 _HAN = re.compile(r"[一-鿿]")
@@ -123,10 +129,35 @@ def _neighbours(lines: list[L.Line]):
     return floor, ceil
 
 
-def retime(job: Job, lines: list[L.Line], voice: "Voice | None" = None) -> int:
-    """Lines timed far too short for what they say take their times from the voice around them."""
-    todo = [l for l in lines if l.dubbed and l.source_text and needed_s(l.source_text) >= 0.5
-            and l.duration < TOO_SHORT * needed_s(l.source_text)]
+def _own_cues(lines: list[L.Line], cues: list[tuple[float, float]]) -> dict[int, tuple[float, float]]:
+    """{line id: cue} for subtitles over exactly one speech line (theirs alone, so the voice
+    under them is that line's)."""
+    speech = [l for l in lines if l.kind == L.SPEECH]
+    out = {}
+    for a, b in cues:
+        on = [l for l in speech if min(b, l.end) - max(a, l.start) > 0]
+        if len(on) == 1:
+            out[on[0].id] = (a, b)
+    return out
+
+
+def _cues(job: Job) -> list[tuple[float, float]]:
+    try:
+        from .subtitles.step import load_chosen
+        from .subtitles.model import DIALOGUE
+        return [(q.start, q.end) for q in load_chosen(job, "english") if q.kind == DIALOGUE and q.text.strip()]
+    except Exception:  # no subtitles chosen (or none at all)
+        return []
+
+
+def retime(job: Job, lines: list[L.Line], voice: "Voice | None" = None,
+           cues: list[tuple[float, float]] | None = None) -> int:
+    """Lines timed far too short for what they say, or for the voice under their own subtitle,
+    take their times from the voice around them."""
+    dubbed = [l for l in lines if l.dubbed and l.source_text]
+    short = {l.id for l in dubbed if needed_s(l.source_text) >= 0.5 and l.duration < TOO_SHORT * needed_s(l.source_text)}
+    own = _own_cues(lines, _cues(job) if cues is None else cues)
+    todo = [l for l in dubbed if l.id in short or l.id in own]
     if not todo:
         return 0
     voice = voice or Voice.load(job, lines)
@@ -135,8 +166,15 @@ def retime(job: Job, lines: list[L.Line], voice: "Voice | None" = None) -> int:
     floor, ceil = _neighbours(lines)
     moved = 0
     for ln in todo:
-        lo, hi = max(floor(ln), ln.start - SEARCH_S), min(ceil(ln), ln.end + REACH_S)
-        runs = voice.runs(lo, hi)
+        runs: list[tuple[float, float]] = []
+        if ln.id in own:
+            a, b = own[ln.id]
+            runs = voice.runs(max(floor(ln), a - CUE_REACH_S), min(ceil(ln), b + CUE_REACH_S))
+            heard = sum(e - s for s, e in runs)
+            if not (ln.duration < CUE_SHARE * heard and heard - ln.duration >= CUE_MORE_S):
+                runs = []
+        if not runs and ln.id in short:
+            runs = voice.runs(max(floor(ln), ln.start - SEARCH_S), min(ceil(ln), ln.end + REACH_S))
         if not runs:
             continue
         a, b = min(ln.start, runs[0][0]), max(ln.end, runs[-1][1])
