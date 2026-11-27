@@ -313,3 +313,17 @@ def test_house_voices_replace_the_actors(cfg, media_root):
     assert job2["record"]["qc"]["house_voices"]["designed_now"] == 0
     assert sorted(c["house"]["file"] for c in svc.profiles.get("house-show").characters.values() if c.get("house")) \
         == sorted(h["file"] for h in houses)
+
+
+def test_lines_whose_one_take_fails_are_voiced_again_by_the_check(cfg, media_root, monkeypatch):
+    monkeypatch.setenv("FAKE_TTS_GARBLE", "1")  # every first take comes out as mumbling
+    cfg.data["speak"].update({"takes": 1, "retakes": 2, "retake_rounds": 2})
+    ep = synth.episode(media_root / "Retake (2020).mkv")
+    svc = Service(cfg)
+    job = run_service_job(svc, ep)
+    assert job["status"] == J.DONE, job["message"]
+    qc = job["record"]["qc"]
+    assert qc["retakes"]["lines"] == qc["retakes"]["first_take_failed"] > 0
+    assert qc["retakes"]["saved"] == qc["retakes"]["lines"] and qc["failed_takes"] == 0
+    log = (cfg.work / f"job-{job['id']}" / "job.log").read_text()
+    assert "retakes, round 1:" in log and "retakes, round 2:" not in log  # all saved in one round

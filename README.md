@@ -55,7 +55,7 @@ All screenshots use a made-up demo library.
 ingest → separate dialogue from music & effects → find scenes → who speaks when
 → speech recognition → sound events → subtitles (find, sync, score) → align lines
 → who is talking on screen (optional) → the show's voice bank → [review] → English
-script (local LLM) → voice-cloned takes → back-check takes → choose takes → shorten
+script (local LLM) → one take a line → back-check (failed lines voiced again) → choose takes → shorten
 lines that don't fit → restore full bandwidth → mix → listen back → deliver (new
 file) → [check]
 ```

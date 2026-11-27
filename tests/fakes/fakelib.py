@@ -7,6 +7,7 @@ which the fake recogniser reads back for the back-check.
 """
 
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -215,7 +216,9 @@ def tts_ops():
             y = np.concatenate([np.zeros(int(0.05 * sr)), y, np.zeros(int(0.08 * sr))]).astype(np.float32)
             Path(it["out"]).parent.mkdir(parents=True, exist_ok=True)
             sf.write(it["out"], y, sr)
-            Path(it["out"] + ".json").write_text(json.dumps({"text": it["text"]}))
+            # FAKE_TTS_GARBLE: every first take comes out as mumbling (heard back as nothing like the line)
+            garbled = os.environ.get("FAKE_TTS_GARBLE") and Path(it["out"]).name == "take_0.wav"
+            Path(it["out"] + ".json").write_text(json.dumps({"text": "mm hmm mm" if garbled else it["text"]}))
             done.append(it["out"])
         return {"done": done}
     return {"load": lambda a: {"model": "fake-tts", "duration_control": True, "emotion_ref": True,

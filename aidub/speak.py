@@ -4,12 +4,14 @@ Each step loads its models once and does all of their work (no switching back
 and forth): the voice model voices everything, then the checking models score
 everything, then the choice needs no model.
 
-  speak    - 2-4 takes per line at natural speed: character's voice reference,
+  speak    - one take per line (speak.takes) at natural speed: character's voice reference,
              the original line as emotion reference (or a detected-emotion vector);
              for lines that miss their window, a speed factor (models that have
              one) and the shorter wording, in the same session
   check    - score takes and refits: recognition back-check (did it say the
-             words?) and speaker similarity; keep the best take
+             words?) and speaker similarity; keep the best take. Lines with no
+             take that passes get new takes (speak.retakes, new seeds), checked
+             again, up to speak.retake_rounds times
   finalize - choose per line in order of quality cost: fitted take, shorter
              wording, time-stretch up to the limit, or the original audio
              (listed in the QC summary)
@@ -432,7 +434,7 @@ def _past_cleanup(text: str) -> str:
 
 
 def _requests(job: Job, ln: L.Line, text: str, takes: int, tag: str, dlg, sr, factor: float | None = None,
-              seed_offset: int = 0, voice: str = "") -> list[dict]:
+              seed_offset: int = 0, voice: str = "", first: int = 0) -> list[dict]:
     caps = job.get("tts_caps", {})
     orig = _orig_clip(job, ln, dlg, sr)
     min_emo = float(job.cfg.get("speak.min_emotion_ref_s", 1.0))
@@ -462,7 +464,7 @@ def _requests(job: Job, ln: L.Line, text: str, takes: int, tag: str, dlg, sr, fa
         if job.cfg.get(f"speak.{key}"):
             req_base[key] = int(job.cfg.get(f"speak.{key}"))
     out = []
-    for t in range(takes):
+    for t in range(first, first + takes):
         out.append({**req_base, "seed": 1000 + ln.id * 7 + t + seed_offset,
                     "out": str(_line_dir(job, ln) / f"{tag}_{t}.wav")})
     return out
@@ -507,12 +509,15 @@ def _synthesize(job: Job, w, reqs: list[dict], label: str) -> None:
 
 
 @contextmanager
-def _voices(job: Job):
+def _voices(job: Job, most: int = 0):
     """The voice model, loaded in up to `speak.processes` processes sharing the GPU:
     one voice process leaves most of the card idle (it voices one line at a time).
-    Extra processes start only while there is room for them; never waits for one."""
+    Extra processes start only while there is room for them; never waits for one.
+    most: at most this many (a few retakes don't need a second process loaded)."""
     stage = tts_stage(job)
     want = max(1, int(job.cfg.get(f"stages.{stage}.processes") or job.cfg.get("speak.processes", 2)))
+    if most:
+        want = min(want, most)
     need = int((job.cfg.get("gpu.min_free_mb") or {}).get(stage, 4000))
     with ExitStack() as stack:
         ws = [stack.enter_context(job.worker(stage))]
@@ -602,8 +607,11 @@ def run_speak(job: Job) -> None:
 
 
 # check ----------------------------------------------------------------------------------------
-def score_files(job: Job, items: list[tuple[L.Line, str, str]]) -> dict[str, dict]:
-    """items: (line, text it should say, wav path). Returns path -> {wer, sim, score}."""
+def score_files(job: Job, items: list[tuple[L.Line, str, str]],
+                known: dict[str, list[float]] | None = None) -> dict[str, dict]:
+    """items: (line, text it should say, wav path). Returns path -> {wer, sim, score}.
+    known: each character's similarities from takes already scored, so a few retakes
+    are held to the character's usual likeness, not only to each other's."""
     if not items:
         return {}
     prof = job.profile
@@ -634,7 +642,7 @@ def score_files(job: Job, items: list[tuple[L.Line, str, str]]) -> dict[str, dic
         for i in range(0, len(paths), 64):
             embs += w.call("embed_files", {"paths": paths[i:i + 64]})["embeddings"]
     from .speakers import cosine
-    by_char: dict[str, list[float]] = {}
+    by_char: dict[str, list[float]] = {k: list(v) for k, v in (known or {}).items()}
     for (ln, _, p), e in zip(items, embs):
         ch = prof.characters.get(prof.voice_source(ln.character), {})
         # In a house voice the take should sound like that voice, not like the actor.
@@ -701,41 +709,102 @@ CLEAR_WER = 0.05
 FIT_FILES = (("fit1_0.wav", "en"), ("fit0_0.wav", "en"), ("short_0.wav", "en_short"), ("shortfit_0.wav", "en_short"))
 
 
+def _take_items(job: Job, ln: L.Line) -> list[tuple[L.Line, str, str]]:
+    out = []
+    for p in sorted(_line_dir(job, ln).glob("take_*.wav")):
+        F.trim(p)
+        out.append((ln, ln.en, str(p)))
+    return out
+
+
+def _verdict(mine: dict[str, dict], cfg) -> tuple[str, str]:
+    """(take, how): the best take that passes ("pass"), else a nearly right one ("rescue"),
+    else none ("fail", with the best of them). Not the best-scoring take: a near-perfect
+    take with one missed word must not hide a clean one with a weaker voice match."""
+    if not mine:
+        return "", "none"
+    passing = [p for p in mine if _passes({**mine[p], "rescued": False}, cfg)]
+    if passing:
+        return max(passing, key=lambda p: mine[p].get("score", 0)), "pass"
+    rescue = [p for p in mine if _rescue(mine[p], cfg)]
+    if rescue:
+        return max(rescue, key=lambda p: mine[p].get("score", 0)), "rescue"
+    return max(mine, key=lambda p: mine[p].get("score", 0)), "fail"
+
+
+def _retakes(job: Job, bad: list[L.Line], n: int) -> list[tuple[L.Line, str, str]]:
+    """New takes (new seeds) of lines with no take that passed, in one load of the voice model."""
+    dlg, sr = media.read_wav(job.path("audio", "dialogue.wav"), mono=True)
+    rounds = job.get("redo_rounds", {}) or {}
+    reqs = []
+    for ln in bad:
+        first = len(list(_line_dir(job, ln).glob("take_*.wav")))
+        reqs += _requests(job, ln, ln.en, n, "take", dlg, sr, first=first,
+                          seed_offset=100003 * int(rounds.get(str(ln.id), 0)))
+    reqs.sort(key=lambda r: r["speaker_ref"])
+    with _voices(job, most=-(-len(reqs) // 8)) as w:
+        _synthesize(job, w, reqs, "retakes")
+    want = {r["out"] for r in reqs}
+    return [it for ln in bad for it in _take_items(job, ln) if it[2] in want]
+
+
 def run_check(job: Job) -> None:
-    """Back-check and voice-match every take and every fitted version at once."""
+    """Back-check and voice-match every take and every fitted version at once; lines
+    with no take that passes are voiced again (speak.retakes new takes) and checked
+    again, up to speak.retake_rounds times."""
     lines = L.load(job.path("lines.json"))
+    todo = [ln for ln in lines if ln.dubbed and ln.en]
     items, fitted = [], []
-    for ln in lines:
-        if not (ln.dubbed and ln.en):
-            continue
+    for ln in todo:
+        items += _take_items(job, ln)
         d = _line_dir(job, ln)
-        for p in sorted(d.glob("take_*.wav")):
-            F.trim(p)
-            items.append((ln, ln.en, str(p)))
         for name, field in FIT_FILES:
             if (d / name).exists():
                 fitted.append((ln, getattr(ln, field), str(d / name)))
     scores = score_files(job, items + fitted)
     for ln, _, p in fitted:
         ln.fit.setdefault("scores", {})[p] = scores.get(p, {})
+
+    def verdicts() -> dict[int, tuple[dict, str, str]]:
+        mine: dict[int, dict] = {ln.id: {} for ln in todo}
+        for ln, _, p in items:
+            mine[ln.id][p] = scores.get(p, {})
+        return {i: (m, *_verdict(m, job.cfg)) for i, m in mine.items()}
+
+    v = verdicts()
+    first_failed = sum(1 for _, _, how in v.values() if how != "pass")
+    retaken: set[int] = set()
+    n = max(1, int(job.cfg.get("speak.retakes", 3)))
+    for rnd in range(int(job.cfg.get("speak.retake_rounds", 2))):
+        bad = [ln for ln in todo if v[ln.id][2] != "pass"]
+        if not bad:
+            break
+        job.log(f"retakes, round {rnd + 1}: {len(bad)} lines with no take that passed, {n} new takes each")
+        known: dict[str, list[float]] = {}
+        for ln, _, p in items + fitted:
+            if scores.get(p, {}).get("sim") is not None:
+                known.setdefault(ln.character, []).append(scores[p]["sim"])
+        new = _retakes(job, bad, n)
+        if not new:
+            break
+        scores.update(score_files(job, new, known))
+        items += new
+        retaken |= {ln.id for ln in bad}
+        v = verdicts()
+
     failed = rescued = 0
-    for ln in lines:
-        mine = {p: s for (l, _, p), s in ((it, scores.get(it[2], {})) for it in items) if l.id == ln.id}
-        if not mine:
-            if ln.dubbed and ln.en:  # the voice model gave nothing for it
-                ln.take, ln.fallback = "", "no take was voiced"
-                failed += 1
+    for ln in todo:
+        mine, best, how = v[ln.id]
+        if how == "none":  # the voice model gave nothing for it
+            ln.take, ln.fallback = "", "no take was voiced"
+            failed += 1
             continue
+        for s_ in mine.values():
+            s_.pop("rescued", None)
         ln.take_scores = mine
-        # The best take that passes, not the best-scoring take: a near-perfect take with
-        # one missed word must not hide a clean one with a weaker voice match.
-        passing = [p for p in mine if _passes(mine[p], job.cfg)]
-        best = max(passing or mine, key=lambda p: mine[p].get("score", 0))
-        rescue = [] if passing else [p for p in mine if _rescue(mine[p], job.cfg)]
-        if passing:
+        if how == "pass":
             ln.take, ln.fallback = best, ""  # (a resumed job may carry an earlier run's verdict)
-        elif rescue:
-            best = max(rescue, key=lambda p: mine[p].get("score", 0))
+        elif how == "rescue":
             mine[best]["rescued"] = True
             ln.take, ln.fallback = best, ""
             note = VOICE_DOUBT if mine[best].get("wer", 1) <= CLEAR_WER and not mine[best].get("missed") else \
@@ -751,6 +820,9 @@ def run_check(job: Job) -> None:
     job.qc["failed_takes"] = failed
     if rescued:
         job.qc["nearly_right_takes"] = rescued
+    if retaken:
+        job.qc["retakes"] = {"lines": len(retaken), "first_take_failed": first_failed,
+                             "saved": sum(1 for i in retaken if v[i][2] == "pass")}
     job.status(f"{failed} lines with no usable take" if failed else "all lines have a usable take")
 
 
