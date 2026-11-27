@@ -71,3 +71,17 @@ def test_a_line_far_shorter_than_the_voice_under_its_own_subtitle_takes_that_voi
     # A subtitle over two lines says nothing of either's voice.
     lines = [_line(1, 2.1, 2.3, "ワン"), _line(2, 3.0, 3.2, "うん")]
     assert V.retime(FakeJob(), lines, v, cues=[(0.9, 3.5)]) == 0
+
+
+def test_a_shout_with_no_pitch_counts_as_voice():
+    # バカバカしい at 53:54: loud, but the pitch tracker found no pitch in it.
+    sr, hop = 16000, 0.01
+    x = np.zeros(sr * 4, np.float32)
+    x[int(1.0 * sr): int(1.6 * sr)] = 0.3 * np.random.default_rng(0).standard_normal(int(0.6 * sr))  # the shout
+    x[int(1.6 * sr): int(2.4 * sr)] = 0.3 * np.sin(np.arange(int(0.8 * sr)) / sr * 2 * np.pi * 150)  # its line
+    x[int(3.0 * sr): int(3.4 * sr)] = 0.003 * np.random.default_rng(1).standard_normal(int(0.4 * sr))  # quiet noise
+    pitched = np.zeros(400, bool)
+    pitched[160:240] = True
+    v = V.Voice.from_signal(x, sr, pitched, hop, [_line(1, 1.6, 2.4, "バカバカしい")])
+    assert v.joined(1.6, 2.4, 0.0, 9.0) == (1.0, 2.4)
+    assert not v.runs(2.9, 3.5)  # quiet and unpitched: not voice

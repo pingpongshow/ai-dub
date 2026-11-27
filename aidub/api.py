@@ -561,9 +561,14 @@ def create_app(cfg: Config, service: Service | None = None) -> FastAPI:
             from .house import recast
             recast(p, cid)
         elif action == "set":
+            changed = False
             for k in ("gender", "age"):
-                if k in body:
+                if k in body and str(body[k]) != p.characters[cid].get(k, ""):
                     p.characters[cid][k] = str(body[k])
+                    changed = True
+            if changed and p.characters[cid].get("house"):
+                from .house import recast
+                recast(p, cid)  # its house voice was made for the other gender or age
         else:
             bad(400, "unknown action")
         p.save()

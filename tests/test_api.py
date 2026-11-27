@@ -558,3 +558,23 @@ def test_files_the_skip_rules_end_are_not_asked_about(cfg, media_root):
     jid = svc.add(str(ep))
     svc.run_one(svc.store.next_queued())
     assert svc.store.get(jid)["status"] == J.SKIPPED
+
+
+def test_a_character_set_to_the_other_gender_gets_a_new_house_voice(client):
+    c, svc = client
+    prof = svc.profiles.get_or_create("Dunes")
+    (prof.root / "house").mkdir(parents=True)
+    (prof.root / "house" / "c8-1.wav").write_bytes(b"x")
+    prof.characters["c8"] = {"name": "Character 8", "gender": "female", "age": "adult", "refs": [],
+                             "house": {"file": "house/c8-1.wav", "description": "A woman ..."}}
+    prof.save()
+    assert c.post("/api/profiles/dunes/characters/c8", json={"action": "set", "gender": "male"}).status_code == 200
+    ch = svc.profiles.get("dunes").characters["c8"]
+    assert ch["gender"] == "male" and "house" not in ch           # designed again at the next dub
+    assert not (prof.root / "house" / "c8-1.wav").exists()
+    # Setting the gender it already has keeps its voice.
+    p2 = svc.profiles.get("dunes")
+    p2.characters["c8"]["house"] = {"file": "house/c8-2.wav"}
+    p2.save()
+    c.post("/api/profiles/dunes/characters/c8", json={"action": "set", "gender": "male"})
+    assert svc.profiles.get("dunes").characters["c8"]["house"] == {"file": "house/c8-2.wav"}

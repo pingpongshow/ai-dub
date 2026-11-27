@@ -30,6 +30,9 @@ from .pitch import Pitch
 
 BRIDGE_S = 0.15        # an unvoiced consonant or a breath inside speech, at most
 BELOW_USUAL_DB = 22.0  # voice: at least this loud, against the film's usual line peak
+LOUD_DB = 8.0          # ... and this near it, voice with or without a pitch: a shout or a harsh
+                       # word has none to the pitch tracker (バカバカしい, Woman in the Dunes 53:54,
+                       # at -21 dB began 0.25 s before its line and played under the dub)
 REACH_S = 1.0          # a line's voice runs on at most this far past its times ...
 SEARCH_S = 1.5         # ... and a line timed far too short looks this far back for its voice
 TOO_SHORT = 0.5        # share of the time a line needs, under which its times are wrong
@@ -53,7 +56,8 @@ def needed_s(text: str) -> float:
 
 
 class Voice:
-    """Voiced frames of the dialogue (10 ms): a pitch and a speaking level."""
+    """Voiced frames of the dialogue (10 ms): a pitch and a speaking level, or as loud as
+    the film's lines usually are at their loudest (the dialogue stem: little else is that loud)."""
 
     def __init__(self, voiced: np.ndarray, hop: float = 0.01):
         self.hop = hop
@@ -78,7 +82,7 @@ class Voice:
         peaks = [db[int(l.start / hop): max(int(l.start / hop) + 1, int(l.end / hop))].max()
                  for l in lines if l.kind == L.SPEECH and int(l.start / hop) < n]
         usual = float(np.median(peaks)) if peaks else float(np.percentile(db, 90))
-        return cls(pitched[:n] & (db > usual - BELOW_USUAL_DB), hop)
+        return cls((pitched[:n] & (db > usual - BELOW_USUAL_DB)) | (db > usual - LOUD_DB), hop)
 
     def _i(self, t: float) -> int:
         return min(len(self.on), max(0, int(round(t / self.hop))))
